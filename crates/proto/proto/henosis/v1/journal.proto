@@ -1,0 +1,69 @@
+edition = "2023";
+
+package henosis.v1;
+
+import "henosis/v1/types.proto";
+
+// GraphStreamEnvelope is the protobuf body of a record in a per-graph stream. The outer oneof
+// permits a future record version to coexist with v1 during migrations.
+message GraphStreamEnvelope {
+  oneof version {
+    GraphStreamRecordV1 v1 = 1;
+  }
+}
+
+message GraphStreamRecordV1 {
+  oneof event {
+    GraphCreated graph_created = 1;
+    GenerationAccepted generation_accepted = 2;
+    OutputsPublished outputs_published = 3;
+    GraphRetired graph_retired = 4;
+  }
+}
+
+message GraphCreated {
+  // graph_id is a raw 16-byte UUID.
+  bytes graph_id = 1;
+}
+
+message GenerationAccepted {
+  // graph is the full pinned world at the accepted generation.
+  Graph graph = 1;
+}
+
+message OutputsPublished {
+  uint64 generation = 1;
+  string connector = 2;
+  repeated ComponentOutputs outputs = 3;
+}
+
+message GraphRetired {
+  // graph_id is a raw 16-byte UUID.
+  bytes graph_id = 1;
+  uint64 last_generation = 2;
+}
+
+// RegistryStreamEnvelope is the protobuf body of a record in the root registry stream. The outer
+// oneof permits a future record version to coexist with v1 during migrations.
+message RegistryStreamEnvelope {
+  oneof version {
+    RegistryStreamRecordV1 v1 = 1;
+  }
+}
+
+message RegistryStreamRecordV1 {
+  oneof event {
+    RegistryGraphCreated graph_created = 1;
+    RegistryGraphRetired graph_retired = 2;
+  }
+}
+
+message RegistryGraphCreated {
+  // graph_id is a raw 16-byte UUID.
+  bytes graph_id = 1;
+}
+
+message RegistryGraphRetired {
+  // graph_id is a raw 16-byte UUID.
+  bytes graph_id = 1;
+}

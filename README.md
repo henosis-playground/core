@@ -3,8 +3,8 @@
 The Henosis graph orchestrator.
 
 This workspace contains the graph lifecycle domain, its S2 journal and PostgreSQL metadata
-layers, generated-protocol placeholder, and ConnectRPC service shell. The wire API remains
-deliberately absent until its draft is ratified.
+layers, committed ConnectRPC protocol bindings, and service shell. Run `just proto` after changing
+the protocol definitions in `crates/proto/proto`.
 
 ## Layout
 

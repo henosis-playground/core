@@ -24,6 +24,8 @@ diesel = { version = "=2.3.11", default-features = false, features = [
 diesel-async = { version = "=0.9.2", features = ["postgres"] }
 faultline = "0.1.0"
 s2-sdk = "=0.31.9"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 henosis-db-model = { path = "crates/db-model" }
 henosis-db-queries = { path = "crates/db-queries" }

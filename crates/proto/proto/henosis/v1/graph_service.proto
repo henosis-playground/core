@@ -1,0 +1,147 @@
+edition = "2023";
+
+package henosis.v1;
+
+import "henosis/v1/types.proto";
+
+// GraphService is the workflow-facing API used by automation and interactive clients.
+service GraphService {
+  rpc CreateGraph(CreateGraphRequest) returns (CreateGraphResponse);
+  rpc AddComponents(AddComponentsRequest) returns (AddComponentsResponse);
+  rpc UpdateComponents(UpdateComponentsRequest) returns (UpdateComponentsResponse);
+  rpc RemoveComponents(RemoveComponentsRequest) returns (RemoveComponentsResponse);
+  rpc GetGraph(GetGraphRequest) returns (GetGraphResponse);
+  rpc RetireGraph(RetireGraphRequest) returns (RetireGraphResponse);
+  rpc WatchGraph(WatchGraphRequest) returns (stream WatchGraphResponse);
+}
+
+message CreateGraphRequest {
+  // graph_id is a caller-allocated raw 16-byte UUID.
+  bytes graph_id = 1;
+  repeated Component components = 2;
+}
+
+message CreateGraphResponse {
+  oneof result {
+    EditGraphAccepted accepted = 1;
+    EditGraphRejected rejected = 2;
+  }
+}
+
+message AddComponentsRequest {
+  // graph_id is a raw 16-byte UUID.
+  bytes graph_id = 1;
+
+  // expected_generation is a required optimistic-concurrency guard.
+  uint64 expected_generation = 2;
+  repeated Component components = 3;
+}
+
+message UpdateComponentsRequest {
+  // graph_id is a raw 16-byte UUID.
+  bytes graph_id = 1;
+
+  // expected_generation is a required optimistic-concurrency guard. Each component is a complete
+  // replacement for the component with the same id.
+  uint64 expected_generation = 2;
+  repeated Component components = 3;
+}
+
+message RemoveComponentsRequest {
+  // graph_id is a raw 16-byte UUID.
+  bytes graph_id = 1;
+
+  // expected_generation is a required optimistic-concurrency guard.
+  uint64 expected_generation = 2;
+
+  // component_ids contains raw 16-byte UUIDs.
+  repeated bytes component_ids = 3;
+}
+
+message AddComponentsResponse {
+  oneof result {
+    EditGraphAccepted accepted = 1;
+    EditGraphRejected rejected = 2;
+  }
+}
+
+message UpdateComponentsResponse {
+  oneof result {
+    EditGraphAccepted accepted = 1;
+    EditGraphRejected rejected = 2;
+  }
+}
+
+message RemoveComponentsResponse {
+  oneof result {
+    EditGraphAccepted accepted = 1;
+    EditGraphRejected rejected = 2;
+  }
+}
+
+message EditGraphAccepted {
+  // graph contains the complete graph at the newly accepted generation.
+  Graph graph = 1;
+}
+
+message EditGraphRejected {
+  // current_generation is present when the graph exists.
+  uint64 current_generation = 1;
+  repeated Diagnostic diagnostics = 2;
+}
+
+message GetGraphRequest {
+  // graph_id is a raw 16-byte UUID.
+  bytes graph_id = 1;
+}
+
+message GetGraphResponse {
+  GraphState state = 1;
+}
+
+message RetireGraphRequest {
+  // graph_id is a raw 16-byte UUID.
+  bytes graph_id = 1;
+
+  // expected_generation guards retirement against a concurrent edit.
+  uint64 expected_generation = 2;
+}
+
+message RetireGraphResponse {
+  oneof result {
+    RetireGraphAccepted accepted = 1;
+    EditGraphRejected rejected = 2;
+  }
+}
+
+message RetireGraphAccepted {
+  // graph_id is a raw 16-byte UUID.
+  bytes graph_id = 1;
+  uint64 last_generation = 2;
+}
+
+message WatchGraphRequest {
+  // graph_id is a raw 16-byte UUID.
+  bytes graph_id = 1;
+
+  // after_sequence is a durable per-graph journal cursor. The server first sends the current
+  // complete state, then continues with changes after this sequence.
+  uint64 after_sequence = 2;
+}
+
+message WatchGraphResponse {
+  // sequence is the latest durable per-graph journal sequence represented by this item. A
+  // memory-only report refresh may repeat a sequence because state is level-triggered.
+  uint64 sequence = 1;
+
+  oneof item {
+    GraphState state = 2;
+    WatchGraphHeartbeat heartbeat = 3;
+  }
+}
+
+// WatchGraphHeartbeat keeps the response active through intermediaries. A server sends a state
+// item or a heartbeat at least once every 30 seconds.
+message WatchGraphHeartbeat {
+  uint64 generation = 1;
+}

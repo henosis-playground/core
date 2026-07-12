@@ -34,6 +34,11 @@ test *flags:
 doc *flags:
     RUSTDOCFLAGS="--cfg docsrs" cargo doc --all-features --no-deps --document-private-items --keep-going {{ flags }}
 
+# Regenerates the committed Rust bindings from crates/proto/proto.
+proto:
+    cd crates/proto && buf generate
+    cargo fmt -p henosis-proto
+
 [private]
 _assert-clean:
     {{ if `test -z "$(git status --porcelain --untracked-files=no)" && echo clean || echo dirty` == "dirty" {

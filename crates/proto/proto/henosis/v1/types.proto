@@ -1,0 +1,103 @@
+edition = "2023";
+
+package henosis.v1;
+
+// Diagnostic is preserved verbatim across workflow, core, and connector boundaries.
+message Diagnostic {
+  // code is a stable, machine-readable identifier.
+  string code = 1;
+  string message = 2;
+
+  // component_id is absent for diagnostics that apply to the request or slice as a whole.
+  // When present, it is a raw 16-byte UUID.
+  bytes component_id = 3;
+
+  // pointer is an RFC 6901 JSON Pointer into the component-owned input when a precise
+  // location is available.
+  string pointer = 4;
+  string help = 5;
+  DiagnosticSeverity severity = 6;
+}
+
+enum DiagnosticSeverity {
+  DIAGNOSTIC_SEVERITY_UNSPECIFIED = 0;
+  DIAGNOSTIC_SEVERITY_ERROR = 1;
+  DIAGNOSTIC_SEVERITY_WARNING = 2;
+  DIAGNOSTIC_SEVERITY_INFO = 3;
+}
+
+// ComponentRevision is an immutable, content-addressed source pin. Revisions do not form a
+// linear history in core.
+message ComponentRevision {
+  string source = 1;
+  string revision = 2;
+}
+
+message Component {
+  // id is a raw 16-byte UUID.
+  bytes id = 1;
+  string name = 2;
+  ComponentRevision revision = 3;
+
+  // connector is a connector registry key, for example "k8s".
+  string connector = 4;
+
+  // outputs_schema is the serialized introspectable output contract. It is h-schema today.
+  bytes outputs_schema = 5;
+
+  // depends_on contains raw 16-byte component UUIDs.
+  repeated bytes depends_on = 6;
+
+  // context is connector-owned and opaque to core.
+  bytes context = 7;
+}
+
+// Graph is the complete desired graph at one accepted generation. Its components are the graph.
+message Graph {
+  // id is a raw 16-byte UUID.
+  bytes id = 1;
+  uint64 generation = 2;
+  repeated Component components = 3;
+}
+
+// ComponentOutputs is one component's complete output object. values_json is JSON encoded as
+// UTF-8 bytes and conforms to that component's declared outputs_schema.
+message ComponentOutputs {
+  // component_id is a raw 16-byte UUID.
+  bytes component_id = 1;
+  bytes values_json = 2;
+}
+
+enum ComponentDispositionKind {
+  COMPONENT_DISPOSITION_KIND_UNSPECIFIED = 0;
+  COMPONENT_DISPOSITION_KIND_PENDING = 1;
+  COMPONENT_DISPOSITION_KIND_RECONCILING = 2;
+  COMPONENT_DISPOSITION_KIND_READY = 3;
+  COMPONENT_DISPOSITION_KIND_FAILED = 4;
+}
+
+message ComponentDisposition {
+  // component_id is a raw 16-byte UUID.
+  bytes component_id = 1;
+  ComponentDispositionKind kind = 2;
+}
+
+// SliceReport is a connector's atomic, level-triggered observation of every component it owns
+// in a graph generation. dispositions must contain each owned component exactly once. Core
+// accepts the report and publishes all outputs together, or rejects the entire report.
+message SliceReport {
+  // graph_id is a raw 16-byte UUID.
+  bytes graph_id = 1;
+  uint64 generation = 2;
+  string connector = 3;
+  repeated ComponentDisposition dispositions = 4;
+  repeated ComponentOutputs outputs = 5;
+  repeated Diagnostic diagnostics = 6;
+}
+
+// GraphState is a complete level snapshot for workflow reads and watches. Reports are memory-only
+// observations; their output values are also recoverable from the graph journal after publication.
+message GraphState {
+  Graph graph = 1;
+  repeated SliceReport reports = 2;
+}

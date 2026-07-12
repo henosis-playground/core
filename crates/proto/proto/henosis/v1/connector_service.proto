@@ -1,0 +1,77 @@
+edition = "2023";
+
+package henosis.v1;
+
+import "henosis/v1/types.proto";
+
+// ConnectorService is served by each connector. Core pushes desired slices to it.
+service ConnectorService {
+  rpc ReconcileSlice(ReconcileSliceRequest) returns (ReconcileSliceResponse);
+  rpc RetireSlice(RetireSliceRequest) returns (RetireSliceResponse);
+}
+
+// ConnectorCallbackService is served by core. Connectors report complete slice observations and
+// fetch desired slices on demand for startup, recovery, and re-reads.
+service ConnectorCallbackService {
+  rpc ReportSlice(ReportSliceRequest) returns (ReportSliceResponse);
+  rpc FetchSlice(FetchSliceRequest) returns (FetchSliceResponse);
+}
+
+// GraphSlice is the complete set of components one connector owns in a graph generation, plus
+// published outputs from direct or transitive upstream components owned by other connectors.
+message GraphSlice {
+  // graph_id is a raw 16-byte UUID.
+  bytes graph_id = 1;
+  uint64 generation = 2;
+  string connector = 3;
+  repeated Component components = 4;
+  repeated ComponentOutputs upstream_outputs = 5;
+}
+
+message ReconcileSliceRequest {
+  GraphSlice slice = 1;
+}
+
+// A successful RPC acknowledges that the connector accepted the complete slice for reconciliation.
+// Reconciliation results arrive asynchronously through ConnectorCallbackService.ReportSlice.
+message ReconcileSliceResponse {}
+
+message RetireSliceRequest {
+  // slice is the connector's last complete owned slice and supplies the component context needed
+  // to remove connector-owned state.
+  GraphSlice slice = 1;
+}
+
+message RetireSliceResponse {}
+
+message ReportSliceRequest {
+  SliceReport report = 1;
+}
+
+message ReportSliceResponse {
+  oneof result {
+    ReportSliceAccepted accepted = 1;
+    ReportSliceRejected rejected = 2;
+  }
+}
+
+message ReportSliceAccepted {
+  // publication_sequence is present when this report published a durable outputs event. Status and
+  // diagnostics remain memory-only and do not allocate journal sequences.
+  uint64 publication_sequence = 1;
+}
+
+message ReportSliceRejected {
+  repeated Diagnostic diagnostics = 1;
+}
+
+message FetchSliceRequest {
+  // graph_id is a raw 16-byte UUID.
+  bytes graph_id = 1;
+  uint64 generation = 2;
+  string connector = 3;
+}
+
+message FetchSliceResponse {
+  GraphSlice slice = 1;
+}
