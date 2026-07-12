@@ -34,7 +34,7 @@ check-proto:
     buf breaking --exclude-imports --against proto/henosis-v1-baseline.binpb.gz
     before="$(mktemp -d)"
     trap 'rm -rf "$before"' EXIT
-    cp -R src/generated "$before/generated"
+    cp -R crates/proto/src/generated "$before/generated"
     buf generate
     cargo fmt -p henosis-proto
     diff -ru "$before/generated" crates/proto/src/generated
@@ -77,3 +77,4 @@ changelog:
 hakari:
     cargo hakari manage-deps --yes
     cargo hakari generate
+    taplo fmt crates/workspace-hack/Cargo.toml
