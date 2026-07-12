@@ -666,10 +666,16 @@ impl GraphHistory {
 
     #[must_use]
     pub fn last_published_generation(&self) -> Option<u64> {
+        self.last_published_generation_at(u64::MAX)
+    }
+
+    #[must_use]
+    pub fn last_published_generation_at(&self, generation: u64) -> Option<u64> {
         self.states
             .iter()
             .flat_map(|state| state.state().published_outputs())
             .map(PublishedSliceOutputs::generation)
+            .filter(|published_generation| *published_generation <= generation)
             .max()
     }
 

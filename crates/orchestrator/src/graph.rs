@@ -231,18 +231,15 @@ impl Orchestrator {
                     .ok_or_else(|| invariant("generation references an unregistered spec"))
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let current_lifecycle = history
-            .desired_state()
-            .ok_or_else(|| invariant("loaded graph has no state"))?
-            .lifecycle();
+        let generation_lifecycle = durable.lifecycle();
         let state = GraphState::new(durable, reports).map_err(|error| {
             Fault::<OrchestratorError, Error, Error>::Invariant(Error::new(error))
         })?;
         Ok(GraphGenerationState::new(
             state,
             components,
-            current_lifecycle,
-            history.last_published_generation(),
+            generation_lifecycle,
+            history.last_published_generation_at(command.generation()),
         ))
     }
 
