@@ -1,0 +1,110 @@
+edition = "2023";
+
+package henosis.v1;
+
+import "buf/validate/validate.proto";
+import "henosis/v1/types.proto";
+
+service ConnectorService {
+  rpc ReconcileSlice(ReconcileSliceRequest) returns (ReconcileSliceResponse) {
+    option idempotency_level = IDEMPOTENT;
+  }
+  rpc RetireSlice(RetireSliceRequest) returns (RetireSliceResponse) {
+    option idempotency_level = IDEMPOTENT;
+  }
+}
+
+service ConnectorCallbackService {
+  rpc ReportSlice(ReportSliceRequest) returns (ReportSliceResponse) {
+    option idempotency_level = IDEMPOTENT;
+  }
+  rpc FetchSlice(FetchSliceRequest) returns (FetchSliceResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+}
+
+// sequence is the durable identity of this complete materialized input level. generation is only
+// desired-intent provenance. Upstream outputs are present only when published for this generation.
+message GraphSlice {
+  option (buf.validate.message).cel = {
+    id: "graph_slice.components.unique"
+    message: "component spec hashes must be unique"
+    expression: "this.components.map(c, c.hash).unique()"
+  };
+  option (buf.validate.message).cel = {
+    id: "graph_slice.upstream_outputs.unique"
+    message: "upstream output component spec hashes must be unique"
+    expression: "this.upstream_outputs.map(o, o.component_spec_hash).unique()"
+  };
+
+  bytes graph_id = 1 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).bytes.len = 16
+  ];
+  uint64 generation = 2 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).uint64.gt = 0
+  ];
+  string connector = 3 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).string.min_len = 1
+  ];
+  repeated RegisteredComponentSpec components = 4;
+  repeated ComponentOutputs upstream_outputs = 5;
+  uint64 sequence = 6 [(buf.validate.field).required = true];
+}
+
+message ReconcileSliceRequest {
+  GraphSlice slice = 1 [(buf.validate.field).required = true];
+  // Cleanup is level-retained by connectors across later desired levels.
+  repeated RegisteredComponentSpec superseded_components = 2;
+}
+
+message ReconcileSliceResponse {
+  uint64 accepted_generation = 1 [deprecated = true];
+  uint64 accepted_sequence = 2 [(buf.validate.field).required = true];
+}
+
+message RetireSliceRequest {
+  GraphSlice slice = 1 [(buf.validate.field).required = true];
+}
+
+message RetireSliceResponse {
+  uint64 retired_generation = 1 [(buf.validate.field).uint64.gt = 0];
+}
+
+message ReportSliceRequest {
+  bytes request_id = 1 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).bytes.len = 16
+  ];
+  SliceReport report = 2 [(buf.validate.field).required = true];
+  // Required exactly when the report publishes outputs. Stable while the complete output level is
+  // unchanged; independent of request retry identity.
+  bytes publication_id = 3 [(buf.validate.field).bytes.len = 16];
+}
+
+message ReportSliceResponse {
+  uint64 publication_sequence = 1;
+}
+
+message ReportRejectionDetails {
+  repeated Diagnostic diagnostics = 1;
+}
+
+message FetchSliceRequest {
+  bytes graph_id = 1 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).bytes.len = 16
+  ];
+  uint64 generation = 2 [deprecated = true];
+  string connector = 3 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).string.min_len = 1
+  ];
+  uint64 sequence = 4 [(buf.validate.field).required = true];
+}
+
+message FetchSliceResponse {
+  GraphSlice slice = 1;
+}

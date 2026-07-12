@@ -1,5 +1,10 @@
 //! Committed Henosis protocol bindings.
 
+mod convert;
+pub mod journal;
+
+pub use convert::*;
+
 #[allow(
     clippy::doc_markdown,
     clippy::semicolon_if_nothing_returned,

@@ -41,8 +41,8 @@ pub mod __buffa {
     /// Register this package's `Any` type entries and extension entries.
     pub fn register_types(reg: &mut ::buffa::type_registry::TypeRegistry) {
         reg.register_json_any(super::__DIAGNOSTIC_JSON_ANY);
-        reg.register_json_any(super::__COMPONENT_REVISION_JSON_ANY);
-        reg.register_json_any(super::__COMPONENT_JSON_ANY);
+        reg.register_json_any(super::__COMPONENT_SPEC_JSON_ANY);
+        reg.register_json_any(super::__REGISTERED_COMPONENT_SPEC_JSON_ANY);
         reg.register_json_any(super::__GRAPH_JSON_ANY);
         reg.register_json_any(super::__COMPONENT_OUTPUTS_JSON_ANY);
         reg.register_json_any(super::__PUBLISHED_SLICE_OUTPUTS_JSON_ANY);
@@ -60,11 +60,13 @@ pub mod __buffa {
         reg.register_json_any(super::__REPORT_REJECTION_DETAILS_JSON_ANY);
         reg.register_json_any(super::__FETCH_SLICE_REQUEST_JSON_ANY);
         reg.register_json_any(super::__FETCH_SLICE_RESPONSE_JSON_ANY);
+        reg.register_json_any(super::__REGISTER_COMPONENT_SPEC_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__REGISTER_COMPONENT_SPEC_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__CREATE_GRAPH_REQUEST_JSON_ANY);
         reg.register_json_any(super::__CREATE_GRAPH_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__ADD_COMPONENTS_REQUEST_JSON_ANY);
         reg.register_json_any(super::__ADD_COMPONENTS_RESPONSE_JSON_ANY);
-        reg.register_json_any(super::__COMPONENT_UPDATE_JSON_ANY);
+        reg.register_json_any(super::__COMPONENT_REPLACEMENT_JSON_ANY);
         reg.register_json_any(super::__UPDATE_COMPONENTS_REQUEST_JSON_ANY);
         reg.register_json_any(super::__UPDATE_COMPONENTS_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__REMOVE_COMPONENTS_REQUEST_JSON_ANY);
@@ -81,6 +83,10 @@ pub mod __buffa {
         reg.register_json_any(super::__WATCH_GRAPH_VOLATILE_STATUS_JSON_ANY);
         reg.register_json_any(super::__WATCH_GRAPH_PROGRESS_JSON_ANY);
         reg.register_json_any(super::__WATCH_CURSOR_ERROR_DETAILS_JSON_ANY);
+        reg.register_json_any(super::__SPEC_STREAM_ENVELOPE_JSON_ANY);
+        reg.register_json_any(super::__SPEC_STREAM_RECORD_V1_JSON_ANY);
+        reg.register_json_any(super::__COMPONENT_SPEC_REGISTERED_V1_JSON_ANY);
+        reg.register_json_any(super::__COMPONENT_SPEC_RECORD_V1_JSON_ANY);
         reg.register_json_any(super::__GRAPH_STREAM_ENVELOPE_JSON_ANY);
         reg.register_json_any(super::__GRAPH_STREAM_RECORD_V1_JSON_ANY);
         reg.register_json_any(super::__GRAPH_CREATED_V1_JSON_ANY);
@@ -88,8 +94,6 @@ pub mod __buffa {
         reg.register_json_any(super::__OUTPUTS_PUBLISHED_V1_JSON_ANY);
         reg.register_json_any(super::__GRAPH_RETIRED_V1_JSON_ANY);
         reg.register_json_any(super::__GRAPH_SNAPSHOT_V1_JSON_ANY);
-        reg.register_json_any(super::__COMPONENT_RECORD_V1_JSON_ANY);
-        reg.register_json_any(super::__COMPONENT_REVISION_RECORD_V1_JSON_ANY);
         reg.register_json_any(super::__COMPONENT_OUTPUTS_RECORD_V1_JSON_ANY);
         reg.register_json_any(super::__REGISTRY_STREAM_ENVELOPE_JSON_ANY);
         reg.register_json_any(super::__REGISTRY_STREAM_RECORD_V1_JSON_ANY);
@@ -102,13 +106,13 @@ pub use self::__buffa::view::DiagnosticView;
 #[doc(inline)]
 pub use self::__buffa::view::DiagnosticOwnedView;
 #[doc(inline)]
-pub use self::__buffa::view::ComponentRevisionView;
+pub use self::__buffa::view::ComponentSpecView;
 #[doc(inline)]
-pub use self::__buffa::view::ComponentRevisionOwnedView;
+pub use self::__buffa::view::ComponentSpecOwnedView;
 #[doc(inline)]
-pub use self::__buffa::view::ComponentView;
+pub use self::__buffa::view::RegisteredComponentSpecView;
 #[doc(inline)]
-pub use self::__buffa::view::ComponentOwnedView;
+pub use self::__buffa::view::RegisteredComponentSpecOwnedView;
 #[doc(inline)]
 pub use self::__buffa::view::GraphView;
 #[doc(inline)]
@@ -178,6 +182,14 @@ pub use self::__buffa::view::FetchSliceResponseView;
 #[doc(inline)]
 pub use self::__buffa::view::FetchSliceResponseOwnedView;
 #[doc(inline)]
+pub use self::__buffa::view::RegisterComponentSpecRequestView;
+#[doc(inline)]
+pub use self::__buffa::view::RegisterComponentSpecRequestOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::RegisterComponentSpecResponseView;
+#[doc(inline)]
+pub use self::__buffa::view::RegisterComponentSpecResponseOwnedView;
+#[doc(inline)]
 pub use self::__buffa::view::CreateGraphRequestView;
 #[doc(inline)]
 pub use self::__buffa::view::CreateGraphRequestOwnedView;
@@ -194,9 +206,9 @@ pub use self::__buffa::view::AddComponentsResponseView;
 #[doc(inline)]
 pub use self::__buffa::view::AddComponentsResponseOwnedView;
 #[doc(inline)]
-pub use self::__buffa::view::ComponentUpdateView;
+pub use self::__buffa::view::ComponentReplacementView;
 #[doc(inline)]
-pub use self::__buffa::view::ComponentUpdateOwnedView;
+pub use self::__buffa::view::ComponentReplacementOwnedView;
 #[doc(inline)]
 pub use self::__buffa::view::UpdateComponentsRequestView;
 #[doc(inline)]
@@ -262,6 +274,22 @@ pub use self::__buffa::view::WatchCursorErrorDetailsView;
 #[doc(inline)]
 pub use self::__buffa::view::WatchCursorErrorDetailsOwnedView;
 #[doc(inline)]
+pub use self::__buffa::view::SpecStreamEnvelopeView;
+#[doc(inline)]
+pub use self::__buffa::view::SpecStreamEnvelopeOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::SpecStreamRecordV1View;
+#[doc(inline)]
+pub use self::__buffa::view::SpecStreamRecordV1OwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ComponentSpecRegisteredV1View;
+#[doc(inline)]
+pub use self::__buffa::view::ComponentSpecRegisteredV1OwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ComponentSpecRecordV1View;
+#[doc(inline)]
+pub use self::__buffa::view::ComponentSpecRecordV1OwnedView;
+#[doc(inline)]
 pub use self::__buffa::view::GraphStreamEnvelopeView;
 #[doc(inline)]
 pub use self::__buffa::view::GraphStreamEnvelopeOwnedView;
@@ -289,14 +317,6 @@ pub use self::__buffa::view::GraphRetiredV1OwnedView;
 pub use self::__buffa::view::GraphSnapshotV1View;
 #[doc(inline)]
 pub use self::__buffa::view::GraphSnapshotV1OwnedView;
-#[doc(inline)]
-pub use self::__buffa::view::ComponentRecordV1View;
-#[doc(inline)]
-pub use self::__buffa::view::ComponentRecordV1OwnedView;
-#[doc(inline)]
-pub use self::__buffa::view::ComponentRevisionRecordV1View;
-#[doc(inline)]
-pub use self::__buffa::view::ComponentRevisionRecordV1OwnedView;
 #[doc(inline)]
 pub use self::__buffa::view::ComponentOutputsRecordV1View;
 #[doc(inline)]

@@ -2,9 +2,23 @@
 
 The Henosis graph orchestrator.
 
+## Server configuration
+
+`henosis-core-server` serves `henosis.v1.GraphService` and
+`henosis.v1.ConnectorCallbackService` over ConnectRPC. It reads:
+
+- `DATABASE_URL`, or `CORE_POSTGRES_PASSWORD_FILE` for the Compose database;
+- `S2_ACCESS_TOKEN`, `S2_ACCOUNT_ENDPOINT`, `S2_BASIN_ENDPOINT`, and `S2_BASIN`;
+- `HENOSIS_AUTH_TOKENS_JSON`, a non-empty JSON array of accepted bearer tokens;
+- `HENOSIS_CONNECTORS_JSON`, a JSON map from connector key to `{ "endpoint", "token" }`;
+- `HENOSIS_LISTEN`, defaulting to `0.0.0.0:8080`.
+
+Graph content is read exclusively from S2. PostgreSQL contains only connector delivery
+checkpoints, display labels, and authentication material.
+
 This workspace contains the graph lifecycle domain, its S2 journal and PostgreSQL metadata
-layers, committed ConnectRPC protocol bindings, and service shell. Run `just proto` after changing
-the protocol definitions in `crates/proto/proto`.
+layers, committed ConnectRPC protocol bindings, and service shell. Protocol sources and Buf config
+live in `proto/` and the repository root; run `just proto` after changing them.
 
 ## Layout
 

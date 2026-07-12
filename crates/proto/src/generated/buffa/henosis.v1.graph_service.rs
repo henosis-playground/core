@@ -4,9 +4,271 @@
 #[derive(Clone, PartialEq, Default)]
 #[derive(::serde::Serialize, ::serde::Deserialize)]
 #[serde(default)]
-pub struct CreateGraphRequest {
-    /// graph_id is caller-allocated and follows the UUID/ProtoJSON/TypeID convention in types.proto.
+pub struct RegisterComponentSpecRequest {
+    /// Field 1: `spec`
+    #[serde(
+        rename = "spec",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub spec: ::buffa::MessageField<ComponentSpec>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for RegisterComponentSpecRequest {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("RegisterComponentSpecRequest").field("spec", &self.spec).finish()
+    }
+}
+impl RegisterComponentSpecRequest {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
     ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/henosis.v1.RegisterComponentSpecRequest";
+}
+::buffa::impl_default_instance!(RegisterComponentSpecRequest);
+impl ::buffa::MessageName for RegisterComponentSpecRequest {
+    const PACKAGE: &'static str = "henosis.v1";
+    const NAME: &'static str = "RegisterComponentSpecRequest";
+    const FULL_NAME: &'static str = "henosis.v1.RegisterComponentSpecRequest";
+    const TYPE_URL: &'static str = "type.googleapis.com/henosis.v1.RegisterComponentSpecRequest";
+}
+impl ::buffa::Message for RegisterComponentSpecRequest {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if self.spec.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.spec.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if self.spec.is_set() {
+            ::buffa::types::put_len_delimited_header(1u32, __cache.consume_next(), buf);
+            self.spec.write_to(__cache, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.spec.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.spec = ::buffa::MessageField::none();
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for RegisterComponentSpecRequest {
+    const PROTO_FQN: &'static str = "henosis.v1.RegisterComponentSpecRequest";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for RegisterComponentSpecRequest {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __REGISTER_COMPONENT_SPEC_REQUEST_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/henosis.v1.RegisterComponentSpecRequest",
+    to_json: ::buffa::type_registry::any_to_json::<RegisterComponentSpecRequest>,
+    from_json: ::buffa::type_registry::any_from_json::<RegisterComponentSpecRequest>,
+    is_wkt: false,
+};
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct RegisterComponentSpecResponse {
+    /// Field 1: `component`
+    #[serde(
+        rename = "component",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub component: ::buffa::MessageField<RegisteredComponentSpec>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for RegisterComponentSpecResponse {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("RegisterComponentSpecResponse")
+            .field("component", &self.component)
+            .finish()
+    }
+}
+impl RegisterComponentSpecResponse {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/henosis.v1.RegisterComponentSpecResponse";
+}
+::buffa::impl_default_instance!(RegisterComponentSpecResponse);
+impl ::buffa::MessageName for RegisterComponentSpecResponse {
+    const PACKAGE: &'static str = "henosis.v1";
+    const NAME: &'static str = "RegisterComponentSpecResponse";
+    const FULL_NAME: &'static str = "henosis.v1.RegisterComponentSpecResponse";
+    const TYPE_URL: &'static str = "type.googleapis.com/henosis.v1.RegisterComponentSpecResponse";
+}
+impl ::buffa::Message for RegisterComponentSpecResponse {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if self.component.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.component.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if self.component.is_set() {
+            ::buffa::types::put_len_delimited_header(1u32, __cache.consume_next(), buf);
+            self.component.write_to(__cache, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.component.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.component = ::buffa::MessageField::none();
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for RegisterComponentSpecResponse {
+    const PROTO_FQN: &'static str = "henosis.v1.RegisterComponentSpecResponse";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for RegisterComponentSpecResponse {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __REGISTER_COMPONENT_SPEC_RESPONSE_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/henosis.v1.RegisterComponentSpecResponse",
+    to_json: ::buffa::type_registry::any_to_json::<RegisterComponentSpecResponse>,
+    from_json: ::buffa::type_registry::any_from_json::<RegisterComponentSpecResponse>,
+    is_wkt: false,
+};
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct CreateGraphRequest {
     /// Field 1: `graph_id`
     #[serde(
         rename = "graphId",
@@ -15,15 +277,14 @@ pub struct CreateGraphRequest {
         skip_serializing_if = "::core::option::Option::is_none"
     )]
     pub graph_id: ::core::option::Option<::buffa::alloc::vec::Vec<u8>>,
-    /// Field 2: `components`
+    /// Field 2: `component_spec_hashes`
     #[serde(
-        rename = "components",
-        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec",
-        deserialize_with = "::buffa::json_helpers::null_as_default"
+        rename = "componentSpecHashes",
+        alias = "component_spec_hashes",
+        with = "::buffa::json_helpers::proto_seq",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec"
     )]
-    pub components: ::buffa::alloc::vec::Vec<Component>,
-    /// request_id follows the UUID/ProtoJSON/TypeID convention in types.proto.
-    ///
+    pub component_spec_hashes: ::buffa::alloc::vec::Vec<::buffa::alloc::vec::Vec<u8>>,
     /// Field 3: `request_id`
     #[serde(
         rename = "requestId",
@@ -40,7 +301,7 @@ impl ::core::fmt::Debug for CreateGraphRequest {
     fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         f.debug_struct("CreateGraphRequest")
             .field("graph_id", &self.graph_id)
-            .field("components", &self.components)
+            .field("component_spec_hashes", &self.component_spec_hashes)
             .field("request_id", &self.request_id)
             .finish()
     }
@@ -88,20 +349,15 @@ impl ::buffa::Message for CreateGraphRequest {
     /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
     /// compliant message will never overflow this type.
     #[allow(clippy::let_and_return)]
-    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+    fn compute_size(&self, _cache: &mut ::buffa::SizeCache) -> u32 {
         #[allow(unused_imports)]
         use ::buffa::Enumeration as _;
         let mut size = 0u32;
         if let Some(ref v) = self.graph_id {
             size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
         }
-        for v in &self.components {
-            let __slot = __cache.reserve();
-            let inner_size = v.compute_size(__cache);
-            __cache.set(__slot, inner_size);
-            size
-                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
-                    + inner_size;
+        for v in &self.component_spec_hashes {
+            size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
         }
         if let Some(ref v) = self.request_id {
             size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
@@ -111,7 +367,7 @@ impl ::buffa::Message for CreateGraphRequest {
     }
     fn write_to(
         &self,
-        __cache: &mut ::buffa::SizeCache,
+        _cache: &mut ::buffa::SizeCache,
         buf: &mut impl ::buffa::bytes::BufMut,
     ) {
         #[allow(unused_imports)]
@@ -119,9 +375,8 @@ impl ::buffa::Message for CreateGraphRequest {
         if let Some(ref v) = self.graph_id {
             ::buffa::types::put_bytes_field(1u32, v, buf);
         }
-        for v in &self.components {
-            ::buffa::types::put_len_delimited_header(2u32, __cache.consume_next(), buf);
-            v.write_to(__cache, buf);
+        for v in &self.component_spec_hashes {
+            ::buffa::types::put_bytes_field(2u32, v, buf);
         }
         if let Some(ref v) = self.request_id {
             ::buffa::types::put_bytes_field(3u32, v, buf);
@@ -154,9 +409,7 @@ impl ::buffa::Message for CreateGraphRequest {
                     tag,
                     ::buffa::encoding::WireType::LengthDelimited,
                 )?;
-                let mut elem = ::core::default::Default::default();
-                ::buffa::Message::merge_length_delimited(&mut elem, buf, ctx)?;
-                self.components.push(elem);
+                self.component_spec_hashes.push(::buffa::types::decode_bytes(buf)?);
             }
             3u32 => {
                 ::buffa::encoding::check_wire_type(
@@ -177,7 +430,7 @@ impl ::buffa::Message for CreateGraphRequest {
     }
     fn clear(&mut self) {
         self.graph_id = ::core::option::Option::None;
-        self.components.clear();
+        self.component_spec_hashes.clear();
         self.request_id = ::core::option::Option::None;
         self.__buffa_unknown_fields.clear();
     }
@@ -215,8 +468,6 @@ pub const __CREATE_GRAPH_REQUEST_JSON_ANY: ::buffa::type_registry::JsonAnyEntry 
 #[derive(::serde::Serialize, ::serde::Deserialize)]
 #[serde(default)]
 pub struct CreateGraphResponse {
-    /// graph is the complete graph at generation 1.
-    ///
     /// Field 1: `graph`
     #[serde(
         rename = "graph",
@@ -348,8 +599,6 @@ pub const __CREATE_GRAPH_RESPONSE_JSON_ANY: ::buffa::type_registry::JsonAnyEntry
 #[derive(::serde::Serialize, ::serde::Deserialize)]
 #[serde(default)]
 pub struct AddComponentsRequest {
-    /// graph_id follows the UUID/ProtoJSON/TypeID convention in types.proto.
-    ///
     /// Field 1: `graph_id`
     #[serde(
         rename = "graphId",
@@ -358,8 +607,6 @@ pub struct AddComponentsRequest {
         skip_serializing_if = "::core::option::Option::is_none"
     )]
     pub graph_id: ::core::option::Option<::buffa::alloc::vec::Vec<u8>>,
-    /// expected_generation is the optimistic-concurrency guard.
-    ///
     /// Field 2: `expected_generation`
     #[serde(
         rename = "expectedGeneration",
@@ -368,15 +615,14 @@ pub struct AddComponentsRequest {
         skip_serializing_if = "::core::option::Option::is_none"
     )]
     pub expected_generation: ::core::option::Option<u64>,
-    /// Field 3: `components`
+    /// Field 3: `component_spec_hashes`
     #[serde(
-        rename = "components",
-        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec",
-        deserialize_with = "::buffa::json_helpers::null_as_default"
+        rename = "componentSpecHashes",
+        alias = "component_spec_hashes",
+        with = "::buffa::json_helpers::proto_seq",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec"
     )]
-    pub components: ::buffa::alloc::vec::Vec<Component>,
-    /// request_id follows the UUID/ProtoJSON/TypeID convention in types.proto.
-    ///
+    pub component_spec_hashes: ::buffa::alloc::vec::Vec<::buffa::alloc::vec::Vec<u8>>,
     /// Field 4: `request_id`
     #[serde(
         rename = "requestId",
@@ -394,7 +640,7 @@ impl ::core::fmt::Debug for AddComponentsRequest {
         f.debug_struct("AddComponentsRequest")
             .field("graph_id", &self.graph_id)
             .field("expected_generation", &self.expected_generation)
-            .field("components", &self.components)
+            .field("component_spec_hashes", &self.component_spec_hashes)
             .field("request_id", &self.request_id)
             .finish()
     }
@@ -449,7 +695,7 @@ impl ::buffa::Message for AddComponentsRequest {
     /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
     /// compliant message will never overflow this type.
     #[allow(clippy::let_and_return)]
-    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+    fn compute_size(&self, _cache: &mut ::buffa::SizeCache) -> u32 {
         #[allow(unused_imports)]
         use ::buffa::Enumeration as _;
         let mut size = 0u32;
@@ -459,13 +705,8 @@ impl ::buffa::Message for AddComponentsRequest {
         if let Some(v) = self.expected_generation {
             size += 1u32 + ::buffa::types::uint64_encoded_len(v) as u32;
         }
-        for v in &self.components {
-            let __slot = __cache.reserve();
-            let inner_size = v.compute_size(__cache);
-            __cache.set(__slot, inner_size);
-            size
-                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
-                    + inner_size;
+        for v in &self.component_spec_hashes {
+            size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
         }
         if let Some(ref v) = self.request_id {
             size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
@@ -475,7 +716,7 @@ impl ::buffa::Message for AddComponentsRequest {
     }
     fn write_to(
         &self,
-        __cache: &mut ::buffa::SizeCache,
+        _cache: &mut ::buffa::SizeCache,
         buf: &mut impl ::buffa::bytes::BufMut,
     ) {
         #[allow(unused_imports)]
@@ -486,9 +727,8 @@ impl ::buffa::Message for AddComponentsRequest {
         if let Some(v) = self.expected_generation {
             ::buffa::types::put_uint64_field(2u32, v, buf);
         }
-        for v in &self.components {
-            ::buffa::types::put_len_delimited_header(3u32, __cache.consume_next(), buf);
-            v.write_to(__cache, buf);
+        for v in &self.component_spec_hashes {
+            ::buffa::types::put_bytes_field(3u32, v, buf);
         }
         if let Some(ref v) = self.request_id {
             ::buffa::types::put_bytes_field(4u32, v, buf);
@@ -530,9 +770,7 @@ impl ::buffa::Message for AddComponentsRequest {
                     tag,
                     ::buffa::encoding::WireType::LengthDelimited,
                 )?;
-                let mut elem = ::core::default::Default::default();
-                ::buffa::Message::merge_length_delimited(&mut elem, buf, ctx)?;
-                self.components.push(elem);
+                self.component_spec_hashes.push(::buffa::types::decode_bytes(buf)?);
             }
             4u32 => {
                 ::buffa::encoding::check_wire_type(
@@ -554,7 +792,7 @@ impl ::buffa::Message for AddComponentsRequest {
     fn clear(&mut self) {
         self.graph_id = ::core::option::Option::None;
         self.expected_generation = ::core::option::Option::None;
-        self.components.clear();
+        self.component_spec_hashes.clear();
         self.request_id = ::core::option::Option::None;
         self.__buffa_unknown_fields.clear();
     }
@@ -592,8 +830,6 @@ pub const __ADD_COMPONENTS_REQUEST_JSON_ANY: ::buffa::type_registry::JsonAnyEntr
 #[derive(::serde::Serialize, ::serde::Deserialize)]
 #[serde(default)]
 pub struct AddComponentsResponse {
-    /// graph is the complete graph at the newly accepted generation.
-    ///
     /// Field 1: `graph`
     #[serde(
         rename = "graph",
@@ -721,98 +957,106 @@ pub const __ADD_COMPONENTS_RESPONSE_JSON_ANY: ::buffa::type_registry::JsonAnyEnt
     from_json: ::buffa::type_registry::any_from_json::<AddComponentsResponse>,
     is_wkt: false,
 };
-/// ComponentUpdate applies an update_mask relative to component. component.id selects the stored
-/// component and cannot appear in update_mask. Only top-level paths are accepted. A listed singular
-/// field is set to its proposed value or cleared when absent; a listed repeated field replaces the
-/// stored list, so an empty list clears it. Unlisted fields are preserved, regardless of values in
-/// component. An absent or empty mask is INVALID_ARGUMENT.
 #[derive(Clone, PartialEq, Default)]
 #[derive(::serde::Serialize, ::serde::Deserialize)]
 #[serde(default)]
-pub struct ComponentUpdate {
-    /// Field 1: `component`
+pub struct ComponentReplacement {
+    /// Field 1: `current_spec_hash`
     #[serde(
-        rename = "component",
-        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+        rename = "currentSpecHash",
+        alias = "current_spec_hash",
+        with = "::buffa::json_helpers::opt_bytes",
+        skip_serializing_if = "::core::option::Option::is_none"
     )]
-    pub component: ::buffa::MessageField<Component>,
-    /// Field 2: `update_mask`
+    pub current_spec_hash: ::core::option::Option<::buffa::alloc::vec::Vec<u8>>,
+    /// Field 2: `replacement_spec_hash`
     #[serde(
-        rename = "updateMask",
-        alias = "update_mask",
-        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+        rename = "replacementSpecHash",
+        alias = "replacement_spec_hash",
+        with = "::buffa::json_helpers::opt_bytes",
+        skip_serializing_if = "::core::option::Option::is_none"
     )]
-    pub update_mask: ::buffa::MessageField<::buffa_types::google::protobuf::FieldMask>,
+    pub replacement_spec_hash: ::core::option::Option<::buffa::alloc::vec::Vec<u8>>,
     #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
 }
-impl ::core::fmt::Debug for ComponentUpdate {
+impl ::core::fmt::Debug for ComponentReplacement {
     fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
-        f.debug_struct("ComponentUpdate")
-            .field("component", &self.component)
-            .field("update_mask", &self.update_mask)
+        f.debug_struct("ComponentReplacement")
+            .field("current_spec_hash", &self.current_spec_hash)
+            .field("replacement_spec_hash", &self.replacement_spec_hash)
             .finish()
     }
 }
-impl ComponentUpdate {
+impl ComponentReplacement {
     /// Protobuf type URL for this message, for use with `Any::pack` and
     /// `Any::unpack_if`.
     ///
     /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
-    pub const TYPE_URL: &'static str = "type.googleapis.com/henosis.v1.ComponentUpdate";
+    pub const TYPE_URL: &'static str = "type.googleapis.com/henosis.v1.ComponentReplacement";
 }
-::buffa::impl_default_instance!(ComponentUpdate);
-impl ::buffa::MessageName for ComponentUpdate {
+impl ComponentReplacement {
+    #[must_use = "with_* setters return `self` by value; assign or chain the result"]
+    #[inline]
+    ///Sets [`Self::current_spec_hash`] to `Some(value)`, consuming and returning `self`.
+    pub fn with_current_spec_hash(
+        mut self,
+        value: impl Into<::buffa::alloc::vec::Vec<u8>>,
+    ) -> Self {
+        self.current_spec_hash = Some(value.into());
+        self
+    }
+    #[must_use = "with_* setters return `self` by value; assign or chain the result"]
+    #[inline]
+    ///Sets [`Self::replacement_spec_hash`] to `Some(value)`, consuming and returning `self`.
+    pub fn with_replacement_spec_hash(
+        mut self,
+        value: impl Into<::buffa::alloc::vec::Vec<u8>>,
+    ) -> Self {
+        self.replacement_spec_hash = Some(value.into());
+        self
+    }
+}
+::buffa::impl_default_instance!(ComponentReplacement);
+impl ::buffa::MessageName for ComponentReplacement {
     const PACKAGE: &'static str = "henosis.v1";
-    const NAME: &'static str = "ComponentUpdate";
-    const FULL_NAME: &'static str = "henosis.v1.ComponentUpdate";
-    const TYPE_URL: &'static str = "type.googleapis.com/henosis.v1.ComponentUpdate";
+    const NAME: &'static str = "ComponentReplacement";
+    const FULL_NAME: &'static str = "henosis.v1.ComponentReplacement";
+    const TYPE_URL: &'static str = "type.googleapis.com/henosis.v1.ComponentReplacement";
 }
-impl ::buffa::Message for ComponentUpdate {
+impl ::buffa::Message for ComponentReplacement {
     /// Returns the total encoded size in bytes.
     ///
     /// The result is a `u32`; the protobuf specification requires all
     /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
     /// compliant message will never overflow this type.
     #[allow(clippy::let_and_return)]
-    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+    fn compute_size(&self, _cache: &mut ::buffa::SizeCache) -> u32 {
         #[allow(unused_imports)]
         use ::buffa::Enumeration as _;
         let mut size = 0u32;
-        if self.component.is_set() {
-            let __slot = __cache.reserve();
-            let inner_size = self.component.compute_size(__cache);
-            __cache.set(__slot, inner_size);
-            size
-                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
-                    + inner_size;
+        if let Some(ref v) = self.current_spec_hash {
+            size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
         }
-        if self.update_mask.is_set() {
-            let __slot = __cache.reserve();
-            let inner_size = self.update_mask.compute_size(__cache);
-            __cache.set(__slot, inner_size);
-            size
-                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
-                    + inner_size;
+        if let Some(ref v) = self.replacement_spec_hash {
+            size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
         }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
         size
     }
     fn write_to(
         &self,
-        __cache: &mut ::buffa::SizeCache,
+        _cache: &mut ::buffa::SizeCache,
         buf: &mut impl ::buffa::bytes::BufMut,
     ) {
         #[allow(unused_imports)]
         use ::buffa::Enumeration as _;
-        if self.component.is_set() {
-            ::buffa::types::put_len_delimited_header(1u32, __cache.consume_next(), buf);
-            self.component.write_to(__cache, buf);
+        if let Some(ref v) = self.current_spec_hash {
+            ::buffa::types::put_bytes_field(1u32, v, buf);
         }
-        if self.update_mask.is_set() {
-            ::buffa::types::put_len_delimited_header(2u32, __cache.consume_next(), buf);
-            self.update_mask.write_to(__cache, buf);
+        if let Some(ref v) = self.replacement_spec_hash {
+            ::buffa::types::put_bytes_field(2u32, v, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
     }
@@ -832,10 +1076,11 @@ impl ::buffa::Message for ComponentUpdate {
                     tag,
                     ::buffa::encoding::WireType::LengthDelimited,
                 )?;
-                ::buffa::Message::merge_length_delimited(
-                    self.component.get_or_insert_default(),
+                ::buffa::types::merge_bytes(
+                    self
+                        .current_spec_hash
+                        .get_or_insert_with(::buffa::alloc::vec::Vec::new),
                     buf,
-                    ctx,
                 )?;
             }
             2u32 => {
@@ -843,10 +1088,11 @@ impl ::buffa::Message for ComponentUpdate {
                     tag,
                     ::buffa::encoding::WireType::LengthDelimited,
                 )?;
-                ::buffa::Message::merge_length_delimited(
-                    self.update_mask.get_or_insert_default(),
+                ::buffa::types::merge_bytes(
+                    self
+                        .replacement_spec_hash
+                        .get_or_insert_with(::buffa::alloc::vec::Vec::new),
                     buf,
-                    ctx,
                 )?;
             }
             _ => {
@@ -857,13 +1103,13 @@ impl ::buffa::Message for ComponentUpdate {
         ::core::result::Result::Ok(())
     }
     fn clear(&mut self) {
-        self.component = ::buffa::MessageField::none();
-        self.update_mask = ::buffa::MessageField::none();
+        self.current_spec_hash = ::core::option::Option::None;
+        self.replacement_spec_hash = ::core::option::Option::None;
         self.__buffa_unknown_fields.clear();
     }
 }
-impl ::buffa::ExtensionSet for ComponentUpdate {
-    const PROTO_FQN: &'static str = "henosis.v1.ComponentUpdate";
+impl ::buffa::ExtensionSet for ComponentReplacement {
+    const PROTO_FQN: &'static str = "henosis.v1.ComponentReplacement";
     fn unknown_fields(&self) -> &::buffa::UnknownFields {
         &self.__buffa_unknown_fields
     }
@@ -871,7 +1117,7 @@ impl ::buffa::ExtensionSet for ComponentUpdate {
         &mut self.__buffa_unknown_fields
     }
 }
-impl ::buffa::json_helpers::ProtoElemJson for ComponentUpdate {
+impl ::buffa::json_helpers::ProtoElemJson for ComponentReplacement {
     fn serialize_proto_json<S: ::serde::Serializer>(
         v: &Self,
         s: S,
@@ -885,18 +1131,16 @@ impl ::buffa::json_helpers::ProtoElemJson for ComponentUpdate {
     }
 }
 #[doc(hidden)]
-pub const __COMPONENT_UPDATE_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
-    type_url: "type.googleapis.com/henosis.v1.ComponentUpdate",
-    to_json: ::buffa::type_registry::any_to_json::<ComponentUpdate>,
-    from_json: ::buffa::type_registry::any_from_json::<ComponentUpdate>,
+pub const __COMPONENT_REPLACEMENT_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/henosis.v1.ComponentReplacement",
+    to_json: ::buffa::type_registry::any_to_json::<ComponentReplacement>,
+    from_json: ::buffa::type_registry::any_from_json::<ComponentReplacement>,
     is_wkt: false,
 };
 #[derive(Clone, PartialEq, Default)]
 #[derive(::serde::Serialize, ::serde::Deserialize)]
 #[serde(default)]
 pub struct UpdateComponentsRequest {
-    /// graph_id follows the UUID/ProtoJSON/TypeID convention in types.proto.
-    ///
     /// Field 1: `graph_id`
     #[serde(
         rename = "graphId",
@@ -905,8 +1149,6 @@ pub struct UpdateComponentsRequest {
         skip_serializing_if = "::core::option::Option::is_none"
     )]
     pub graph_id: ::core::option::Option<::buffa::alloc::vec::Vec<u8>>,
-    /// expected_generation is the optimistic-concurrency guard.
-    ///
     /// Field 2: `expected_generation`
     #[serde(
         rename = "expectedGeneration",
@@ -915,15 +1157,13 @@ pub struct UpdateComponentsRequest {
         skip_serializing_if = "::core::option::Option::is_none"
     )]
     pub expected_generation: ::core::option::Option<u64>,
-    /// Field 3: `updates`
+    /// Field 3: `replacements`
     #[serde(
-        rename = "updates",
+        rename = "replacements",
         skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec",
         deserialize_with = "::buffa::json_helpers::null_as_default"
     )]
-    pub updates: ::buffa::alloc::vec::Vec<ComponentUpdate>,
-    /// request_id follows the UUID/ProtoJSON/TypeID convention in types.proto.
-    ///
+    pub replacements: ::buffa::alloc::vec::Vec<ComponentReplacement>,
     /// Field 4: `request_id`
     #[serde(
         rename = "requestId",
@@ -941,7 +1181,7 @@ impl ::core::fmt::Debug for UpdateComponentsRequest {
         f.debug_struct("UpdateComponentsRequest")
             .field("graph_id", &self.graph_id)
             .field("expected_generation", &self.expected_generation)
-            .field("updates", &self.updates)
+            .field("replacements", &self.replacements)
             .field("request_id", &self.request_id)
             .finish()
     }
@@ -1006,7 +1246,7 @@ impl ::buffa::Message for UpdateComponentsRequest {
         if let Some(v) = self.expected_generation {
             size += 1u32 + ::buffa::types::uint64_encoded_len(v) as u32;
         }
-        for v in &self.updates {
+        for v in &self.replacements {
             let __slot = __cache.reserve();
             let inner_size = v.compute_size(__cache);
             __cache.set(__slot, inner_size);
@@ -1033,7 +1273,7 @@ impl ::buffa::Message for UpdateComponentsRequest {
         if let Some(v) = self.expected_generation {
             ::buffa::types::put_uint64_field(2u32, v, buf);
         }
-        for v in &self.updates {
+        for v in &self.replacements {
             ::buffa::types::put_len_delimited_header(3u32, __cache.consume_next(), buf);
             v.write_to(__cache, buf);
         }
@@ -1079,7 +1319,7 @@ impl ::buffa::Message for UpdateComponentsRequest {
                 )?;
                 let mut elem = ::core::default::Default::default();
                 ::buffa::Message::merge_length_delimited(&mut elem, buf, ctx)?;
-                self.updates.push(elem);
+                self.replacements.push(elem);
             }
             4u32 => {
                 ::buffa::encoding::check_wire_type(
@@ -1101,7 +1341,7 @@ impl ::buffa::Message for UpdateComponentsRequest {
     fn clear(&mut self) {
         self.graph_id = ::core::option::Option::None;
         self.expected_generation = ::core::option::Option::None;
-        self.updates.clear();
+        self.replacements.clear();
         self.request_id = ::core::option::Option::None;
         self.__buffa_unknown_fields.clear();
     }
@@ -1139,8 +1379,6 @@ pub const __UPDATE_COMPONENTS_REQUEST_JSON_ANY: ::buffa::type_registry::JsonAnyE
 #[derive(::serde::Serialize, ::serde::Deserialize)]
 #[serde(default)]
 pub struct UpdateComponentsResponse {
-    /// graph is the complete graph at the newly accepted generation.
-    ///
     /// Field 1: `graph`
     #[serde(
         rename = "graph",
@@ -1272,8 +1510,6 @@ pub const __UPDATE_COMPONENTS_RESPONSE_JSON_ANY: ::buffa::type_registry::JsonAny
 #[derive(::serde::Serialize, ::serde::Deserialize)]
 #[serde(default)]
 pub struct RemoveComponentsRequest {
-    /// graph_id follows the UUID/ProtoJSON/TypeID convention in types.proto.
-    ///
     /// Field 1: `graph_id`
     #[serde(
         rename = "graphId",
@@ -1282,8 +1518,6 @@ pub struct RemoveComponentsRequest {
         skip_serializing_if = "::core::option::Option::is_none"
     )]
     pub graph_id: ::core::option::Option<::buffa::alloc::vec::Vec<u8>>,
-    /// expected_generation is the optimistic-concurrency guard.
-    ///
     /// Field 2: `expected_generation`
     #[serde(
         rename = "expectedGeneration",
@@ -1292,18 +1526,14 @@ pub struct RemoveComponentsRequest {
         skip_serializing_if = "::core::option::Option::is_none"
     )]
     pub expected_generation: ::core::option::Option<u64>,
-    /// component_ids follows the UUID/ProtoJSON/TypeID convention in types.proto and is unique.
-    ///
-    /// Field 3: `component_ids`
+    /// Field 3: `component_spec_hashes`
     #[serde(
-        rename = "componentIds",
-        alias = "component_ids",
+        rename = "componentSpecHashes",
+        alias = "component_spec_hashes",
         with = "::buffa::json_helpers::proto_seq",
         skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec"
     )]
-    pub component_ids: ::buffa::alloc::vec::Vec<::buffa::alloc::vec::Vec<u8>>,
-    /// request_id follows the UUID/ProtoJSON/TypeID convention in types.proto.
-    ///
+    pub component_spec_hashes: ::buffa::alloc::vec::Vec<::buffa::alloc::vec::Vec<u8>>,
     /// Field 4: `request_id`
     #[serde(
         rename = "requestId",
@@ -1321,7 +1551,7 @@ impl ::core::fmt::Debug for RemoveComponentsRequest {
         f.debug_struct("RemoveComponentsRequest")
             .field("graph_id", &self.graph_id)
             .field("expected_generation", &self.expected_generation)
-            .field("component_ids", &self.component_ids)
+            .field("component_spec_hashes", &self.component_spec_hashes)
             .field("request_id", &self.request_id)
             .finish()
     }
@@ -1386,7 +1616,7 @@ impl ::buffa::Message for RemoveComponentsRequest {
         if let Some(v) = self.expected_generation {
             size += 1u32 + ::buffa::types::uint64_encoded_len(v) as u32;
         }
-        for v in &self.component_ids {
+        for v in &self.component_spec_hashes {
             size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
         }
         if let Some(ref v) = self.request_id {
@@ -1408,7 +1638,7 @@ impl ::buffa::Message for RemoveComponentsRequest {
         if let Some(v) = self.expected_generation {
             ::buffa::types::put_uint64_field(2u32, v, buf);
         }
-        for v in &self.component_ids {
+        for v in &self.component_spec_hashes {
             ::buffa::types::put_bytes_field(3u32, v, buf);
         }
         if let Some(ref v) = self.request_id {
@@ -1451,7 +1681,7 @@ impl ::buffa::Message for RemoveComponentsRequest {
                     tag,
                     ::buffa::encoding::WireType::LengthDelimited,
                 )?;
-                self.component_ids.push(::buffa::types::decode_bytes(buf)?);
+                self.component_spec_hashes.push(::buffa::types::decode_bytes(buf)?);
             }
             4u32 => {
                 ::buffa::encoding::check_wire_type(
@@ -1473,7 +1703,7 @@ impl ::buffa::Message for RemoveComponentsRequest {
     fn clear(&mut self) {
         self.graph_id = ::core::option::Option::None;
         self.expected_generation = ::core::option::Option::None;
-        self.component_ids.clear();
+        self.component_spec_hashes.clear();
         self.request_id = ::core::option::Option::None;
         self.__buffa_unknown_fields.clear();
     }
@@ -1511,8 +1741,6 @@ pub const __REMOVE_COMPONENTS_REQUEST_JSON_ANY: ::buffa::type_registry::JsonAnyE
 #[derive(::serde::Serialize, ::serde::Deserialize)]
 #[serde(default)]
 pub struct RemoveComponentsResponse {
-    /// graph is the complete graph at the newly accepted generation.
-    ///
     /// Field 1: `graph`
     #[serde(
         rename = "graph",
@@ -1640,13 +1868,10 @@ pub const __REMOVE_COMPONENTS_RESPONSE_JSON_ANY: ::buffa::type_registry::JsonAny
     from_json: ::buffa::type_registry::any_from_json::<RemoveComponentsResponse>,
     is_wkt: false,
 };
-/// EditRejectionDetails is attached to mutation Connect errors and preserves diagnostics verbatim.
 #[derive(Clone, PartialEq, Default)]
 #[derive(::serde::Serialize, ::serde::Deserialize)]
 #[serde(default)]
 pub struct EditRejectionDetails {
-    /// current_generation is present when the graph exists and its generation is known.
-    ///
     /// Field 1: `current_generation`
     #[serde(
         rename = "currentGeneration",
@@ -1813,8 +2038,6 @@ pub const __EDIT_REJECTION_DETAILS_JSON_ANY: ::buffa::type_registry::JsonAnyEntr
 #[derive(::serde::Serialize, ::serde::Deserialize)]
 #[serde(default)]
 pub struct GetGraphRequest {
-    /// graph_id follows the UUID/ProtoJSON/TypeID convention in types.proto.
-    ///
     /// Field 1: `graph_id`
     #[serde(
         rename = "graphId",
@@ -2084,8 +2307,6 @@ pub const __GET_GRAPH_RESPONSE_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = 
 #[derive(::serde::Serialize, ::serde::Deserialize)]
 #[serde(default)]
 pub struct RetireGraphRequest {
-    /// graph_id follows the UUID/ProtoJSON/TypeID convention in types.proto.
-    ///
     /// Field 1: `graph_id`
     #[serde(
         rename = "graphId",
@@ -2094,8 +2315,6 @@ pub struct RetireGraphRequest {
         skip_serializing_if = "::core::option::Option::is_none"
     )]
     pub graph_id: ::core::option::Option<::buffa::alloc::vec::Vec<u8>>,
-    /// expected_generation guards retirement against a concurrent edit.
-    ///
     /// Field 2: `expected_generation`
     #[serde(
         rename = "expectedGeneration",
@@ -2104,8 +2323,6 @@ pub struct RetireGraphRequest {
         skip_serializing_if = "::core::option::Option::is_none"
     )]
     pub expected_generation: ::core::option::Option<u64>,
-    /// request_id follows the UUID/ProtoJSON/TypeID convention in types.proto.
-    ///
     /// Field 3: `request_id`
     #[serde(
         rename = "requestId",
@@ -2298,8 +2515,6 @@ pub const __RETIRE_GRAPH_REQUEST_JSON_ANY: ::buffa::type_registry::JsonAnyEntry 
 #[derive(::serde::Serialize, ::serde::Deserialize)]
 #[serde(default)]
 pub struct RetireGraphResponse {
-    /// graph_id follows the UUID/ProtoJSON/TypeID convention in types.proto.
-    ///
     /// Field 1: `graph_id`
     #[serde(
         rename = "graphId",
@@ -2468,16 +2683,10 @@ pub const __RETIRE_GRAPH_RESPONSE_JSON_ANY: ::buffa::type_registry::JsonAnyEntry
     from_json: ::buffa::type_registry::any_from_json::<RetireGraphResponse>,
     is_wkt: false,
 };
-/// WatchGraph is resumable for durable desired-state and output changes, but connector reports and
-/// diagnostics are deliberately memory-only. Missed volatile transitions can never be replayed, and
-/// after a core restart the latest volatile status may initially be empty. Clients must treat
-/// volatile_status as a replaceable level snapshot, not a transition-complete event history.
 #[derive(Clone, PartialEq, Default)]
 #[derive(::serde::Serialize, ::serde::Deserialize)]
 #[serde(default)]
 pub struct WatchGraphRequest {
-    /// graph_id follows the UUID/ProtoJSON/TypeID convention in types.proto.
-    ///
     /// Field 1: `graph_id`
     #[serde(
         rename = "graphId",
@@ -2486,15 +2695,6 @@ pub struct WatchGraphRequest {
         skip_serializing_if = "::core::option::Option::is_none"
     )]
     pub graph_id: ::core::option::Option<::buffa::alloc::vec::Vec<u8>>,
-    /// When after_sequence is absent, the server chooses the current durable head S. When it is
-    /// present, including zero, S is exactly the requested retained sequence. The first item is
-    /// snapshot at S; subsequent change items have strictly increasing sequences greater than S. The
-    /// server must subscribe or buffer atomically with materializing S so no intervening durable
-    /// record is lost. A cursor ahead of the head or older than retained history terminates with
-    /// OUT_OF_RANGE and WatchCursorErrorDetails. A missing graph terminates with NOT_FOUND. Retirement
-    /// is delivered as a final change and then the server ends cleanly; if the snapshot is already
-    /// retired, the server ends after that snapshot.
-    ///
     /// Field 2: `after_sequence`
     #[serde(
         rename = "afterSequence",
@@ -3054,7 +3254,6 @@ pub mod watch_graph_response {
     #[doc(inline)]
     pub use super::__buffa::view::oneof::watch_graph_response::Item as ItemView;
 }
-/// WatchGraphSnapshot is a complete durable state at sequence. It never contains volatile reports.
 #[derive(Clone, PartialEq, Default)]
 #[derive(::serde::Serialize, ::serde::Deserialize)]
 #[serde(default)]
@@ -3221,8 +3420,6 @@ pub const __WATCH_GRAPH_SNAPSHOT_JSON_ANY: ::buffa::type_registry::JsonAnyEntry 
     from_json: ::buffa::type_registry::any_from_json::<WatchGraphSnapshot>,
     is_wkt: false,
 };
-/// WatchGraphChange is the complete durable state after applying exactly the named sequence. Change
-/// items are full states rather than deltas and have strictly increasing sequences.
 #[derive(Clone, PartialEq, Default)]
 #[derive(::serde::Serialize, ::serde::Deserialize)]
 #[serde(default)]
@@ -3389,9 +3586,6 @@ pub const __WATCH_GRAPH_CHANGE_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = 
     from_json: ::buffa::type_registry::any_from_json::<WatchGraphChange>,
     is_wkt: false,
 };
-/// WatchGraphVolatileStatus replaces all previously observed volatile reports. delivered_sequence
-/// is the last durable sequence already sent to this client and does not advance its resume cursor.
-/// Servers emit volatile status only after catching the stream up to the current durable head.
 #[derive(Clone, PartialEq, Default)]
 #[derive(::serde::Serialize, ::serde::Deserialize)]
 #[serde(default)]
@@ -3558,9 +3752,6 @@ pub const __WATCH_GRAPH_VOLATILE_STATUS_JSON_ANY: ::buffa::type_registry::JsonAn
     from_json: ::buffa::type_registry::any_from_json::<WatchGraphVolatileStatus>,
     is_wkt: false,
 };
-/// WatchGraphProgress is a heartbeat/progress marker. delivered_sequence is only the last durable
-/// sequence already delivered, never an unseen store head. A server sends an item at least once every
-/// 30 seconds so intermediaries do not terminate an idle response.
 #[derive(Clone, PartialEq, Default)]
 #[derive(::serde::Serialize, ::serde::Deserialize)]
 #[serde(default)]

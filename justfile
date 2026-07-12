@@ -29,7 +29,6 @@ check-pre-commit:
 check-proto:
     #!/usr/bin/env bash
     set -euo pipefail
-    cd crates/proto
     buf format --diff --exit-code
     buf lint
     buf breaking --exclude-imports --against proto/henosis-v1-baseline.binpb.gz
@@ -37,7 +36,6 @@ check-proto:
     trap 'rm -rf "$before"' EXIT
     cp -R src/generated "$before/generated"
     buf generate
-    cd ../..
     cargo fmt -p henosis-proto
     diff -ru "$before/generated" crates/proto/src/generated
 
@@ -50,9 +48,9 @@ test *flags:
 doc *flags:
     RUSTDOCFLAGS="--cfg docsrs" cargo doc --all-features --no-deps --document-private-items --keep-going {{ flags }}
 
-# Regenerates the committed Rust bindings from crates/proto/proto.
+# Regenerates the committed Rust bindings from the root proto module.
 proto:
-    cd crates/proto && buf generate
+    buf generate
     cargo fmt -p henosis-proto
 
 [private]

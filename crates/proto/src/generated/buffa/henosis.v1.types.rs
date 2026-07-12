@@ -510,36 +510,26 @@ impl ::buffa::Enumeration for GraphLifecycle {
         ]
     }
 }
-/// UUID fields are raw 16-byte UUIDs on the protobuf wire. Connect ProtoJSON renders these bytes
-/// as base64; human-facing logs, diagnostics, GitHub presentation, and CLI output render TypeIDs.
-///
-/// Diagnostic is preserved verbatim across workflow, core, and connector boundaries.
+/// UUID fields are raw 16-byte UUIDs on the protobuf wire. Content hashes are raw 32-byte BLAKE3
+/// digests. Human-facing adapters render UUIDs as TypeIDs and hashes as lowercase hexadecimal.
 #[derive(Clone, PartialEq, Default)]
 #[derive(::serde::Serialize, ::serde::Deserialize)]
 #[serde(default)]
 pub struct Diagnostic {
-    /// code is a stable, non-empty machine-readable identifier.
-    ///
     /// Field 1: `code`
     #[serde(rename = "code", skip_serializing_if = "::core::option::Option::is_none")]
     pub code: ::core::option::Option<::buffa::alloc::string::String>,
     /// Field 2: `message`
     #[serde(rename = "message", skip_serializing_if = "::core::option::Option::is_none")]
     pub message: ::core::option::Option<::buffa::alloc::string::String>,
-    /// component_id is absent for diagnostics that apply to the request or slice as a whole. When
-    /// present, it follows the UUID/ProtoJSON/TypeID convention documented above.
-    ///
-    /// Field 3: `component_id`
+    /// Field 3: `component_spec_hash`
     #[serde(
-        rename = "componentId",
-        alias = "component_id",
+        rename = "componentSpecHash",
+        alias = "component_spec_hash",
         with = "::buffa::json_helpers::opt_bytes",
         skip_serializing_if = "::core::option::Option::is_none"
     )]
-    pub component_id: ::core::option::Option<::buffa::alloc::vec::Vec<u8>>,
-    /// pointer is an RFC 6901 JSON Pointer into the component-owned input when a precise location is
-    /// available.
-    ///
+    pub component_spec_hash: ::core::option::Option<::buffa::alloc::vec::Vec<u8>>,
     /// Field 4: `pointer`
     #[serde(rename = "pointer", skip_serializing_if = "::core::option::Option::is_none")]
     pub pointer: ::core::option::Option<::buffa::alloc::string::String>,
@@ -562,7 +552,7 @@ impl ::core::fmt::Debug for Diagnostic {
         f.debug_struct("Diagnostic")
             .field("code", &self.code)
             .field("message", &self.message)
-            .field("component_id", &self.component_id)
+            .field("component_spec_hash", &self.component_spec_hash)
             .field("pointer", &self.pointer)
             .field("help", &self.help)
             .field("severity", &self.severity)
@@ -599,12 +589,12 @@ impl Diagnostic {
     }
     #[must_use = "with_* setters return `self` by value; assign or chain the result"]
     #[inline]
-    ///Sets [`Self::component_id`] to `Some(value)`, consuming and returning `self`.
-    pub fn with_component_id(
+    ///Sets [`Self::component_spec_hash`] to `Some(value)`, consuming and returning `self`.
+    pub fn with_component_spec_hash(
         mut self,
         value: impl Into<::buffa::alloc::vec::Vec<u8>>,
     ) -> Self {
-        self.component_id = Some(value.into());
+        self.component_spec_hash = Some(value.into());
         self
     }
     #[must_use = "with_* setters return `self` by value; assign or chain the result"]
@@ -662,7 +652,7 @@ impl ::buffa::Message for Diagnostic {
         if let Some(ref v) = self.message {
             size += 1u32 + ::buffa::types::string_encoded_len(v) as u32;
         }
-        if let Some(ref v) = self.component_id {
+        if let Some(ref v) = self.component_spec_hash {
             size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
         }
         if let Some(ref v) = self.pointer {
@@ -690,7 +680,7 @@ impl ::buffa::Message for Diagnostic {
         if let Some(ref v) = self.message {
             ::buffa::types::put_string_field(2u32, v, buf);
         }
-        if let Some(ref v) = self.component_id {
+        if let Some(ref v) = self.component_spec_hash {
             ::buffa::types::put_bytes_field(3u32, v, buf);
         }
         if let Some(ref v) = self.pointer {
@@ -741,7 +731,9 @@ impl ::buffa::Message for Diagnostic {
                     ::buffa::encoding::WireType::LengthDelimited,
                 )?;
                 ::buffa::types::merge_bytes(
-                    self.component_id.get_or_insert_with(::buffa::alloc::vec::Vec::new),
+                    self
+                        .component_spec_hash
+                        .get_or_insert_with(::buffa::alloc::vec::Vec::new),
                     buf,
                 )?;
             }
@@ -784,7 +776,7 @@ impl ::buffa::Message for Diagnostic {
     fn clear(&mut self) {
         self.code = ::core::option::Option::None;
         self.message = ::core::option::Option::None;
-        self.component_id = ::core::option::Option::None;
+        self.component_spec_hash = ::core::option::Option::None;
         self.pointer = ::core::option::Option::None;
         self.help = ::core::option::Option::None;
         self.severity = ::core::option::Option::None;
@@ -820,212 +812,22 @@ pub const __DIAGNOSTIC_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa:
     from_json: ::buffa::type_registry::any_from_json::<Diagnostic>,
     is_wkt: false,
 };
-/// ComponentRevision is an immutable, content-addressed source pin. Revisions do not form a linear
-/// history in core.
+/// ComponentSpec is immutable connector input. Its identity is the BLAKE3 hash of its canonical
+/// protobuf encoding. Source provenance belongs inside connector_context, not core vocabulary.
 #[derive(Clone, PartialEq, Default)]
 #[derive(::serde::Serialize, ::serde::Deserialize)]
 #[serde(default)]
-pub struct ComponentRevision {
-    /// Field 1: `source`
-    #[serde(rename = "source", skip_serializing_if = "::core::option::Option::is_none")]
-    pub source: ::core::option::Option<::buffa::alloc::string::String>,
-    /// Field 2: `revision`
-    #[serde(
-        rename = "revision",
-        skip_serializing_if = "::core::option::Option::is_none"
-    )]
-    pub revision: ::core::option::Option<::buffa::alloc::string::String>,
-    #[serde(skip)]
-    #[doc(hidden)]
-    pub __buffa_unknown_fields: ::buffa::UnknownFields,
-}
-impl ::core::fmt::Debug for ComponentRevision {
-    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
-        f.debug_struct("ComponentRevision")
-            .field("source", &self.source)
-            .field("revision", &self.revision)
-            .finish()
-    }
-}
-impl ComponentRevision {
-    /// Protobuf type URL for this message, for use with `Any::pack` and
-    /// `Any::unpack_if`.
-    ///
-    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
-    pub const TYPE_URL: &'static str = "type.googleapis.com/henosis.v1.ComponentRevision";
-}
-impl ComponentRevision {
-    #[must_use = "with_* setters return `self` by value; assign or chain the result"]
-    #[inline]
-    ///Sets [`Self::source`] to `Some(value)`, consuming and returning `self`.
-    pub fn with_source(
-        mut self,
-        value: impl Into<::buffa::alloc::string::String>,
-    ) -> Self {
-        self.source = Some(value.into());
-        self
-    }
-    #[must_use = "with_* setters return `self` by value; assign or chain the result"]
-    #[inline]
-    ///Sets [`Self::revision`] to `Some(value)`, consuming and returning `self`.
-    pub fn with_revision(
-        mut self,
-        value: impl Into<::buffa::alloc::string::String>,
-    ) -> Self {
-        self.revision = Some(value.into());
-        self
-    }
-}
-::buffa::impl_default_instance!(ComponentRevision);
-impl ::buffa::MessageName for ComponentRevision {
-    const PACKAGE: &'static str = "henosis.v1";
-    const NAME: &'static str = "ComponentRevision";
-    const FULL_NAME: &'static str = "henosis.v1.ComponentRevision";
-    const TYPE_URL: &'static str = "type.googleapis.com/henosis.v1.ComponentRevision";
-}
-impl ::buffa::Message for ComponentRevision {
-    /// Returns the total encoded size in bytes.
-    ///
-    /// The result is a `u32`; the protobuf specification requires all
-    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
-    /// compliant message will never overflow this type.
-    #[allow(clippy::let_and_return)]
-    fn compute_size(&self, _cache: &mut ::buffa::SizeCache) -> u32 {
-        #[allow(unused_imports)]
-        use ::buffa::Enumeration as _;
-        let mut size = 0u32;
-        if let Some(ref v) = self.source {
-            size += 1u32 + ::buffa::types::string_encoded_len(v) as u32;
-        }
-        if let Some(ref v) = self.revision {
-            size += 1u32 + ::buffa::types::string_encoded_len(v) as u32;
-        }
-        size += self.__buffa_unknown_fields.encoded_len() as u32;
-        size
-    }
-    fn write_to(
-        &self,
-        _cache: &mut ::buffa::SizeCache,
-        buf: &mut impl ::buffa::bytes::BufMut,
-    ) {
-        #[allow(unused_imports)]
-        use ::buffa::Enumeration as _;
-        if let Some(ref v) = self.source {
-            ::buffa::types::put_string_field(1u32, v, buf);
-        }
-        if let Some(ref v) = self.revision {
-            ::buffa::types::put_string_field(2u32, v, buf);
-        }
-        self.__buffa_unknown_fields.write_to(buf);
-    }
-    fn merge_field(
-        &mut self,
-        tag: ::buffa::encoding::Tag,
-        buf: &mut impl ::buffa::bytes::Buf,
-        ctx: ::buffa::DecodeContext<'_>,
-    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
-        #[allow(unused_imports)]
-        use ::buffa::bytes::Buf as _;
-        #[allow(unused_imports)]
-        use ::buffa::Enumeration as _;
-        match tag.field_number() {
-            1u32 => {
-                ::buffa::encoding::check_wire_type(
-                    tag,
-                    ::buffa::encoding::WireType::LengthDelimited,
-                )?;
-                ::buffa::types::merge_string(
-                    self.source.get_or_insert_with(::buffa::alloc::string::String::new),
-                    buf,
-                )?;
-            }
-            2u32 => {
-                ::buffa::encoding::check_wire_type(
-                    tag,
-                    ::buffa::encoding::WireType::LengthDelimited,
-                )?;
-                ::buffa::types::merge_string(
-                    self
-                        .revision
-                        .get_or_insert_with(::buffa::alloc::string::String::new),
-                    buf,
-                )?;
-            }
-            _ => {
-                self.__buffa_unknown_fields
-                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
-            }
-        }
-        ::core::result::Result::Ok(())
-    }
-    fn clear(&mut self) {
-        self.source = ::core::option::Option::None;
-        self.revision = ::core::option::Option::None;
-        self.__buffa_unknown_fields.clear();
-    }
-}
-impl ::buffa::ExtensionSet for ComponentRevision {
-    const PROTO_FQN: &'static str = "henosis.v1.ComponentRevision";
-    fn unknown_fields(&self) -> &::buffa::UnknownFields {
-        &self.__buffa_unknown_fields
-    }
-    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
-        &mut self.__buffa_unknown_fields
-    }
-}
-impl ::buffa::json_helpers::ProtoElemJson for ComponentRevision {
-    fn serialize_proto_json<S: ::serde::Serializer>(
-        v: &Self,
-        s: S,
-    ) -> ::core::result::Result<S::Ok, S::Error> {
-        ::serde::Serialize::serialize(v, s)
-    }
-    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
-        d: D,
-    ) -> ::core::result::Result<Self, D::Error> {
-        <Self as ::serde::Deserialize>::deserialize(d)
-    }
-}
-#[doc(hidden)]
-pub const __COMPONENT_REVISION_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
-    type_url: "type.googleapis.com/henosis.v1.ComponentRevision",
-    to_json: ::buffa::type_registry::any_to_json::<ComponentRevision>,
-    from_json: ::buffa::type_registry::any_from_json::<ComponentRevision>,
-    is_wkt: false,
-};
-#[derive(Clone, PartialEq, Default)]
-#[derive(::serde::Serialize, ::serde::Deserialize)]
-#[serde(default)]
-pub struct Component {
-    /// id follows the UUID/ProtoJSON/TypeID convention documented above.
-    ///
-    /// Field 1: `id`
-    #[serde(
-        rename = "id",
-        with = "::buffa::json_helpers::opt_bytes",
-        skip_serializing_if = "::core::option::Option::is_none"
-    )]
-    pub id: ::core::option::Option<::buffa::alloc::vec::Vec<u8>>,
-    /// Field 2: `name`
+pub struct ComponentSpec {
+    /// Field 1: `name`
     #[serde(rename = "name", skip_serializing_if = "::core::option::Option::is_none")]
     pub name: ::core::option::Option<::buffa::alloc::string::String>,
-    /// Field 3: `revision`
-    #[serde(
-        rename = "revision",
-        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
-    )]
-    pub revision: ::buffa::MessageField<ComponentRevision>,
-    /// connector is a non-empty connector registry key, for example "k8s".
-    ///
-    /// Field 4: `connector`
+    /// Field 2: `connector`
     #[serde(
         rename = "connector",
         skip_serializing_if = "::core::option::Option::is_none"
     )]
     pub connector: ::core::option::Option<::buffa::alloc::string::String>,
-    /// outputs_schema is the serialized introspectable output contract. It is h-schema today.
-    ///
-    /// Field 5: `outputs_schema`
+    /// Field 3: `outputs_schema`
     #[serde(
         rename = "outputsSchema",
         alias = "outputs_schema",
@@ -1033,10 +835,7 @@ pub struct Component {
         skip_serializing_if = "::core::option::Option::is_none"
     )]
     pub outputs_schema: ::core::option::Option<::buffa::alloc::vec::Vec<u8>>,
-    /// depends_on contains UUIDs following the convention documented above. Entries are unique;
-    /// application validation also rejects self-dependencies and references outside the graph.
-    ///
-    /// Field 6: `depends_on`
+    /// Field 4: `depends_on`
     #[serde(
         rename = "dependsOn",
         alias = "depends_on",
@@ -1044,47 +843,37 @@ pub struct Component {
         skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec"
     )]
     pub depends_on: ::buffa::alloc::vec::Vec<::buffa::alloc::vec::Vec<u8>>,
-    /// context is connector-owned and opaque to core.
-    ///
-    /// Field 7: `context`
+    /// Field 5: `connector_context`
     #[serde(
-        rename = "context",
+        rename = "connectorContext",
+        alias = "connector_context",
         with = "::buffa::json_helpers::opt_bytes",
         skip_serializing_if = "::core::option::Option::is_none"
     )]
-    pub context: ::core::option::Option<::buffa::alloc::vec::Vec<u8>>,
+    pub connector_context: ::core::option::Option<::buffa::alloc::vec::Vec<u8>>,
     #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
 }
-impl ::core::fmt::Debug for Component {
+impl ::core::fmt::Debug for ComponentSpec {
     fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
-        f.debug_struct("Component")
-            .field("id", &self.id)
+        f.debug_struct("ComponentSpec")
             .field("name", &self.name)
-            .field("revision", &self.revision)
             .field("connector", &self.connector)
             .field("outputs_schema", &self.outputs_schema)
             .field("depends_on", &self.depends_on)
-            .field("context", &self.context)
+            .field("connector_context", &self.connector_context)
             .finish()
     }
 }
-impl Component {
+impl ComponentSpec {
     /// Protobuf type URL for this message, for use with `Any::pack` and
     /// `Any::unpack_if`.
     ///
     /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
-    pub const TYPE_URL: &'static str = "type.googleapis.com/henosis.v1.Component";
+    pub const TYPE_URL: &'static str = "type.googleapis.com/henosis.v1.ComponentSpec";
 }
-impl Component {
-    #[must_use = "with_* setters return `self` by value; assign or chain the result"]
-    #[inline]
-    ///Sets [`Self::id`] to `Some(value)`, consuming and returning `self`.
-    pub fn with_id(mut self, value: impl Into<::buffa::alloc::vec::Vec<u8>>) -> Self {
-        self.id = Some(value.into());
-        self
-    }
+impl ComponentSpec {
     #[must_use = "with_* setters return `self` by value; assign or chain the result"]
     #[inline]
     ///Sets [`Self::name`] to `Some(value)`, consuming and returning `self`.
@@ -1117,46 +906,35 @@ impl Component {
     }
     #[must_use = "with_* setters return `self` by value; assign or chain the result"]
     #[inline]
-    ///Sets [`Self::context`] to `Some(value)`, consuming and returning `self`.
-    pub fn with_context(
+    ///Sets [`Self::connector_context`] to `Some(value)`, consuming and returning `self`.
+    pub fn with_connector_context(
         mut self,
         value: impl Into<::buffa::alloc::vec::Vec<u8>>,
     ) -> Self {
-        self.context = Some(value.into());
+        self.connector_context = Some(value.into());
         self
     }
 }
-::buffa::impl_default_instance!(Component);
-impl ::buffa::MessageName for Component {
+::buffa::impl_default_instance!(ComponentSpec);
+impl ::buffa::MessageName for ComponentSpec {
     const PACKAGE: &'static str = "henosis.v1";
-    const NAME: &'static str = "Component";
-    const FULL_NAME: &'static str = "henosis.v1.Component";
-    const TYPE_URL: &'static str = "type.googleapis.com/henosis.v1.Component";
+    const NAME: &'static str = "ComponentSpec";
+    const FULL_NAME: &'static str = "henosis.v1.ComponentSpec";
+    const TYPE_URL: &'static str = "type.googleapis.com/henosis.v1.ComponentSpec";
 }
-impl ::buffa::Message for Component {
+impl ::buffa::Message for ComponentSpec {
     /// Returns the total encoded size in bytes.
     ///
     /// The result is a `u32`; the protobuf specification requires all
     /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
     /// compliant message will never overflow this type.
     #[allow(clippy::let_and_return)]
-    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+    fn compute_size(&self, _cache: &mut ::buffa::SizeCache) -> u32 {
         #[allow(unused_imports)]
         use ::buffa::Enumeration as _;
         let mut size = 0u32;
-        if let Some(ref v) = self.id {
-            size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
-        }
         if let Some(ref v) = self.name {
             size += 1u32 + ::buffa::types::string_encoded_len(v) as u32;
-        }
-        if self.revision.is_set() {
-            let __slot = __cache.reserve();
-            let inner_size = self.revision.compute_size(__cache);
-            __cache.set(__slot, inner_size);
-            size
-                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
-                    + inner_size;
         }
         if let Some(ref v) = self.connector {
             size += 1u32 + ::buffa::types::string_encoded_len(v) as u32;
@@ -1167,8 +945,218 @@ impl ::buffa::Message for Component {
         for v in &self.depends_on {
             size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
         }
-        if let Some(ref v) = self.context {
+        if let Some(ref v) = self.connector_context {
             size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        _cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if let Some(ref v) = self.name {
+            ::buffa::types::put_string_field(1u32, v, buf);
+        }
+        if let Some(ref v) = self.connector {
+            ::buffa::types::put_string_field(2u32, v, buf);
+        }
+        if let Some(ref v) = self.outputs_schema {
+            ::buffa::types::put_bytes_field(3u32, v, buf);
+        }
+        for v in &self.depends_on {
+            ::buffa::types::put_bytes_field(4u32, v, buf);
+        }
+        if let Some(ref v) = self.connector_context {
+            ::buffa::types::put_bytes_field(5u32, v, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(
+                    self.name.get_or_insert_with(::buffa::alloc::string::String::new),
+                    buf,
+                )?;
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(
+                    self
+                        .connector
+                        .get_or_insert_with(::buffa::alloc::string::String::new),
+                    buf,
+                )?;
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_bytes(
+                    self
+                        .outputs_schema
+                        .get_or_insert_with(::buffa::alloc::vec::Vec::new),
+                    buf,
+                )?;
+            }
+            4u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                self.depends_on.push(::buffa::types::decode_bytes(buf)?);
+            }
+            5u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_bytes(
+                    self
+                        .connector_context
+                        .get_or_insert_with(::buffa::alloc::vec::Vec::new),
+                    buf,
+                )?;
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.name = ::core::option::Option::None;
+        self.connector = ::core::option::Option::None;
+        self.outputs_schema = ::core::option::Option::None;
+        self.depends_on.clear();
+        self.connector_context = ::core::option::Option::None;
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for ComponentSpec {
+    const PROTO_FQN: &'static str = "henosis.v1.ComponentSpec";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for ComponentSpec {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __COMPONENT_SPEC_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/henosis.v1.ComponentSpec",
+    to_json: ::buffa::type_registry::any_to_json::<ComponentSpec>,
+    from_json: ::buffa::type_registry::any_from_json::<ComponentSpec>,
+    is_wkt: false,
+};
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct RegisteredComponentSpec {
+    /// Field 1: `hash`
+    #[serde(
+        rename = "hash",
+        with = "::buffa::json_helpers::opt_bytes",
+        skip_serializing_if = "::core::option::Option::is_none"
+    )]
+    pub hash: ::core::option::Option<::buffa::alloc::vec::Vec<u8>>,
+    /// Field 2: `spec`
+    #[serde(
+        rename = "spec",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub spec: ::buffa::MessageField<ComponentSpec>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for RegisteredComponentSpec {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("RegisteredComponentSpec")
+            .field("hash", &self.hash)
+            .field("spec", &self.spec)
+            .finish()
+    }
+}
+impl RegisteredComponentSpec {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/henosis.v1.RegisteredComponentSpec";
+}
+impl RegisteredComponentSpec {
+    #[must_use = "with_* setters return `self` by value; assign or chain the result"]
+    #[inline]
+    ///Sets [`Self::hash`] to `Some(value)`, consuming and returning `self`.
+    pub fn with_hash(mut self, value: impl Into<::buffa::alloc::vec::Vec<u8>>) -> Self {
+        self.hash = Some(value.into());
+        self
+    }
+}
+::buffa::impl_default_instance!(RegisteredComponentSpec);
+impl ::buffa::MessageName for RegisteredComponentSpec {
+    const PACKAGE: &'static str = "henosis.v1";
+    const NAME: &'static str = "RegisteredComponentSpec";
+    const FULL_NAME: &'static str = "henosis.v1.RegisteredComponentSpec";
+    const TYPE_URL: &'static str = "type.googleapis.com/henosis.v1.RegisteredComponentSpec";
+}
+impl ::buffa::Message for RegisteredComponentSpec {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if let Some(ref v) = self.hash {
+            size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
+        }
+        if self.spec.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.spec.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
         }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
         size
@@ -1180,27 +1168,12 @@ impl ::buffa::Message for Component {
     ) {
         #[allow(unused_imports)]
         use ::buffa::Enumeration as _;
-        if let Some(ref v) = self.id {
+        if let Some(ref v) = self.hash {
             ::buffa::types::put_bytes_field(1u32, v, buf);
         }
-        if let Some(ref v) = self.name {
-            ::buffa::types::put_string_field(2u32, v, buf);
-        }
-        if self.revision.is_set() {
-            ::buffa::types::put_len_delimited_header(3u32, __cache.consume_next(), buf);
-            self.revision.write_to(__cache, buf);
-        }
-        if let Some(ref v) = self.connector {
-            ::buffa::types::put_string_field(4u32, v, buf);
-        }
-        if let Some(ref v) = self.outputs_schema {
-            ::buffa::types::put_bytes_field(5u32, v, buf);
-        }
-        for v in &self.depends_on {
-            ::buffa::types::put_bytes_field(6u32, v, buf);
-        }
-        if let Some(ref v) = self.context {
-            ::buffa::types::put_bytes_field(7u32, v, buf);
+        if self.spec.is_set() {
+            ::buffa::types::put_len_delimited_header(2u32, __cache.consume_next(), buf);
+            self.spec.write_to(__cache, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
     }
@@ -1221,7 +1194,7 @@ impl ::buffa::Message for Component {
                     ::buffa::encoding::WireType::LengthDelimited,
                 )?;
                 ::buffa::types::merge_bytes(
-                    self.id.get_or_insert_with(::buffa::alloc::vec::Vec::new),
+                    self.hash.get_or_insert_with(::buffa::alloc::vec::Vec::new),
                     buf,
                 )?;
             }
@@ -1230,61 +1203,10 @@ impl ::buffa::Message for Component {
                     tag,
                     ::buffa::encoding::WireType::LengthDelimited,
                 )?;
-                ::buffa::types::merge_string(
-                    self.name.get_or_insert_with(::buffa::alloc::string::String::new),
-                    buf,
-                )?;
-            }
-            3u32 => {
-                ::buffa::encoding::check_wire_type(
-                    tag,
-                    ::buffa::encoding::WireType::LengthDelimited,
-                )?;
                 ::buffa::Message::merge_length_delimited(
-                    self.revision.get_or_insert_default(),
+                    self.spec.get_or_insert_default(),
                     buf,
                     ctx,
-                )?;
-            }
-            4u32 => {
-                ::buffa::encoding::check_wire_type(
-                    tag,
-                    ::buffa::encoding::WireType::LengthDelimited,
-                )?;
-                ::buffa::types::merge_string(
-                    self
-                        .connector
-                        .get_or_insert_with(::buffa::alloc::string::String::new),
-                    buf,
-                )?;
-            }
-            5u32 => {
-                ::buffa::encoding::check_wire_type(
-                    tag,
-                    ::buffa::encoding::WireType::LengthDelimited,
-                )?;
-                ::buffa::types::merge_bytes(
-                    self
-                        .outputs_schema
-                        .get_or_insert_with(::buffa::alloc::vec::Vec::new),
-                    buf,
-                )?;
-            }
-            6u32 => {
-                ::buffa::encoding::check_wire_type(
-                    tag,
-                    ::buffa::encoding::WireType::LengthDelimited,
-                )?;
-                self.depends_on.push(::buffa::types::decode_bytes(buf)?);
-            }
-            7u32 => {
-                ::buffa::encoding::check_wire_type(
-                    tag,
-                    ::buffa::encoding::WireType::LengthDelimited,
-                )?;
-                ::buffa::types::merge_bytes(
-                    self.context.get_or_insert_with(::buffa::alloc::vec::Vec::new),
-                    buf,
                 )?;
             }
             _ => {
@@ -1295,18 +1217,13 @@ impl ::buffa::Message for Component {
         ::core::result::Result::Ok(())
     }
     fn clear(&mut self) {
-        self.id = ::core::option::Option::None;
-        self.name = ::core::option::Option::None;
-        self.revision = ::buffa::MessageField::none();
-        self.connector = ::core::option::Option::None;
-        self.outputs_schema = ::core::option::Option::None;
-        self.depends_on.clear();
-        self.context = ::core::option::Option::None;
+        self.hash = ::core::option::Option::None;
+        self.spec = ::buffa::MessageField::none();
         self.__buffa_unknown_fields.clear();
     }
 }
-impl ::buffa::ExtensionSet for Component {
-    const PROTO_FQN: &'static str = "henosis.v1.Component";
+impl ::buffa::ExtensionSet for RegisteredComponentSpec {
+    const PROTO_FQN: &'static str = "henosis.v1.RegisteredComponentSpec";
     fn unknown_fields(&self) -> &::buffa::UnknownFields {
         &self.__buffa_unknown_fields
     }
@@ -1314,7 +1231,7 @@ impl ::buffa::ExtensionSet for Component {
         &mut self.__buffa_unknown_fields
     }
 }
-impl ::buffa::json_helpers::ProtoElemJson for Component {
+impl ::buffa::json_helpers::ProtoElemJson for RegisteredComponentSpec {
     fn serialize_proto_json<S: ::serde::Serializer>(
         v: &Self,
         s: S,
@@ -1328,19 +1245,18 @@ impl ::buffa::json_helpers::ProtoElemJson for Component {
     }
 }
 #[doc(hidden)]
-pub const __COMPONENT_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
-    type_url: "type.googleapis.com/henosis.v1.Component",
-    to_json: ::buffa::type_registry::any_to_json::<Component>,
-    from_json: ::buffa::type_registry::any_from_json::<Component>,
+pub const __REGISTERED_COMPONENT_SPEC_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/henosis.v1.RegisteredComponentSpec",
+    to_json: ::buffa::type_registry::any_to_json::<RegisteredComponentSpec>,
+    from_json: ::buffa::type_registry::any_from_json::<RegisteredComponentSpec>,
     is_wkt: false,
 };
-/// Graph is the complete desired graph at one accepted generation. Its components are the graph.
+/// Graph is one accepted, complete world listing. Component bodies are resolved through the spec
+/// stream; generations contain only their content-addressed identities.
 #[derive(Clone, PartialEq, Default)]
 #[derive(::serde::Serialize, ::serde::Deserialize)]
 #[serde(default)]
 pub struct Graph {
-    /// id follows the UUID/ProtoJSON/TypeID convention documented above.
-    ///
     /// Field 1: `id`
     #[serde(
         rename = "id",
@@ -1355,13 +1271,14 @@ pub struct Graph {
         skip_serializing_if = "::core::option::Option::is_none"
     )]
     pub generation: ::core::option::Option<u64>,
-    /// Field 3: `components`
+    /// Field 3: `component_spec_hashes`
     #[serde(
-        rename = "components",
-        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec",
-        deserialize_with = "::buffa::json_helpers::null_as_default"
+        rename = "componentSpecHashes",
+        alias = "component_spec_hashes",
+        with = "::buffa::json_helpers::proto_seq",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec"
     )]
-    pub components: ::buffa::alloc::vec::Vec<Component>,
+    pub component_spec_hashes: ::buffa::alloc::vec::Vec<::buffa::alloc::vec::Vec<u8>>,
     #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
@@ -1371,7 +1288,7 @@ impl ::core::fmt::Debug for Graph {
         f.debug_struct("Graph")
             .field("id", &self.id)
             .field("generation", &self.generation)
-            .field("components", &self.components)
+            .field("component_spec_hashes", &self.component_spec_hashes)
             .finish()
     }
 }
@@ -1412,7 +1329,7 @@ impl ::buffa::Message for Graph {
     /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
     /// compliant message will never overflow this type.
     #[allow(clippy::let_and_return)]
-    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+    fn compute_size(&self, _cache: &mut ::buffa::SizeCache) -> u32 {
         #[allow(unused_imports)]
         use ::buffa::Enumeration as _;
         let mut size = 0u32;
@@ -1422,20 +1339,15 @@ impl ::buffa::Message for Graph {
         if let Some(v) = self.generation {
             size += 1u32 + ::buffa::types::uint64_encoded_len(v) as u32;
         }
-        for v in &self.components {
-            let __slot = __cache.reserve();
-            let inner_size = v.compute_size(__cache);
-            __cache.set(__slot, inner_size);
-            size
-                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
-                    + inner_size;
+        for v in &self.component_spec_hashes {
+            size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
         }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
         size
     }
     fn write_to(
         &self,
-        __cache: &mut ::buffa::SizeCache,
+        _cache: &mut ::buffa::SizeCache,
         buf: &mut impl ::buffa::bytes::BufMut,
     ) {
         #[allow(unused_imports)]
@@ -1446,9 +1358,8 @@ impl ::buffa::Message for Graph {
         if let Some(v) = self.generation {
             ::buffa::types::put_uint64_field(2u32, v, buf);
         }
-        for v in &self.components {
-            ::buffa::types::put_len_delimited_header(3u32, __cache.consume_next(), buf);
-            v.write_to(__cache, buf);
+        for v in &self.component_spec_hashes {
+            ::buffa::types::put_bytes_field(3u32, v, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
     }
@@ -1487,9 +1398,7 @@ impl ::buffa::Message for Graph {
                     tag,
                     ::buffa::encoding::WireType::LengthDelimited,
                 )?;
-                let mut elem = ::core::default::Default::default();
-                ::buffa::Message::merge_length_delimited(&mut elem, buf, ctx)?;
-                self.components.push(elem);
+                self.component_spec_hashes.push(::buffa::types::decode_bytes(buf)?);
             }
             _ => {
                 self.__buffa_unknown_fields
@@ -1501,7 +1410,7 @@ impl ::buffa::Message for Graph {
     fn clear(&mut self) {
         self.id = ::core::option::Option::None;
         self.generation = ::core::option::Option::None;
-        self.components.clear();
+        self.component_spec_hashes.clear();
         self.__buffa_unknown_fields.clear();
     }
 }
@@ -1534,22 +1443,18 @@ pub const __GRAPH_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type
     from_json: ::buffa::type_registry::any_from_json::<Graph>,
     is_wkt: false,
 };
-/// ComponentOutputs is one component's complete output object. values_json is UTF-8 JSON conforming
-/// to that component's declared outputs_schema.
 #[derive(Clone, PartialEq, Default)]
 #[derive(::serde::Serialize, ::serde::Deserialize)]
 #[serde(default)]
 pub struct ComponentOutputs {
-    /// component_id follows the UUID/ProtoJSON/TypeID convention documented above.
-    ///
-    /// Field 1: `component_id`
+    /// Field 1: `component_spec_hash`
     #[serde(
-        rename = "componentId",
-        alias = "component_id",
+        rename = "componentSpecHash",
+        alias = "component_spec_hash",
         with = "::buffa::json_helpers::opt_bytes",
         skip_serializing_if = "::core::option::Option::is_none"
     )]
-    pub component_id: ::core::option::Option<::buffa::alloc::vec::Vec<u8>>,
+    pub component_spec_hash: ::core::option::Option<::buffa::alloc::vec::Vec<u8>>,
     /// Field 2: `values_json`
     #[serde(
         rename = "valuesJson",
@@ -1565,7 +1470,7 @@ pub struct ComponentOutputs {
 impl ::core::fmt::Debug for ComponentOutputs {
     fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         f.debug_struct("ComponentOutputs")
-            .field("component_id", &self.component_id)
+            .field("component_spec_hash", &self.component_spec_hash)
             .field("values_json", &self.values_json)
             .finish()
     }
@@ -1580,12 +1485,12 @@ impl ComponentOutputs {
 impl ComponentOutputs {
     #[must_use = "with_* setters return `self` by value; assign or chain the result"]
     #[inline]
-    ///Sets [`Self::component_id`] to `Some(value)`, consuming and returning `self`.
-    pub fn with_component_id(
+    ///Sets [`Self::component_spec_hash`] to `Some(value)`, consuming and returning `self`.
+    pub fn with_component_spec_hash(
         mut self,
         value: impl Into<::buffa::alloc::vec::Vec<u8>>,
     ) -> Self {
-        self.component_id = Some(value.into());
+        self.component_spec_hash = Some(value.into());
         self
     }
     #[must_use = "with_* setters return `self` by value; assign or chain the result"]
@@ -1617,7 +1522,7 @@ impl ::buffa::Message for ComponentOutputs {
         #[allow(unused_imports)]
         use ::buffa::Enumeration as _;
         let mut size = 0u32;
-        if let Some(ref v) = self.component_id {
+        if let Some(ref v) = self.component_spec_hash {
             size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
         }
         if let Some(ref v) = self.values_json {
@@ -1633,7 +1538,7 @@ impl ::buffa::Message for ComponentOutputs {
     ) {
         #[allow(unused_imports)]
         use ::buffa::Enumeration as _;
-        if let Some(ref v) = self.component_id {
+        if let Some(ref v) = self.component_spec_hash {
             ::buffa::types::put_bytes_field(1u32, v, buf);
         }
         if let Some(ref v) = self.values_json {
@@ -1658,7 +1563,9 @@ impl ::buffa::Message for ComponentOutputs {
                     ::buffa::encoding::WireType::LengthDelimited,
                 )?;
                 ::buffa::types::merge_bytes(
-                    self.component_id.get_or_insert_with(::buffa::alloc::vec::Vec::new),
+                    self
+                        .component_spec_hash
+                        .get_or_insert_with(::buffa::alloc::vec::Vec::new),
                     buf,
                 )?;
             }
@@ -1680,7 +1587,7 @@ impl ::buffa::Message for ComponentOutputs {
         ::core::result::Result::Ok(())
     }
     fn clear(&mut self) {
-        self.component_id = ::core::option::Option::None;
+        self.component_spec_hash = ::core::option::Option::None;
         self.values_json = ::core::option::Option::None;
         self.__buffa_unknown_fields.clear();
     }
@@ -1714,9 +1621,6 @@ pub const __COMPONENT_OUTPUTS_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = :
     from_json: ::buffa::type_registry::any_from_json::<ComponentOutputs>,
     is_wkt: false,
 };
-/// PublishedSliceOutputs is the latest durable, complete output snapshot published by one connector
-/// for one graph generation. outputs has unique component IDs and contains every component owned by
-/// the slice exactly once. An empty snapshot clears the connector's previously published outputs.
 #[derive(Clone, PartialEq, Default)]
 #[derive(::serde::Serialize, ::serde::Deserialize)]
 #[serde(default)]
@@ -1741,8 +1645,6 @@ pub struct PublishedSliceOutputs {
         deserialize_with = "::buffa::json_helpers::null_as_default"
     )]
     pub outputs: ::buffa::alloc::vec::Vec<ComponentOutputs>,
-    /// publication_sequence is the durable per-graph journal sequence of this snapshot.
-    ///
     /// Field 4: `publication_sequence`
     #[serde(
         rename = "publicationSequence",
@@ -1751,6 +1653,22 @@ pub struct PublishedSliceOutputs {
         skip_serializing_if = "::core::option::Option::is_none"
     )]
     pub publication_sequence: ::core::option::Option<u64>,
+    /// Field 5: `publication_id`
+    #[serde(
+        rename = "publicationId",
+        alias = "publication_id",
+        with = "::buffa::json_helpers::opt_bytes",
+        skip_serializing_if = "::core::option::Option::is_none"
+    )]
+    pub publication_id: ::core::option::Option<::buffa::alloc::vec::Vec<u8>>,
+    /// Field 6: `input_sequence`
+    #[serde(
+        rename = "inputSequence",
+        alias = "input_sequence",
+        with = "::buffa::json_helpers::opt_uint64",
+        skip_serializing_if = "::core::option::Option::is_none"
+    )]
+    pub input_sequence: ::core::option::Option<u64>,
     #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
@@ -1762,6 +1680,8 @@ impl ::core::fmt::Debug for PublishedSliceOutputs {
             .field("connector", &self.connector)
             .field("outputs", &self.outputs)
             .field("publication_sequence", &self.publication_sequence)
+            .field("publication_id", &self.publication_id)
+            .field("input_sequence", &self.input_sequence)
             .finish()
     }
 }
@@ -1795,6 +1715,23 @@ impl PublishedSliceOutputs {
     ///Sets [`Self::publication_sequence`] to `Some(value)`, consuming and returning `self`.
     pub fn with_publication_sequence(mut self, value: u64) -> Self {
         self.publication_sequence = Some(value);
+        self
+    }
+    #[must_use = "with_* setters return `self` by value; assign or chain the result"]
+    #[inline]
+    ///Sets [`Self::publication_id`] to `Some(value)`, consuming and returning `self`.
+    pub fn with_publication_id(
+        mut self,
+        value: impl Into<::buffa::alloc::vec::Vec<u8>>,
+    ) -> Self {
+        self.publication_id = Some(value.into());
+        self
+    }
+    #[must_use = "with_* setters return `self` by value; assign or chain the result"]
+    #[inline]
+    ///Sets [`Self::input_sequence`] to `Some(value)`, consuming and returning `self`.
+    pub fn with_input_sequence(mut self, value: u64) -> Self {
+        self.input_sequence = Some(value);
         self
     }
 }
@@ -1833,6 +1770,12 @@ impl ::buffa::Message for PublishedSliceOutputs {
         if let Some(v) = self.publication_sequence {
             size += 1u32 + ::buffa::types::uint64_encoded_len(v) as u32;
         }
+        if let Some(ref v) = self.publication_id {
+            size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
+        }
+        if let Some(v) = self.input_sequence {
+            size += 1u32 + ::buffa::types::uint64_encoded_len(v) as u32;
+        }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
         size
     }
@@ -1855,6 +1798,12 @@ impl ::buffa::Message for PublishedSliceOutputs {
         }
         if let Some(v) = self.publication_sequence {
             ::buffa::types::put_uint64_field(4u32, v, buf);
+        }
+        if let Some(ref v) = self.publication_id {
+            ::buffa::types::put_bytes_field(5u32, v, buf);
+        }
+        if let Some(v) = self.input_sequence {
+            ::buffa::types::put_uint64_field(6u32, v, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
     }
@@ -1908,6 +1857,27 @@ impl ::buffa::Message for PublishedSliceOutputs {
                     ::buffa::types::decode_uint64(buf)?,
                 );
             }
+            5u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_bytes(
+                    self
+                        .publication_id
+                        .get_or_insert_with(::buffa::alloc::vec::Vec::new),
+                    buf,
+                )?;
+            }
+            6u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.input_sequence = ::core::option::Option::Some(
+                    ::buffa::types::decode_uint64(buf)?,
+                );
+            }
             _ => {
                 self.__buffa_unknown_fields
                     .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
@@ -1920,6 +1890,8 @@ impl ::buffa::Message for PublishedSliceOutputs {
         self.connector = ::core::option::Option::None;
         self.outputs.clear();
         self.publication_sequence = ::core::option::Option::None;
+        self.publication_id = ::core::option::Option::None;
+        self.input_sequence = ::core::option::Option::None;
         self.__buffa_unknown_fields.clear();
     }
 }
@@ -1956,16 +1928,14 @@ pub const __PUBLISHED_SLICE_OUTPUTS_JSON_ANY: ::buffa::type_registry::JsonAnyEnt
 #[derive(::serde::Serialize, ::serde::Deserialize)]
 #[serde(default)]
 pub struct ComponentDisposition {
-    /// component_id follows the UUID/ProtoJSON/TypeID convention documented above.
-    ///
-    /// Field 1: `component_id`
+    /// Field 1: `component_spec_hash`
     #[serde(
-        rename = "componentId",
-        alias = "component_id",
+        rename = "componentSpecHash",
+        alias = "component_spec_hash",
         with = "::buffa::json_helpers::opt_bytes",
         skip_serializing_if = "::core::option::Option::is_none"
     )]
-    pub component_id: ::core::option::Option<::buffa::alloc::vec::Vec<u8>>,
+    pub component_spec_hash: ::core::option::Option<::buffa::alloc::vec::Vec<u8>>,
     /// Field 2: `kind`
     #[serde(
         rename = "kind",
@@ -1980,7 +1950,7 @@ pub struct ComponentDisposition {
 impl ::core::fmt::Debug for ComponentDisposition {
     fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         f.debug_struct("ComponentDisposition")
-            .field("component_id", &self.component_id)
+            .field("component_spec_hash", &self.component_spec_hash)
             .field("kind", &self.kind)
             .finish()
     }
@@ -1995,12 +1965,12 @@ impl ComponentDisposition {
 impl ComponentDisposition {
     #[must_use = "with_* setters return `self` by value; assign or chain the result"]
     #[inline]
-    ///Sets [`Self::component_id`] to `Some(value)`, consuming and returning `self`.
-    pub fn with_component_id(
+    ///Sets [`Self::component_spec_hash`] to `Some(value)`, consuming and returning `self`.
+    pub fn with_component_spec_hash(
         mut self,
         value: impl Into<::buffa::alloc::vec::Vec<u8>>,
     ) -> Self {
-        self.component_id = Some(value.into());
+        self.component_spec_hash = Some(value.into());
         self
     }
     #[must_use = "with_* setters return `self` by value; assign or chain the result"]
@@ -2032,7 +2002,7 @@ impl ::buffa::Message for ComponentDisposition {
         #[allow(unused_imports)]
         use ::buffa::Enumeration as _;
         let mut size = 0u32;
-        if let Some(ref v) = self.component_id {
+        if let Some(ref v) = self.component_spec_hash {
             size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
         }
         if let Some(ref v) = self.kind {
@@ -2048,7 +2018,7 @@ impl ::buffa::Message for ComponentDisposition {
     ) {
         #[allow(unused_imports)]
         use ::buffa::Enumeration as _;
-        if let Some(ref v) = self.component_id {
+        if let Some(ref v) = self.component_spec_hash {
             ::buffa::types::put_bytes_field(1u32, v, buf);
         }
         if let Some(ref v) = self.kind {
@@ -2073,7 +2043,9 @@ impl ::buffa::Message for ComponentDisposition {
                     ::buffa::encoding::WireType::LengthDelimited,
                 )?;
                 ::buffa::types::merge_bytes(
-                    self.component_id.get_or_insert_with(::buffa::alloc::vec::Vec::new),
+                    self
+                        .component_spec_hash
+                        .get_or_insert_with(::buffa::alloc::vec::Vec::new),
                     buf,
                 )?;
             }
@@ -2094,7 +2066,7 @@ impl ::buffa::Message for ComponentDisposition {
         ::core::result::Result::Ok(())
     }
     fn clear(&mut self) {
-        self.component_id = ::core::option::Option::None;
+        self.component_spec_hash = ::core::option::Option::None;
         self.kind = ::core::option::Option::None;
         self.__buffa_unknown_fields.clear();
     }
@@ -2128,20 +2100,10 @@ pub const __COMPONENT_DISPOSITION_JSON_ANY: ::buffa::type_registry::JsonAnyEntry
     from_json: ::buffa::type_registry::any_from_json::<ComponentDisposition>,
     is_wkt: false,
 };
-/// SliceReport is a connector's atomic, level-triggered observation of every component it owns in a
-/// graph generation. dispositions contains every owned component exactly once. Core accepts the
-/// report as a unit or rejects it as a unit.
-///
-/// outputs is a full publication snapshot, never a delta. When every disposition is READY and there
-/// are no ERROR diagnostics, outputs must contain every owned component exactly once and core
-/// atomically publishes the snapshot. An empty owned slice therefore publishes an empty snapshot and
-/// clears prior outputs. Otherwise outputs must be empty and no durable publication occurs.
 #[derive(Clone, PartialEq, Default)]
 #[derive(::serde::Serialize, ::serde::Deserialize)]
 #[serde(default)]
 pub struct SliceReport {
-    /// graph_id follows the UUID/ProtoJSON/TypeID convention documented above.
-    ///
     /// Field 1: `graph_id`
     #[serde(
         rename = "graphId",
@@ -2184,6 +2146,13 @@ pub struct SliceReport {
         deserialize_with = "::buffa::json_helpers::null_as_default"
     )]
     pub diagnostics: ::buffa::alloc::vec::Vec<Diagnostic>,
+    /// Field 7: `sequence`
+    #[serde(
+        rename = "sequence",
+        with = "::buffa::json_helpers::opt_uint64",
+        skip_serializing_if = "::core::option::Option::is_none"
+    )]
+    pub sequence: ::core::option::Option<u64>,
     #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
@@ -2197,6 +2166,7 @@ impl ::core::fmt::Debug for SliceReport {
             .field("dispositions", &self.dispositions)
             .field("outputs", &self.outputs)
             .field("diagnostics", &self.diagnostics)
+            .field("sequence", &self.sequence)
             .finish()
     }
 }
@@ -2233,6 +2203,13 @@ impl SliceReport {
         value: impl Into<::buffa::alloc::string::String>,
     ) -> Self {
         self.connector = Some(value.into());
+        self
+    }
+    #[must_use = "with_* setters return `self` by value; assign or chain the result"]
+    #[inline]
+    ///Sets [`Self::sequence`] to `Some(value)`, consuming and returning `self`.
+    pub fn with_sequence(mut self, value: u64) -> Self {
+        self.sequence = Some(value);
         self
     }
 }
@@ -2287,6 +2264,9 @@ impl ::buffa::Message for SliceReport {
                 += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
                     + inner_size;
         }
+        if let Some(v) = self.sequence {
+            size += 1u32 + ::buffa::types::uint64_encoded_len(v) as u32;
+        }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
         size
     }
@@ -2317,6 +2297,9 @@ impl ::buffa::Message for SliceReport {
         for v in &self.diagnostics {
             ::buffa::types::put_len_delimited_header(6u32, __cache.consume_next(), buf);
             v.write_to(__cache, buf);
+        }
+        if let Some(v) = self.sequence {
+            ::buffa::types::put_uint64_field(7u32, v, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
     }
@@ -2389,6 +2372,15 @@ impl ::buffa::Message for SliceReport {
                 ::buffa::Message::merge_length_delimited(&mut elem, buf, ctx)?;
                 self.diagnostics.push(elem);
             }
+            7u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.sequence = ::core::option::Option::Some(
+                    ::buffa::types::decode_uint64(buf)?,
+                );
+            }
             _ => {
                 self.__buffa_unknown_fields
                     .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
@@ -2403,6 +2395,7 @@ impl ::buffa::Message for SliceReport {
         self.dispositions.clear();
         self.outputs.clear();
         self.diagnostics.clear();
+        self.sequence = ::core::option::Option::None;
         self.__buffa_unknown_fields.clear();
     }
 }
@@ -2435,7 +2428,6 @@ pub const __SLICE_REPORT_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buff
     from_json: ::buffa::type_registry::any_from_json::<SliceReport>,
     is_wkt: false,
 };
-/// DurableGraphState is fully recoverable from a per-graph journal without connector memory.
 #[derive(Clone, PartialEq, Default)]
 #[derive(::serde::Serialize, ::serde::Deserialize)]
 #[serde(default)]
@@ -2446,9 +2438,6 @@ pub struct DurableGraphState {
         skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
     )]
     pub graph: ::buffa::MessageField<Graph>,
-    /// published_outputs contains at most one latest snapshot per connector. A connector's snapshot
-    /// may be from an older generation while reconciliation of the current generation is in progress.
-    ///
     /// Field 2: `published_outputs`
     #[serde(
         rename = "publishedOutputs",
@@ -2639,9 +2628,6 @@ pub const __DURABLE_GRAPH_STATE_JSON_ANY: ::buffa::type_registry::JsonAnyEntry =
     from_json: ::buffa::type_registry::any_from_json::<DurableGraphState>,
     is_wkt: false,
 };
-/// GraphState separates durable desired state and published outputs from current memory-only
-/// connector reports. After a core restart, reports is empty until connectors report again; core
-/// never fabricates a report from durable output records.
 #[derive(Clone, PartialEq, Default)]
 #[derive(::serde::Serialize, ::serde::Deserialize)]
 #[serde(default)]
