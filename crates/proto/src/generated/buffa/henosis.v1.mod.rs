@@ -28,7 +28,6 @@ pub mod __buffa {
         pub mod oneof {
             #[allow(unused_imports)]
             use super::*;
-            include!("henosis.v1.connector_service.__view_oneof.rs");
             include!("henosis.v1.graph_service.__view_oneof.rs");
             include!("henosis.v1.journal.__view_oneof.rs");
         }
@@ -36,7 +35,6 @@ pub mod __buffa {
     pub mod oneof {
         #[allow(unused_imports)]
         use super::*;
-        include!("henosis.v1.connector_service.__oneof.rs");
         include!("henosis.v1.graph_service.__oneof.rs");
         include!("henosis.v1.journal.__oneof.rs");
     }
@@ -47,8 +45,10 @@ pub mod __buffa {
         reg.register_json_any(super::__COMPONENT_JSON_ANY);
         reg.register_json_any(super::__GRAPH_JSON_ANY);
         reg.register_json_any(super::__COMPONENT_OUTPUTS_JSON_ANY);
+        reg.register_json_any(super::__PUBLISHED_SLICE_OUTPUTS_JSON_ANY);
         reg.register_json_any(super::__COMPONENT_DISPOSITION_JSON_ANY);
         reg.register_json_any(super::__SLICE_REPORT_JSON_ANY);
+        reg.register_json_any(super::__DURABLE_GRAPH_STATE_JSON_ANY);
         reg.register_json_any(super::__GRAPH_STATE_JSON_ANY);
         reg.register_json_any(super::__GRAPH_SLICE_JSON_ANY);
         reg.register_json_any(super::__RECONCILE_SLICE_REQUEST_JSON_ANY);
@@ -57,38 +57,44 @@ pub mod __buffa {
         reg.register_json_any(super::__RETIRE_SLICE_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__REPORT_SLICE_REQUEST_JSON_ANY);
         reg.register_json_any(super::__REPORT_SLICE_RESPONSE_JSON_ANY);
-        reg.register_json_any(super::__REPORT_SLICE_ACCEPTED_JSON_ANY);
-        reg.register_json_any(super::__REPORT_SLICE_REJECTED_JSON_ANY);
+        reg.register_json_any(super::__REPORT_REJECTION_DETAILS_JSON_ANY);
         reg.register_json_any(super::__FETCH_SLICE_REQUEST_JSON_ANY);
         reg.register_json_any(super::__FETCH_SLICE_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__CREATE_GRAPH_REQUEST_JSON_ANY);
         reg.register_json_any(super::__CREATE_GRAPH_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__ADD_COMPONENTS_REQUEST_JSON_ANY);
-        reg.register_json_any(super::__UPDATE_COMPONENTS_REQUEST_JSON_ANY);
-        reg.register_json_any(super::__REMOVE_COMPONENTS_REQUEST_JSON_ANY);
         reg.register_json_any(super::__ADD_COMPONENTS_RESPONSE_JSON_ANY);
+        reg.register_json_any(super::__COMPONENT_UPDATE_JSON_ANY);
+        reg.register_json_any(super::__UPDATE_COMPONENTS_REQUEST_JSON_ANY);
         reg.register_json_any(super::__UPDATE_COMPONENTS_RESPONSE_JSON_ANY);
+        reg.register_json_any(super::__REMOVE_COMPONENTS_REQUEST_JSON_ANY);
         reg.register_json_any(super::__REMOVE_COMPONENTS_RESPONSE_JSON_ANY);
-        reg.register_json_any(super::__EDIT_GRAPH_ACCEPTED_JSON_ANY);
-        reg.register_json_any(super::__EDIT_GRAPH_REJECTED_JSON_ANY);
+        reg.register_json_any(super::__EDIT_REJECTION_DETAILS_JSON_ANY);
         reg.register_json_any(super::__GET_GRAPH_REQUEST_JSON_ANY);
         reg.register_json_any(super::__GET_GRAPH_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__RETIRE_GRAPH_REQUEST_JSON_ANY);
         reg.register_json_any(super::__RETIRE_GRAPH_RESPONSE_JSON_ANY);
-        reg.register_json_any(super::__RETIRE_GRAPH_ACCEPTED_JSON_ANY);
         reg.register_json_any(super::__WATCH_GRAPH_REQUEST_JSON_ANY);
         reg.register_json_any(super::__WATCH_GRAPH_RESPONSE_JSON_ANY);
-        reg.register_json_any(super::__WATCH_GRAPH_HEARTBEAT_JSON_ANY);
+        reg.register_json_any(super::__WATCH_GRAPH_SNAPSHOT_JSON_ANY);
+        reg.register_json_any(super::__WATCH_GRAPH_CHANGE_JSON_ANY);
+        reg.register_json_any(super::__WATCH_GRAPH_VOLATILE_STATUS_JSON_ANY);
+        reg.register_json_any(super::__WATCH_GRAPH_PROGRESS_JSON_ANY);
+        reg.register_json_any(super::__WATCH_CURSOR_ERROR_DETAILS_JSON_ANY);
         reg.register_json_any(super::__GRAPH_STREAM_ENVELOPE_JSON_ANY);
         reg.register_json_any(super::__GRAPH_STREAM_RECORD_V1_JSON_ANY);
-        reg.register_json_any(super::__GRAPH_CREATED_JSON_ANY);
-        reg.register_json_any(super::__GENERATION_ACCEPTED_JSON_ANY);
-        reg.register_json_any(super::__OUTPUTS_PUBLISHED_JSON_ANY);
-        reg.register_json_any(super::__GRAPH_RETIRED_JSON_ANY);
+        reg.register_json_any(super::__GRAPH_CREATED_V1_JSON_ANY);
+        reg.register_json_any(super::__GENERATION_ACCEPTED_V1_JSON_ANY);
+        reg.register_json_any(super::__OUTPUTS_PUBLISHED_V1_JSON_ANY);
+        reg.register_json_any(super::__GRAPH_RETIRED_V1_JSON_ANY);
+        reg.register_json_any(super::__GRAPH_SNAPSHOT_V1_JSON_ANY);
+        reg.register_json_any(super::__COMPONENT_RECORD_V1_JSON_ANY);
+        reg.register_json_any(super::__COMPONENT_REVISION_RECORD_V1_JSON_ANY);
+        reg.register_json_any(super::__COMPONENT_OUTPUTS_RECORD_V1_JSON_ANY);
         reg.register_json_any(super::__REGISTRY_STREAM_ENVELOPE_JSON_ANY);
         reg.register_json_any(super::__REGISTRY_STREAM_RECORD_V1_JSON_ANY);
-        reg.register_json_any(super::__REGISTRY_GRAPH_CREATED_JSON_ANY);
-        reg.register_json_any(super::__REGISTRY_GRAPH_RETIRED_JSON_ANY);
+        reg.register_json_any(super::__REGISTRY_GRAPH_CREATED_V1_JSON_ANY);
+        reg.register_json_any(super::__REGISTRY_GRAPH_RETIRED_V1_JSON_ANY);
     }
 }
 #[doc(inline)]
@@ -112,6 +118,10 @@ pub use self::__buffa::view::ComponentOutputsView;
 #[doc(inline)]
 pub use self::__buffa::view::ComponentOutputsOwnedView;
 #[doc(inline)]
+pub use self::__buffa::view::PublishedSliceOutputsView;
+#[doc(inline)]
+pub use self::__buffa::view::PublishedSliceOutputsOwnedView;
+#[doc(inline)]
 pub use self::__buffa::view::ComponentDispositionView;
 #[doc(inline)]
 pub use self::__buffa::view::ComponentDispositionOwnedView;
@@ -119,6 +129,10 @@ pub use self::__buffa::view::ComponentDispositionOwnedView;
 pub use self::__buffa::view::SliceReportView;
 #[doc(inline)]
 pub use self::__buffa::view::SliceReportOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::DurableGraphStateView;
+#[doc(inline)]
+pub use self::__buffa::view::DurableGraphStateOwnedView;
 #[doc(inline)]
 pub use self::__buffa::view::GraphStateView;
 #[doc(inline)]
@@ -152,13 +166,9 @@ pub use self::__buffa::view::ReportSliceResponseView;
 #[doc(inline)]
 pub use self::__buffa::view::ReportSliceResponseOwnedView;
 #[doc(inline)]
-pub use self::__buffa::view::ReportSliceAcceptedView;
+pub use self::__buffa::view::ReportRejectionDetailsView;
 #[doc(inline)]
-pub use self::__buffa::view::ReportSliceAcceptedOwnedView;
-#[doc(inline)]
-pub use self::__buffa::view::ReportSliceRejectedView;
-#[doc(inline)]
-pub use self::__buffa::view::ReportSliceRejectedOwnedView;
+pub use self::__buffa::view::ReportRejectionDetailsOwnedView;
 #[doc(inline)]
 pub use self::__buffa::view::FetchSliceRequestView;
 #[doc(inline)]
@@ -180,33 +190,33 @@ pub use self::__buffa::view::AddComponentsRequestView;
 #[doc(inline)]
 pub use self::__buffa::view::AddComponentsRequestOwnedView;
 #[doc(inline)]
-pub use self::__buffa::view::UpdateComponentsRequestView;
-#[doc(inline)]
-pub use self::__buffa::view::UpdateComponentsRequestOwnedView;
-#[doc(inline)]
-pub use self::__buffa::view::RemoveComponentsRequestView;
-#[doc(inline)]
-pub use self::__buffa::view::RemoveComponentsRequestOwnedView;
-#[doc(inline)]
 pub use self::__buffa::view::AddComponentsResponseView;
 #[doc(inline)]
 pub use self::__buffa::view::AddComponentsResponseOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ComponentUpdateView;
+#[doc(inline)]
+pub use self::__buffa::view::ComponentUpdateOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::UpdateComponentsRequestView;
+#[doc(inline)]
+pub use self::__buffa::view::UpdateComponentsRequestOwnedView;
 #[doc(inline)]
 pub use self::__buffa::view::UpdateComponentsResponseView;
 #[doc(inline)]
 pub use self::__buffa::view::UpdateComponentsResponseOwnedView;
 #[doc(inline)]
+pub use self::__buffa::view::RemoveComponentsRequestView;
+#[doc(inline)]
+pub use self::__buffa::view::RemoveComponentsRequestOwnedView;
+#[doc(inline)]
 pub use self::__buffa::view::RemoveComponentsResponseView;
 #[doc(inline)]
 pub use self::__buffa::view::RemoveComponentsResponseOwnedView;
 #[doc(inline)]
-pub use self::__buffa::view::EditGraphAcceptedView;
+pub use self::__buffa::view::EditRejectionDetailsView;
 #[doc(inline)]
-pub use self::__buffa::view::EditGraphAcceptedOwnedView;
-#[doc(inline)]
-pub use self::__buffa::view::EditGraphRejectedView;
-#[doc(inline)]
-pub use self::__buffa::view::EditGraphRejectedOwnedView;
+pub use self::__buffa::view::EditRejectionDetailsOwnedView;
 #[doc(inline)]
 pub use self::__buffa::view::GetGraphRequestView;
 #[doc(inline)]
@@ -224,10 +234,6 @@ pub use self::__buffa::view::RetireGraphResponseView;
 #[doc(inline)]
 pub use self::__buffa::view::RetireGraphResponseOwnedView;
 #[doc(inline)]
-pub use self::__buffa::view::RetireGraphAcceptedView;
-#[doc(inline)]
-pub use self::__buffa::view::RetireGraphAcceptedOwnedView;
-#[doc(inline)]
 pub use self::__buffa::view::WatchGraphRequestView;
 #[doc(inline)]
 pub use self::__buffa::view::WatchGraphRequestOwnedView;
@@ -236,9 +242,25 @@ pub use self::__buffa::view::WatchGraphResponseView;
 #[doc(inline)]
 pub use self::__buffa::view::WatchGraphResponseOwnedView;
 #[doc(inline)]
-pub use self::__buffa::view::WatchGraphHeartbeatView;
+pub use self::__buffa::view::WatchGraphSnapshotView;
 #[doc(inline)]
-pub use self::__buffa::view::WatchGraphHeartbeatOwnedView;
+pub use self::__buffa::view::WatchGraphSnapshotOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::WatchGraphChangeView;
+#[doc(inline)]
+pub use self::__buffa::view::WatchGraphChangeOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::WatchGraphVolatileStatusView;
+#[doc(inline)]
+pub use self::__buffa::view::WatchGraphVolatileStatusOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::WatchGraphProgressView;
+#[doc(inline)]
+pub use self::__buffa::view::WatchGraphProgressOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::WatchCursorErrorDetailsView;
+#[doc(inline)]
+pub use self::__buffa::view::WatchCursorErrorDetailsOwnedView;
 #[doc(inline)]
 pub use self::__buffa::view::GraphStreamEnvelopeView;
 #[doc(inline)]
@@ -248,21 +270,37 @@ pub use self::__buffa::view::GraphStreamRecordV1View;
 #[doc(inline)]
 pub use self::__buffa::view::GraphStreamRecordV1OwnedView;
 #[doc(inline)]
-pub use self::__buffa::view::GraphCreatedView;
+pub use self::__buffa::view::GraphCreatedV1View;
 #[doc(inline)]
-pub use self::__buffa::view::GraphCreatedOwnedView;
+pub use self::__buffa::view::GraphCreatedV1OwnedView;
 #[doc(inline)]
-pub use self::__buffa::view::GenerationAcceptedView;
+pub use self::__buffa::view::GenerationAcceptedV1View;
 #[doc(inline)]
-pub use self::__buffa::view::GenerationAcceptedOwnedView;
+pub use self::__buffa::view::GenerationAcceptedV1OwnedView;
 #[doc(inline)]
-pub use self::__buffa::view::OutputsPublishedView;
+pub use self::__buffa::view::OutputsPublishedV1View;
 #[doc(inline)]
-pub use self::__buffa::view::OutputsPublishedOwnedView;
+pub use self::__buffa::view::OutputsPublishedV1OwnedView;
 #[doc(inline)]
-pub use self::__buffa::view::GraphRetiredView;
+pub use self::__buffa::view::GraphRetiredV1View;
 #[doc(inline)]
-pub use self::__buffa::view::GraphRetiredOwnedView;
+pub use self::__buffa::view::GraphRetiredV1OwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::GraphSnapshotV1View;
+#[doc(inline)]
+pub use self::__buffa::view::GraphSnapshotV1OwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ComponentRecordV1View;
+#[doc(inline)]
+pub use self::__buffa::view::ComponentRecordV1OwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ComponentRevisionRecordV1View;
+#[doc(inline)]
+pub use self::__buffa::view::ComponentRevisionRecordV1OwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ComponentOutputsRecordV1View;
+#[doc(inline)]
+pub use self::__buffa::view::ComponentOutputsRecordV1OwnedView;
 #[doc(inline)]
 pub use self::__buffa::view::RegistryStreamEnvelopeView;
 #[doc(inline)]
@@ -272,12 +310,12 @@ pub use self::__buffa::view::RegistryStreamRecordV1View;
 #[doc(inline)]
 pub use self::__buffa::view::RegistryStreamRecordV1OwnedView;
 #[doc(inline)]
-pub use self::__buffa::view::RegistryGraphCreatedView;
+pub use self::__buffa::view::RegistryGraphCreatedV1View;
 #[doc(inline)]
-pub use self::__buffa::view::RegistryGraphCreatedOwnedView;
+pub use self::__buffa::view::RegistryGraphCreatedV1OwnedView;
 #[doc(inline)]
-pub use self::__buffa::view::RegistryGraphRetiredView;
+pub use self::__buffa::view::RegistryGraphRetiredV1View;
 #[doc(inline)]
-pub use self::__buffa::view::RegistryGraphRetiredOwnedView;
+pub use self::__buffa::view::RegistryGraphRetiredV1OwnedView;
 #[doc(inline)]
 pub use self::__buffa::register_types;

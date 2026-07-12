@@ -2,68 +2,218 @@ edition = "2023";
 
 package henosis.v1;
 
-import "henosis/v1/types.proto";
+import "buf/validate/validate.proto";
 
-// GraphStreamEnvelope is the protobuf body of a record in a per-graph stream. The outer oneof
-// permits a future record version to coexist with v1 during migrations.
+// Journal V1 uses only the storage-owned messages in this file. Live RPC/view messages must never
+// be referenced here. These V1 types are frozen durable formats: additive fields require a
+// reader-first rollout, while incompatible semantic changes introduce a new outer record version.
+//
+// Every folder is fail-closed. Each envelope must contain a supported format_version and matching
+// known version branch, and each record must contain one known event. Unknown, mismatched, or unset
+// versions/events stop the fold with unsupported-version or data-loss; they are never skipped. New
+// additive events require readers to deploy before writers.
+
+// GraphStreamEnvelope is the protobuf body of a record in a per-graph stream. format_version is an
+// explicit discriminator so an older reader can distinguish an unknown future version even when
+// its generated oneof has no known branch.
 message GraphStreamEnvelope {
+  uint32 format_version = 1 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).uint32.const = 1
+  ];
+
   oneof version {
-    GraphStreamRecordV1 v1 = 1;
+    GraphStreamRecordV1 v1 = 2;
   }
 }
 
 message GraphStreamRecordV1 {
   oneof event {
-    GraphCreated graph_created = 1;
-    GenerationAccepted generation_accepted = 2;
-    OutputsPublished outputs_published = 3;
-    GraphRetired graph_retired = 4;
+    GraphCreatedV1 graph_created = 1;
+    GenerationAcceptedV1 generation_accepted = 2;
+    OutputsPublishedV1 outputs_published = 3;
+    GraphRetiredV1 graph_retired = 4;
   }
 }
 
-message GraphCreated {
-  // graph_id is a raw 16-byte UUID.
-  bytes graph_id = 1;
+// GraphCreatedV1 carries the initial complete pinned world so every durable sequence can be folded
+// into a complete state. Its graph generation is 1.
+message GraphCreatedV1 {
+  GraphSnapshotV1 graph = 1 [(buf.validate.field).required = true];
+
+  // request_id follows the UUID/ProtoJSON/TypeID convention in types.proto.
+  bytes request_id = 2 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).bytes.len = 16
+  ];
 }
 
-message GenerationAccepted {
-  // graph is the full pinned world at the accepted generation.
-  Graph graph = 1;
+message GenerationAcceptedV1 {
+  // graph is the full pinned world at the newly accepted edit generation.
+  GraphSnapshotV1 graph = 1 [(buf.validate.field).required = true];
+
+  // request_id follows the UUID/ProtoJSON/TypeID convention in types.proto.
+  bytes request_id = 2 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).bytes.len = 16
+  ];
 }
 
-message OutputsPublished {
-  uint64 generation = 1;
-  string connector = 2;
-  repeated ComponentOutputs outputs = 3;
+// OutputsPublishedV1 replaces the connector's whole published output snapshot for this generation;
+// it is never a delta. outputs has every owned component exactly once, and an empty list clears the
+// connector's prior snapshot. request_id, not serialized JSON/protobuf byte equality, deduplicates
+// retries.
+message OutputsPublishedV1 {
+  option (buf.validate.message).cel = {
+    id: "outputs_published_v1.outputs.unique_ids"
+    message: "output component IDs must be unique"
+    expression: "this.outputs.map(o, o.component_id).unique()"
+  };
+
+  uint64 generation = 1 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).uint64.gt = 0
+  ];
+  string connector = 2 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).string.min_len = 1
+  ];
+  repeated ComponentOutputsRecordV1 outputs = 3;
+
+  // request_id follows the UUID/ProtoJSON/TypeID convention in types.proto.
+  bytes request_id = 4 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).bytes.len = 16
+  ];
 }
 
-message GraphRetired {
-  // graph_id is a raw 16-byte UUID.
-  bytes graph_id = 1;
-  uint64 last_generation = 2;
+message GraphRetiredV1 {
+  // graph_id follows the UUID/ProtoJSON/TypeID convention in types.proto.
+  bytes graph_id = 1 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).bytes.len = 16
+  ];
+  uint64 last_generation = 2 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).uint64.gt = 0
+  ];
+
+  // request_id follows the UUID/ProtoJSON/TypeID convention in types.proto.
+  bytes request_id = 3 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).bytes.len = 16
+  ];
 }
 
-// RegistryStreamEnvelope is the protobuf body of a record in the root registry stream. The outer
-// oneof permits a future record version to coexist with v1 during migrations.
+// GraphSnapshotV1 and its children are storage-only representations owned by record version V1.
+message GraphSnapshotV1 {
+  option (buf.validate.message).cel = {
+    id: "graph_snapshot_v1.components.unique_ids"
+    message: "component IDs must be unique"
+    expression: "this.components.map(c, c.id).unique()"
+  };
+
+  // id follows the UUID/ProtoJSON/TypeID convention in types.proto.
+  bytes id = 1 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).bytes.len = 16
+  ];
+  uint64 generation = 2 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).uint64.gt = 0
+  ];
+  repeated ComponentRecordV1 components = 3;
+}
+
+message ComponentRecordV1 {
+  // id follows the UUID/ProtoJSON/TypeID convention in types.proto.
+  bytes id = 1 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).bytes.len = 16
+  ];
+  string name = 2 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).string.min_len = 1
+  ];
+  ComponentRevisionRecordV1 revision = 3 [(buf.validate.field).required = true];
+  string connector = 4 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).string.min_len = 1
+  ];
+  bytes outputs_schema = 5;
+
+  // depends_on follows the UUID/ProtoJSON/TypeID convention in types.proto and is unique.
+  repeated bytes depends_on = 6 [(buf.validate.field).repeated = {
+    unique: true
+    items: {bytes: {len: 16}}
+  }];
+  bytes context = 7;
+}
+
+message ComponentRevisionRecordV1 {
+  string source = 1 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).string.min_len = 1
+  ];
+  string revision = 2 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).string.min_len = 1
+  ];
+}
+
+message ComponentOutputsRecordV1 {
+  // component_id follows the UUID/ProtoJSON/TypeID convention in types.proto.
+  bytes component_id = 1 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).bytes.len = 16
+  ];
+  bytes values_json = 2;
+}
+
+// RegistryStreamEnvelope is the protobuf body of a record in the root registry stream and follows
+// the same fail-closed and rollout rules as GraphStreamEnvelope.
 message RegistryStreamEnvelope {
+  uint32 format_version = 1 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).uint32.const = 1
+  ];
+
   oneof version {
-    RegistryStreamRecordV1 v1 = 1;
+    RegistryStreamRecordV1 v1 = 2;
   }
 }
 
 message RegistryStreamRecordV1 {
   oneof event {
-    RegistryGraphCreated graph_created = 1;
-    RegistryGraphRetired graph_retired = 2;
+    RegistryGraphCreatedV1 graph_created = 1;
+    RegistryGraphRetiredV1 graph_retired = 2;
   }
 }
 
-message RegistryGraphCreated {
-  // graph_id is a raw 16-byte UUID.
-  bytes graph_id = 1;
+message RegistryGraphCreatedV1 {
+  // graph_id follows the UUID/ProtoJSON/TypeID convention in types.proto.
+  bytes graph_id = 1 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).bytes.len = 16
+  ];
+
+  // request_id follows the UUID/ProtoJSON/TypeID convention in types.proto.
+  bytes request_id = 2 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).bytes.len = 16
+  ];
 }
 
-message RegistryGraphRetired {
-  // graph_id is a raw 16-byte UUID.
-  bytes graph_id = 1;
+message RegistryGraphRetiredV1 {
+  // graph_id follows the UUID/ProtoJSON/TypeID convention in types.proto.
+  bytes graph_id = 1 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).bytes.len = 16
+  ];
+
+  // request_id follows the UUID/ProtoJSON/TypeID convention in types.proto.
+  bytes request_id = 2 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).bytes.len = 16
+  ];
 }

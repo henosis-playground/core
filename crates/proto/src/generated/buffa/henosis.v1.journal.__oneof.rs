@@ -41,54 +41,55 @@ pub mod graph_stream_record_v1 {
     use super::*;
     #[derive(Clone, PartialEq, Debug)]
     pub enum Event {
-        GraphCreated(::buffa::alloc::boxed::Box<super::super::super::GraphCreated>),
+        GraphCreated(::buffa::alloc::boxed::Box<super::super::super::GraphCreatedV1>),
         GenerationAccepted(
-            ::buffa::alloc::boxed::Box<super::super::super::GenerationAccepted>,
+            ::buffa::alloc::boxed::Box<super::super::super::GenerationAcceptedV1>,
         ),
         OutputsPublished(
-            ::buffa::alloc::boxed::Box<super::super::super::OutputsPublished>,
+            ::buffa::alloc::boxed::Box<super::super::super::OutputsPublishedV1>,
         ),
-        GraphRetired(::buffa::alloc::boxed::Box<super::super::super::GraphRetired>),
+        GraphRetired(::buffa::alloc::boxed::Box<super::super::super::GraphRetiredV1>),
     }
     impl ::buffa::Oneof for Event {}
-    impl From<super::super::super::GraphCreated> for Event {
-        fn from(v: super::super::super::GraphCreated) -> Self {
+    impl From<super::super::super::GraphCreatedV1> for Event {
+        fn from(v: super::super::super::GraphCreatedV1) -> Self {
             Self::GraphCreated(::buffa::alloc::boxed::Box::new(v))
         }
     }
-    impl From<super::super::super::GraphCreated> for ::core::option::Option<Event> {
-        fn from(v: super::super::super::GraphCreated) -> Self {
+    impl From<super::super::super::GraphCreatedV1> for ::core::option::Option<Event> {
+        fn from(v: super::super::super::GraphCreatedV1) -> Self {
             Self::Some(Event::from(v))
         }
     }
-    impl From<super::super::super::GenerationAccepted> for Event {
-        fn from(v: super::super::super::GenerationAccepted) -> Self {
+    impl From<super::super::super::GenerationAcceptedV1> for Event {
+        fn from(v: super::super::super::GenerationAcceptedV1) -> Self {
             Self::GenerationAccepted(::buffa::alloc::boxed::Box::new(v))
         }
     }
-    impl From<super::super::super::GenerationAccepted>
+    impl From<super::super::super::GenerationAcceptedV1>
     for ::core::option::Option<Event> {
-        fn from(v: super::super::super::GenerationAccepted) -> Self {
+        fn from(v: super::super::super::GenerationAcceptedV1) -> Self {
             Self::Some(Event::from(v))
         }
     }
-    impl From<super::super::super::OutputsPublished> for Event {
-        fn from(v: super::super::super::OutputsPublished) -> Self {
+    impl From<super::super::super::OutputsPublishedV1> for Event {
+        fn from(v: super::super::super::OutputsPublishedV1) -> Self {
             Self::OutputsPublished(::buffa::alloc::boxed::Box::new(v))
         }
     }
-    impl From<super::super::super::OutputsPublished> for ::core::option::Option<Event> {
-        fn from(v: super::super::super::OutputsPublished) -> Self {
+    impl From<super::super::super::OutputsPublishedV1>
+    for ::core::option::Option<Event> {
+        fn from(v: super::super::super::OutputsPublishedV1) -> Self {
             Self::Some(Event::from(v))
         }
     }
-    impl From<super::super::super::GraphRetired> for Event {
-        fn from(v: super::super::super::GraphRetired) -> Self {
+    impl From<super::super::super::GraphRetiredV1> for Event {
+        fn from(v: super::super::super::GraphRetiredV1) -> Self {
             Self::GraphRetired(::buffa::alloc::boxed::Box::new(v))
         }
     }
-    impl From<super::super::super::GraphRetired> for ::core::option::Option<Event> {
-        fn from(v: super::super::super::GraphRetired) -> Self {
+    impl From<super::super::super::GraphRetiredV1> for ::core::option::Option<Event> {
+        fn from(v: super::super::super::GraphRetiredV1) -> Self {
             Self::Some(Event::from(v))
         }
     }
@@ -158,32 +159,32 @@ pub mod registry_stream_record_v1 {
     #[derive(Clone, PartialEq, Debug)]
     pub enum Event {
         GraphCreated(
-            ::buffa::alloc::boxed::Box<super::super::super::RegistryGraphCreated>,
+            ::buffa::alloc::boxed::Box<super::super::super::RegistryGraphCreatedV1>,
         ),
         GraphRetired(
-            ::buffa::alloc::boxed::Box<super::super::super::RegistryGraphRetired>,
+            ::buffa::alloc::boxed::Box<super::super::super::RegistryGraphRetiredV1>,
         ),
     }
     impl ::buffa::Oneof for Event {}
-    impl From<super::super::super::RegistryGraphCreated> for Event {
-        fn from(v: super::super::super::RegistryGraphCreated) -> Self {
+    impl From<super::super::super::RegistryGraphCreatedV1> for Event {
+        fn from(v: super::super::super::RegistryGraphCreatedV1) -> Self {
             Self::GraphCreated(::buffa::alloc::boxed::Box::new(v))
         }
     }
-    impl From<super::super::super::RegistryGraphCreated>
+    impl From<super::super::super::RegistryGraphCreatedV1>
     for ::core::option::Option<Event> {
-        fn from(v: super::super::super::RegistryGraphCreated) -> Self {
+        fn from(v: super::super::super::RegistryGraphCreatedV1) -> Self {
             Self::Some(Event::from(v))
         }
     }
-    impl From<super::super::super::RegistryGraphRetired> for Event {
-        fn from(v: super::super::super::RegistryGraphRetired) -> Self {
+    impl From<super::super::super::RegistryGraphRetiredV1> for Event {
+        fn from(v: super::super::super::RegistryGraphRetiredV1) -> Self {
             Self::GraphRetired(::buffa::alloc::boxed::Box::new(v))
         }
     }
-    impl From<super::super::super::RegistryGraphRetired>
+    impl From<super::super::super::RegistryGraphRetiredV1>
     for ::core::option::Option<Event> {
-        fn from(v: super::super::super::RegistryGraphRetired) -> Self {
+        fn from(v: super::super::super::RegistryGraphRetiredV1) -> Self {
             Self::Some(Event::from(v))
         }
     }

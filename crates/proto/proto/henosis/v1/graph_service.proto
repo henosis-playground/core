@@ -2,97 +2,176 @@ edition = "2023";
 
 package henosis.v1;
 
+import "buf/validate/validate.proto";
+import "google/protobuf/field_mask.proto";
 import "henosis/v1/types.proto";
 
 // GraphService is the workflow-facing API used by automation and interactive clients.
+//
+// Mutations return only accepted results. Expected domain failures are Connect errors with an
+// EditRejectionDetails detail: INVALID_ARGUMENT for malformed edits, NOT_FOUND for a missing graph,
+// ALREADY_EXISTS for create conflicts or request-ID reuse with different input, ABORTED for a stale
+// expected_generation, and FAILED_PRECONDITION for lifecycle or dependency violations.
+//
+// request_id values are scoped to a graph for its lifetime across all mutation methods. Repeating a
+// request with the same semantic input returns the original success even after a lost response;
+// reusing an ID with different input or for a different mutation returns ALREADY_EXISTS.
 service GraphService {
-  rpc CreateGraph(CreateGraphRequest) returns (CreateGraphResponse);
-  rpc AddComponents(AddComponentsRequest) returns (AddComponentsResponse);
-  rpc UpdateComponents(UpdateComponentsRequest) returns (UpdateComponentsResponse);
-  rpc RemoveComponents(RemoveComponentsRequest) returns (RemoveComponentsResponse);
-  rpc GetGraph(GetGraphRequest) returns (GetGraphResponse);
-  rpc RetireGraph(RetireGraphRequest) returns (RetireGraphResponse);
-  rpc WatchGraph(WatchGraphRequest) returns (stream WatchGraphResponse);
+  rpc CreateGraph(CreateGraphRequest) returns (CreateGraphResponse) {
+    option idempotency_level = IDEMPOTENT;
+  }
+  rpc AddComponents(AddComponentsRequest) returns (AddComponentsResponse) {
+    option idempotency_level = IDEMPOTENT;
+  }
+  rpc UpdateComponents(UpdateComponentsRequest) returns (UpdateComponentsResponse) {
+    option idempotency_level = IDEMPOTENT;
+  }
+  rpc RemoveComponents(RemoveComponentsRequest) returns (RemoveComponentsResponse) {
+    option idempotency_level = IDEMPOTENT;
+  }
+  rpc GetGraph(GetGraphRequest) returns (GetGraphResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+  rpc RetireGraph(RetireGraphRequest) returns (RetireGraphResponse) {
+    option idempotency_level = IDEMPOTENT;
+  }
+  rpc WatchGraph(WatchGraphRequest) returns (stream WatchGraphResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
 }
 
 message CreateGraphRequest {
-  // graph_id is a caller-allocated raw 16-byte UUID.
-  bytes graph_id = 1;
+  // graph_id is caller-allocated and follows the UUID/ProtoJSON/TypeID convention in types.proto.
+  bytes graph_id = 1 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).bytes.len = 16
+  ];
   repeated Component components = 2;
+
+  // request_id follows the UUID/ProtoJSON/TypeID convention in types.proto.
+  bytes request_id = 3 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).bytes.len = 16
+  ];
 }
 
 message CreateGraphResponse {
-  oneof result {
-    EditGraphAccepted accepted = 1;
-    EditGraphRejected rejected = 2;
-  }
-}
-
-message AddComponentsRequest {
-  // graph_id is a raw 16-byte UUID.
-  bytes graph_id = 1;
-
-  // expected_generation is a required optimistic-concurrency guard.
-  uint64 expected_generation = 2;
-  repeated Component components = 3;
-}
-
-message UpdateComponentsRequest {
-  // graph_id is a raw 16-byte UUID.
-  bytes graph_id = 1;
-
-  // expected_generation is a required optimistic-concurrency guard. Each component is a complete
-  // replacement for the component with the same id.
-  uint64 expected_generation = 2;
-  repeated Component components = 3;
-}
-
-message RemoveComponentsRequest {
-  // graph_id is a raw 16-byte UUID.
-  bytes graph_id = 1;
-
-  // expected_generation is a required optimistic-concurrency guard.
-  uint64 expected_generation = 2;
-
-  // component_ids contains raw 16-byte UUIDs.
-  repeated bytes component_ids = 3;
-}
-
-message AddComponentsResponse {
-  oneof result {
-    EditGraphAccepted accepted = 1;
-    EditGraphRejected rejected = 2;
-  }
-}
-
-message UpdateComponentsResponse {
-  oneof result {
-    EditGraphAccepted accepted = 1;
-    EditGraphRejected rejected = 2;
-  }
-}
-
-message RemoveComponentsResponse {
-  oneof result {
-    EditGraphAccepted accepted = 1;
-    EditGraphRejected rejected = 2;
-  }
-}
-
-message EditGraphAccepted {
-  // graph contains the complete graph at the newly accepted generation.
+  // graph is the complete graph at generation 1.
   Graph graph = 1;
 }
 
-message EditGraphRejected {
-  // current_generation is present when the graph exists.
+message AddComponentsRequest {
+  // graph_id follows the UUID/ProtoJSON/TypeID convention in types.proto.
+  bytes graph_id = 1 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).bytes.len = 16
+  ];
+
+  // expected_generation is the optimistic-concurrency guard.
+  uint64 expected_generation = 2 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).uint64.gt = 0
+  ];
+  repeated Component components = 3;
+
+  // request_id follows the UUID/ProtoJSON/TypeID convention in types.proto.
+  bytes request_id = 4 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).bytes.len = 16
+  ];
+}
+
+message AddComponentsResponse {
+  // graph is the complete graph at the newly accepted generation.
+  Graph graph = 1;
+}
+
+// ComponentUpdate applies an update_mask relative to component. component.id selects the stored
+// component and cannot appear in update_mask. Only top-level paths are accepted. A listed singular
+// field is set to its proposed value or cleared when absent; a listed repeated field replaces the
+// stored list, so an empty list clears it. Unlisted fields are preserved, regardless of values in
+// component. An absent or empty mask is INVALID_ARGUMENT.
+message ComponentUpdate {
+  Component component = 1 [(buf.validate.field).required = true];
+  google.protobuf.FieldMask update_mask = 2 [(buf.validate.field).required = true];
+}
+
+message UpdateComponentsRequest {
+  option (buf.validate.message).cel = {
+    id: "update_components.updates.unique_ids"
+    message: "updated component IDs must be unique"
+    expression: "this.updates.map(u, u.component.id).unique()"
+  };
+
+  // graph_id follows the UUID/ProtoJSON/TypeID convention in types.proto.
+  bytes graph_id = 1 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).bytes.len = 16
+  ];
+
+  // expected_generation is the optimistic-concurrency guard.
+  uint64 expected_generation = 2 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).uint64.gt = 0
+  ];
+  repeated ComponentUpdate updates = 3;
+
+  // request_id follows the UUID/ProtoJSON/TypeID convention in types.proto.
+  bytes request_id = 4 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).bytes.len = 16
+  ];
+}
+
+message UpdateComponentsResponse {
+  // graph is the complete graph at the newly accepted generation.
+  Graph graph = 1;
+}
+
+message RemoveComponentsRequest {
+  // graph_id follows the UUID/ProtoJSON/TypeID convention in types.proto.
+  bytes graph_id = 1 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).bytes.len = 16
+  ];
+
+  // expected_generation is the optimistic-concurrency guard.
+  uint64 expected_generation = 2 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).uint64.gt = 0
+  ];
+
+  // component_ids follows the UUID/ProtoJSON/TypeID convention in types.proto and is unique.
+  repeated bytes component_ids = 3 [(buf.validate.field).repeated = {
+    unique: true
+    items: {bytes: {len: 16}}
+  }];
+
+  // request_id follows the UUID/ProtoJSON/TypeID convention in types.proto.
+  bytes request_id = 4 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).bytes.len = 16
+  ];
+}
+
+message RemoveComponentsResponse {
+  // graph is the complete graph at the newly accepted generation.
+  Graph graph = 1;
+}
+
+// EditRejectionDetails is attached to mutation Connect errors and preserves diagnostics verbatim.
+message EditRejectionDetails {
+  // current_generation is present when the graph exists and its generation is known.
   uint64 current_generation = 1;
   repeated Diagnostic diagnostics = 2;
 }
 
 message GetGraphRequest {
-  // graph_id is a raw 16-byte UUID.
-  bytes graph_id = 1;
+  // graph_id follows the UUID/ProtoJSON/TypeID convention in types.proto.
+  bytes graph_id = 1 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).bytes.len = 16
+  ];
 }
 
 message GetGraphResponse {
@@ -100,48 +179,92 @@ message GetGraphResponse {
 }
 
 message RetireGraphRequest {
-  // graph_id is a raw 16-byte UUID.
-  bytes graph_id = 1;
+  // graph_id follows the UUID/ProtoJSON/TypeID convention in types.proto.
+  bytes graph_id = 1 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).bytes.len = 16
+  ];
 
   // expected_generation guards retirement against a concurrent edit.
-  uint64 expected_generation = 2;
+  uint64 expected_generation = 2 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).uint64.gt = 0
+  ];
+
+  // request_id follows the UUID/ProtoJSON/TypeID convention in types.proto.
+  bytes request_id = 3 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).bytes.len = 16
+  ];
 }
 
 message RetireGraphResponse {
-  oneof result {
-    RetireGraphAccepted accepted = 1;
-    EditGraphRejected rejected = 2;
-  }
+  // graph_id follows the UUID/ProtoJSON/TypeID convention in types.proto.
+  bytes graph_id = 1 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).bytes.len = 16
+  ];
+  uint64 last_generation = 2 [(buf.validate.field).uint64.gt = 0];
 }
 
-message RetireGraphAccepted {
-  // graph_id is a raw 16-byte UUID.
-  bytes graph_id = 1;
-  uint64 last_generation = 2;
-}
-
+// WatchGraph is resumable for durable desired-state and output changes, but connector reports and
+// diagnostics are deliberately memory-only. Missed volatile transitions can never be replayed, and
+// after a core restart the latest volatile status may initially be empty. Clients must treat
+// volatile_status as a replaceable level snapshot, not a transition-complete event history.
 message WatchGraphRequest {
-  // graph_id is a raw 16-byte UUID.
-  bytes graph_id = 1;
+  // graph_id follows the UUID/ProtoJSON/TypeID convention in types.proto.
+  bytes graph_id = 1 [(buf.validate.field).bytes.len = 16];
 
-  // after_sequence is a durable per-graph journal cursor. The server first sends the current
-  // complete state, then continues with changes after this sequence.
+  // When after_sequence is absent, the server chooses the current durable head S. When it is
+  // present, including zero, S is exactly the requested retained sequence. The first item is
+  // snapshot at S; subsequent change items have strictly increasing sequences greater than S. The
+  // server must subscribe or buffer atomically with materializing S so no intervening durable
+  // record is lost. A cursor ahead of the head or older than retained history terminates with
+  // OUT_OF_RANGE and WatchCursorErrorDetails. A missing graph terminates with NOT_FOUND. Retirement
+  // is delivered as a final change and then the server ends cleanly; if the snapshot is already
+  // retired, the server ends after that snapshot.
   uint64 after_sequence = 2;
 }
 
 message WatchGraphResponse {
-  // sequence is the latest durable per-graph journal sequence represented by this item. A
-  // memory-only report refresh may repeat a sequence because state is level-triggered.
-  uint64 sequence = 1;
-
   oneof item {
-    GraphState state = 2;
-    WatchGraphHeartbeat heartbeat = 3;
+    WatchGraphSnapshot snapshot = 1;
+    WatchGraphChange change = 2;
+    WatchGraphVolatileStatus volatile_status = 3;
+    WatchGraphProgress progress = 4;
   }
 }
 
-// WatchGraphHeartbeat keeps the response active through intermediaries. A server sends a state
-// item or a heartbeat at least once every 30 seconds.
-message WatchGraphHeartbeat {
-  uint64 generation = 1;
+// WatchGraphSnapshot is a complete durable state at sequence. It never contains volatile reports.
+message WatchGraphSnapshot {
+  uint64 sequence = 1;
+  DurableGraphState state = 2;
+}
+
+// WatchGraphChange is the complete durable state after applying exactly the named sequence. Change
+// items are full states rather than deltas and have strictly increasing sequences.
+message WatchGraphChange {
+  uint64 sequence = 1;
+  DurableGraphState state = 2;
+}
+
+// WatchGraphVolatileStatus replaces all previously observed volatile reports. delivered_sequence
+// is the last durable sequence already sent to this client and does not advance its resume cursor.
+// Servers emit volatile status only after catching the stream up to the current durable head.
+message WatchGraphVolatileStatus {
+  uint64 delivered_sequence = 1;
+  repeated SliceReport reports = 2;
+}
+
+// WatchGraphProgress is a heartbeat/progress marker. delivered_sequence is only the last durable
+// sequence already delivered, never an unseen store head. A server sends an item at least once every
+// 30 seconds so intermediaries do not terminate an idle response.
+message WatchGraphProgress {
+  uint64 delivered_sequence = 1;
+}
+
+message WatchCursorErrorDetails {
+  uint64 requested_sequence = 1;
+  uint64 earliest_available_sequence = 2;
+  uint64 current_sequence = 3;
 }

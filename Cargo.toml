@@ -17,6 +17,7 @@ publish = false
 
 [workspace.dependencies]
 buffa = "0.8.1"
+buffa-types = { version = "0.8.1", features = ["json"] }
 connectrpc = { version = "0.8.1", features = ["server"] }
 diesel = { version = "=2.3.11", default-features = false, features = [
   "postgres_backend",

@@ -120,7 +120,7 @@ pub const CONNECTOR_SERVICE_RECONCILE_SLICE_SPEC: ::connectrpc::Spec = ::connect
         "/henosis.v1.ConnectorService/ReconcileSlice",
         ::connectrpc::StreamType::Unary,
     )
-    .with_idempotency_level(::connectrpc::IdempotencyLevel::Unknown);
+    .with_idempotency_level(::connectrpc::IdempotencyLevel::Idempotent);
 /// Static [`Spec`](::connectrpc::Spec) for the server-side `RetireSlice` RPC.
 ///
 /// The dispatcher surfaces this on
@@ -129,7 +129,7 @@ pub const CONNECTOR_SERVICE_RETIRE_SLICE_SPEC: ::connectrpc::Spec = ::connectrpc
         "/henosis.v1.ConnectorService/RetireSlice",
         ::connectrpc::StreamType::Unary,
     )
-    .with_idempotency_level(::connectrpc::IdempotencyLevel::Unknown);
+    .with_idempotency_level(::connectrpc::IdempotencyLevel::Idempotent);
 /// ConnectorService is served by each connector. Core pushes desired slices to it.
 ///
 /// # Implementing handlers
@@ -181,7 +181,9 @@ pub const CONNECTOR_SERVICE_RETIRE_SLICE_SPEC: ::connectrpc::Spec = ::connectrpc
 /// example` doc.
 #[allow(clippy::type_complexity)]
 pub trait ConnectorService: Send + Sync + 'static {
-    /// Handle the ReconcileSlice RPC.
+    /// ReconcileSlice is level-triggered and idempotent by (graph_id, connector, generation). Core
+    /// serializes generations per graph and connector and retries a generation until acknowledged
+    /// before sending a later generation.
     ///
     /// `'a` lets the response body borrow from `&self` (e.g. server-resident state).
     ///
@@ -204,7 +206,7 @@ pub trait ConnectorService: Send + Sync + 'static {
             > + Send + use<'a, Self>,
         >,
     > + Send;
-    /// Handle the RetireSlice RPC.
+    /// RetireSlice is a terminal, safely repeatable level operation.
     ///
     /// `'a` lets the response body borrow from `&self` (e.g. server-resident state).
     ///
@@ -667,7 +669,7 @@ pub const CONNECTOR_CALLBACK_SERVICE_REPORT_SLICE_SPEC: ::connectrpc::Spec = ::c
         "/henosis.v1.ConnectorCallbackService/ReportSlice",
         ::connectrpc::StreamType::Unary,
     )
-    .with_idempotency_level(::connectrpc::IdempotencyLevel::Unknown);
+    .with_idempotency_level(::connectrpc::IdempotencyLevel::Idempotent);
 /// Static [`Spec`](::connectrpc::Spec) for the server-side `FetchSlice` RPC.
 ///
 /// The dispatcher surfaces this on
@@ -676,7 +678,7 @@ pub const CONNECTOR_CALLBACK_SERVICE_FETCH_SLICE_SPEC: ::connectrpc::Spec = ::co
         "/henosis.v1.ConnectorCallbackService/FetchSlice",
         ::connectrpc::StreamType::Unary,
     )
-    .with_idempotency_level(::connectrpc::IdempotencyLevel::Unknown);
+    .with_idempotency_level(::connectrpc::IdempotencyLevel::NoSideEffects);
 /// ConnectorCallbackService is served by core. Connectors report complete slice observations and
 /// fetch desired slices on demand for startup, recovery, and re-reads.
 ///
@@ -836,7 +838,7 @@ impl<S: ConnectorCallbackService> ConnectorCallbackServiceExt for S {
                 },
             )
             .with_spec(CONNECTOR_CALLBACK_SERVICE_REPORT_SLICE_SPEC)
-            .route_view(
+            .route_view_idempotent(
                 CONNECTOR_CALLBACK_SERVICE_SERVICE_NAME,
                 "FetchSlice",
                 {
@@ -930,7 +932,7 @@ for ConnectorCallbackServiceServer<T> {
             }
             "FetchSlice" => {
                 Some(
-                    ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(false)
+                    ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(true)
                         .with_spec(CONNECTOR_CALLBACK_SERVICE_FETCH_SLICE_SPEC),
                 )
             }

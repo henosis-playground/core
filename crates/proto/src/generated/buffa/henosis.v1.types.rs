@@ -358,12 +358,167 @@ impl ::buffa::Enumeration for ComponentDispositionKind {
         ]
     }
 }
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[repr(i32)]
+pub enum GraphLifecycle {
+    GRAPH_LIFECYCLE_UNSPECIFIED = 0i32,
+    GRAPH_LIFECYCLE_ACTIVE = 1i32,
+    GRAPH_LIFECYCLE_RETIRED = 2i32,
+}
+impl GraphLifecycle {
+    ///Idiomatic alias for [`Self::GRAPH_LIFECYCLE_UNSPECIFIED`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Unspecified: Self = Self::GRAPH_LIFECYCLE_UNSPECIFIED;
+    ///Idiomatic alias for [`Self::GRAPH_LIFECYCLE_ACTIVE`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Active: Self = Self::GRAPH_LIFECYCLE_ACTIVE;
+    ///Idiomatic alias for [`Self::GRAPH_LIFECYCLE_RETIRED`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Retired: Self = Self::GRAPH_LIFECYCLE_RETIRED;
+}
+impl ::core::default::Default for GraphLifecycle {
+    fn default() -> Self {
+        Self::GRAPH_LIFECYCLE_UNSPECIFIED
+    }
+}
+impl ::serde::Serialize for GraphLifecycle {
+    fn serialize<S: ::serde::Serializer>(
+        &self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        s.serialize_str(::buffa::Enumeration::proto_name(self))
+    }
+}
+impl<'de> ::serde::Deserialize<'de> for GraphLifecycle {
+    fn deserialize<D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        struct _V;
+        impl ::serde::de::Visitor<'_> for _V {
+            type Value = GraphLifecycle;
+            fn expecting(
+                &self,
+                f: &mut ::core::fmt::Formatter<'_>,
+            ) -> ::core::fmt::Result {
+                f.write_str(
+                    concat!(
+                        "a string, integer, or null for ", stringify!(GraphLifecycle)
+                    ),
+                )
+            }
+            fn visit_str<E: ::serde::de::Error>(
+                self,
+                v: &str,
+            ) -> ::core::result::Result<GraphLifecycle, E> {
+                <GraphLifecycle as ::buffa::Enumeration>::from_proto_name(v)
+                    .ok_or_else(|| { ::serde::de::Error::unknown_variant(v, &[]) })
+            }
+            fn visit_i64<E: ::serde::de::Error>(
+                self,
+                v: i64,
+            ) -> ::core::result::Result<GraphLifecycle, E> {
+                let v32 = i32::try_from(v)
+                    .map_err(|_| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("enum value {v} out of i32 range"),
+                        )
+                    })?;
+                <GraphLifecycle as ::buffa::Enumeration>::from_i32(v32)
+                    .ok_or_else(|| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("unknown enum value {v32}"),
+                        )
+                    })
+            }
+            fn visit_u64<E: ::serde::de::Error>(
+                self,
+                v: u64,
+            ) -> ::core::result::Result<GraphLifecycle, E> {
+                let v32 = i32::try_from(v)
+                    .map_err(|_| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("enum value {v} out of i32 range"),
+                        )
+                    })?;
+                <GraphLifecycle as ::buffa::Enumeration>::from_i32(v32)
+                    .ok_or_else(|| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("unknown enum value {v32}"),
+                        )
+                    })
+            }
+            fn visit_unit<E: ::serde::de::Error>(
+                self,
+            ) -> ::core::result::Result<GraphLifecycle, E> {
+                ::core::result::Result::Ok(::core::default::Default::default())
+            }
+        }
+        d.deserialize_any(_V)
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for GraphLifecycle {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+impl ::buffa::Enumeration for GraphLifecycle {
+    fn from_i32(value: i32) -> ::core::option::Option<Self> {
+        match value {
+            0i32 => ::core::option::Option::Some(Self::GRAPH_LIFECYCLE_UNSPECIFIED),
+            1i32 => ::core::option::Option::Some(Self::GRAPH_LIFECYCLE_ACTIVE),
+            2i32 => ::core::option::Option::Some(Self::GRAPH_LIFECYCLE_RETIRED),
+            _ => ::core::option::Option::None,
+        }
+    }
+    fn to_i32(&self) -> i32 {
+        *self as i32
+    }
+    fn proto_name(&self) -> &'static str {
+        match self {
+            Self::GRAPH_LIFECYCLE_UNSPECIFIED => "GRAPH_LIFECYCLE_UNSPECIFIED",
+            Self::GRAPH_LIFECYCLE_ACTIVE => "GRAPH_LIFECYCLE_ACTIVE",
+            Self::GRAPH_LIFECYCLE_RETIRED => "GRAPH_LIFECYCLE_RETIRED",
+        }
+    }
+    fn from_proto_name(name: &str) -> ::core::option::Option<Self> {
+        match name {
+            "GRAPH_LIFECYCLE_UNSPECIFIED" => {
+                ::core::option::Option::Some(Self::GRAPH_LIFECYCLE_UNSPECIFIED)
+            }
+            "GRAPH_LIFECYCLE_ACTIVE" => {
+                ::core::option::Option::Some(Self::GRAPH_LIFECYCLE_ACTIVE)
+            }
+            "GRAPH_LIFECYCLE_RETIRED" => {
+                ::core::option::Option::Some(Self::GRAPH_LIFECYCLE_RETIRED)
+            }
+            _ => ::core::option::Option::None,
+        }
+    }
+    fn values() -> &'static [Self] {
+        &[
+            Self::GRAPH_LIFECYCLE_UNSPECIFIED,
+            Self::GRAPH_LIFECYCLE_ACTIVE,
+            Self::GRAPH_LIFECYCLE_RETIRED,
+        ]
+    }
+}
+/// UUID fields are raw 16-byte UUIDs on the protobuf wire. Connect ProtoJSON renders these bytes
+/// as base64; human-facing logs, diagnostics, GitHub presentation, and CLI output render TypeIDs.
+///
 /// Diagnostic is preserved verbatim across workflow, core, and connector boundaries.
 #[derive(Clone, PartialEq, Default)]
 #[derive(::serde::Serialize, ::serde::Deserialize)]
 #[serde(default)]
 pub struct Diagnostic {
-    /// code is a stable, machine-readable identifier.
+    /// code is a stable, non-empty machine-readable identifier.
     ///
     /// Field 1: `code`
     #[serde(rename = "code", skip_serializing_if = "::core::option::Option::is_none")]
@@ -371,8 +526,8 @@ pub struct Diagnostic {
     /// Field 2: `message`
     #[serde(rename = "message", skip_serializing_if = "::core::option::Option::is_none")]
     pub message: ::core::option::Option<::buffa::alloc::string::String>,
-    /// component_id is absent for diagnostics that apply to the request or slice as a whole.
-    /// When present, it is a raw 16-byte UUID.
+    /// component_id is absent for diagnostics that apply to the request or slice as a whole. When
+    /// present, it follows the UUID/ProtoJSON/TypeID convention documented above.
     ///
     /// Field 3: `component_id`
     #[serde(
@@ -382,8 +537,8 @@ pub struct Diagnostic {
         skip_serializing_if = "::core::option::Option::is_none"
     )]
     pub component_id: ::core::option::Option<::buffa::alloc::vec::Vec<u8>>,
-    /// pointer is an RFC 6901 JSON Pointer into the component-owned input when a precise
-    /// location is available.
+    /// pointer is an RFC 6901 JSON Pointer into the component-owned input when a precise location is
+    /// available.
     ///
     /// Field 4: `pointer`
     #[serde(rename = "pointer", skip_serializing_if = "::core::option::Option::is_none")]
@@ -665,8 +820,8 @@ pub const __DIAGNOSTIC_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa:
     from_json: ::buffa::type_registry::any_from_json::<Diagnostic>,
     is_wkt: false,
 };
-/// ComponentRevision is an immutable, content-addressed source pin. Revisions do not form a
-/// linear history in core.
+/// ComponentRevision is an immutable, content-addressed source pin. Revisions do not form a linear
+/// history in core.
 #[derive(Clone, PartialEq, Default)]
 #[derive(::serde::Serialize, ::serde::Deserialize)]
 #[serde(default)]
@@ -842,7 +997,7 @@ pub const __COMPONENT_REVISION_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = 
 #[derive(::serde::Serialize, ::serde::Deserialize)]
 #[serde(default)]
 pub struct Component {
-    /// id is a raw 16-byte UUID.
+    /// id follows the UUID/ProtoJSON/TypeID convention documented above.
     ///
     /// Field 1: `id`
     #[serde(
@@ -860,7 +1015,7 @@ pub struct Component {
         skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
     )]
     pub revision: ::buffa::MessageField<ComponentRevision>,
-    /// connector is a connector registry key, for example "k8s".
+    /// connector is a non-empty connector registry key, for example "k8s".
     ///
     /// Field 4: `connector`
     #[serde(
@@ -878,7 +1033,8 @@ pub struct Component {
         skip_serializing_if = "::core::option::Option::is_none"
     )]
     pub outputs_schema: ::core::option::Option<::buffa::alloc::vec::Vec<u8>>,
-    /// depends_on contains raw 16-byte component UUIDs.
+    /// depends_on contains UUIDs following the convention documented above. Entries are unique;
+    /// application validation also rejects self-dependencies and references outside the graph.
     ///
     /// Field 6: `depends_on`
     #[serde(
@@ -1183,7 +1339,7 @@ pub const __COMPONENT_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::
 #[derive(::serde::Serialize, ::serde::Deserialize)]
 #[serde(default)]
 pub struct Graph {
-    /// id is a raw 16-byte UUID.
+    /// id follows the UUID/ProtoJSON/TypeID convention documented above.
     ///
     /// Field 1: `id`
     #[serde(
@@ -1378,13 +1534,13 @@ pub const __GRAPH_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type
     from_json: ::buffa::type_registry::any_from_json::<Graph>,
     is_wkt: false,
 };
-/// ComponentOutputs is one component's complete output object. values_json is JSON encoded as
-/// UTF-8 bytes and conforms to that component's declared outputs_schema.
+/// ComponentOutputs is one component's complete output object. values_json is UTF-8 JSON conforming
+/// to that component's declared outputs_schema.
 #[derive(Clone, PartialEq, Default)]
 #[derive(::serde::Serialize, ::serde::Deserialize)]
 #[serde(default)]
 pub struct ComponentOutputs {
-    /// component_id is a raw 16-byte UUID.
+    /// component_id follows the UUID/ProtoJSON/TypeID convention documented above.
     ///
     /// Field 1: `component_id`
     #[serde(
@@ -1558,11 +1714,249 @@ pub const __COMPONENT_OUTPUTS_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = :
     from_json: ::buffa::type_registry::any_from_json::<ComponentOutputs>,
     is_wkt: false,
 };
+/// PublishedSliceOutputs is the latest durable, complete output snapshot published by one connector
+/// for one graph generation. outputs has unique component IDs and contains every component owned by
+/// the slice exactly once. An empty snapshot clears the connector's previously published outputs.
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct PublishedSliceOutputs {
+    /// Field 1: `generation`
+    #[serde(
+        rename = "generation",
+        with = "::buffa::json_helpers::opt_uint64",
+        skip_serializing_if = "::core::option::Option::is_none"
+    )]
+    pub generation: ::core::option::Option<u64>,
+    /// Field 2: `connector`
+    #[serde(
+        rename = "connector",
+        skip_serializing_if = "::core::option::Option::is_none"
+    )]
+    pub connector: ::core::option::Option<::buffa::alloc::string::String>,
+    /// Field 3: `outputs`
+    #[serde(
+        rename = "outputs",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec",
+        deserialize_with = "::buffa::json_helpers::null_as_default"
+    )]
+    pub outputs: ::buffa::alloc::vec::Vec<ComponentOutputs>,
+    /// publication_sequence is the durable per-graph journal sequence of this snapshot.
+    ///
+    /// Field 4: `publication_sequence`
+    #[serde(
+        rename = "publicationSequence",
+        alias = "publication_sequence",
+        with = "::buffa::json_helpers::opt_uint64",
+        skip_serializing_if = "::core::option::Option::is_none"
+    )]
+    pub publication_sequence: ::core::option::Option<u64>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for PublishedSliceOutputs {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("PublishedSliceOutputs")
+            .field("generation", &self.generation)
+            .field("connector", &self.connector)
+            .field("outputs", &self.outputs)
+            .field("publication_sequence", &self.publication_sequence)
+            .finish()
+    }
+}
+impl PublishedSliceOutputs {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/henosis.v1.PublishedSliceOutputs";
+}
+impl PublishedSliceOutputs {
+    #[must_use = "with_* setters return `self` by value; assign or chain the result"]
+    #[inline]
+    ///Sets [`Self::generation`] to `Some(value)`, consuming and returning `self`.
+    pub fn with_generation(mut self, value: u64) -> Self {
+        self.generation = Some(value);
+        self
+    }
+    #[must_use = "with_* setters return `self` by value; assign or chain the result"]
+    #[inline]
+    ///Sets [`Self::connector`] to `Some(value)`, consuming and returning `self`.
+    pub fn with_connector(
+        mut self,
+        value: impl Into<::buffa::alloc::string::String>,
+    ) -> Self {
+        self.connector = Some(value.into());
+        self
+    }
+    #[must_use = "with_* setters return `self` by value; assign or chain the result"]
+    #[inline]
+    ///Sets [`Self::publication_sequence`] to `Some(value)`, consuming and returning `self`.
+    pub fn with_publication_sequence(mut self, value: u64) -> Self {
+        self.publication_sequence = Some(value);
+        self
+    }
+}
+::buffa::impl_default_instance!(PublishedSliceOutputs);
+impl ::buffa::MessageName for PublishedSliceOutputs {
+    const PACKAGE: &'static str = "henosis.v1";
+    const NAME: &'static str = "PublishedSliceOutputs";
+    const FULL_NAME: &'static str = "henosis.v1.PublishedSliceOutputs";
+    const TYPE_URL: &'static str = "type.googleapis.com/henosis.v1.PublishedSliceOutputs";
+}
+impl ::buffa::Message for PublishedSliceOutputs {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if let Some(v) = self.generation {
+            size += 1u32 + ::buffa::types::uint64_encoded_len(v) as u32;
+        }
+        if let Some(ref v) = self.connector {
+            size += 1u32 + ::buffa::types::string_encoded_len(v) as u32;
+        }
+        for v in &self.outputs {
+            let __slot = __cache.reserve();
+            let inner_size = v.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if let Some(v) = self.publication_sequence {
+            size += 1u32 + ::buffa::types::uint64_encoded_len(v) as u32;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if let Some(v) = self.generation {
+            ::buffa::types::put_uint64_field(1u32, v, buf);
+        }
+        if let Some(ref v) = self.connector {
+            ::buffa::types::put_string_field(2u32, v, buf);
+        }
+        for v in &self.outputs {
+            ::buffa::types::put_len_delimited_header(3u32, __cache.consume_next(), buf);
+            v.write_to(__cache, buf);
+        }
+        if let Some(v) = self.publication_sequence {
+            ::buffa::types::put_uint64_field(4u32, v, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.generation = ::core::option::Option::Some(
+                    ::buffa::types::decode_uint64(buf)?,
+                );
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(
+                    self
+                        .connector
+                        .get_or_insert_with(::buffa::alloc::string::String::new),
+                    buf,
+                )?;
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let mut elem = ::core::default::Default::default();
+                ::buffa::Message::merge_length_delimited(&mut elem, buf, ctx)?;
+                self.outputs.push(elem);
+            }
+            4u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.publication_sequence = ::core::option::Option::Some(
+                    ::buffa::types::decode_uint64(buf)?,
+                );
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.generation = ::core::option::Option::None;
+        self.connector = ::core::option::Option::None;
+        self.outputs.clear();
+        self.publication_sequence = ::core::option::Option::None;
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for PublishedSliceOutputs {
+    const PROTO_FQN: &'static str = "henosis.v1.PublishedSliceOutputs";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for PublishedSliceOutputs {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __PUBLISHED_SLICE_OUTPUTS_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/henosis.v1.PublishedSliceOutputs",
+    to_json: ::buffa::type_registry::any_to_json::<PublishedSliceOutputs>,
+    from_json: ::buffa::type_registry::any_from_json::<PublishedSliceOutputs>,
+    is_wkt: false,
+};
 #[derive(Clone, PartialEq, Default)]
 #[derive(::serde::Serialize, ::serde::Deserialize)]
 #[serde(default)]
 pub struct ComponentDisposition {
-    /// component_id is a raw 16-byte UUID.
+    /// component_id follows the UUID/ProtoJSON/TypeID convention documented above.
     ///
     /// Field 1: `component_id`
     #[serde(
@@ -1734,14 +2128,19 @@ pub const __COMPONENT_DISPOSITION_JSON_ANY: ::buffa::type_registry::JsonAnyEntry
     from_json: ::buffa::type_registry::any_from_json::<ComponentDisposition>,
     is_wkt: false,
 };
-/// SliceReport is a connector's atomic, level-triggered observation of every component it owns
-/// in a graph generation. dispositions must contain each owned component exactly once. Core
-/// accepts the report and publishes all outputs together, or rejects the entire report.
+/// SliceReport is a connector's atomic, level-triggered observation of every component it owns in a
+/// graph generation. dispositions contains every owned component exactly once. Core accepts the
+/// report as a unit or rejects it as a unit.
+///
+/// outputs is a full publication snapshot, never a delta. When every disposition is READY and there
+/// are no ERROR diagnostics, outputs must contain every owned component exactly once and core
+/// atomically publishes the snapshot. An empty owned slice therefore publishes an empty snapshot and
+/// clears prior outputs. Otherwise outputs must be empty and no durable publication occurs.
 #[derive(Clone, PartialEq, Default)]
 #[derive(::serde::Serialize, ::serde::Deserialize)]
 #[serde(default)]
 pub struct SliceReport {
-    /// graph_id is a raw 16-byte UUID.
+    /// graph_id follows the UUID/ProtoJSON/TypeID convention documented above.
     ///
     /// Field 1: `graph_id`
     #[serde(
@@ -2036,52 +2435,75 @@ pub const __SLICE_REPORT_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buff
     from_json: ::buffa::type_registry::any_from_json::<SliceReport>,
     is_wkt: false,
 };
-/// GraphState is a complete level snapshot for workflow reads and watches. Reports are memory-only
-/// observations; their output values are also recoverable from the graph journal after publication.
+/// DurableGraphState is fully recoverable from a per-graph journal without connector memory.
 #[derive(Clone, PartialEq, Default)]
 #[derive(::serde::Serialize, ::serde::Deserialize)]
 #[serde(default)]
-pub struct GraphState {
+pub struct DurableGraphState {
     /// Field 1: `graph`
     #[serde(
         rename = "graph",
         skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
     )]
     pub graph: ::buffa::MessageField<Graph>,
-    /// Field 2: `reports`
+    /// published_outputs contains at most one latest snapshot per connector. A connector's snapshot
+    /// may be from an older generation while reconciliation of the current generation is in progress.
+    ///
+    /// Field 2: `published_outputs`
     #[serde(
-        rename = "reports",
+        rename = "publishedOutputs",
+        alias = "published_outputs",
         skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec",
         deserialize_with = "::buffa::json_helpers::null_as_default"
     )]
-    pub reports: ::buffa::alloc::vec::Vec<SliceReport>,
+    pub published_outputs: ::buffa::alloc::vec::Vec<PublishedSliceOutputs>,
+    /// Field 3: `lifecycle`
+    #[serde(
+        rename = "lifecycle",
+        with = "::buffa::json_helpers::opt_enum",
+        skip_serializing_if = "::core::option::Option::is_none"
+    )]
+    pub lifecycle: ::core::option::Option<::buffa::EnumValue<GraphLifecycle>>,
     #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
 }
-impl ::core::fmt::Debug for GraphState {
+impl ::core::fmt::Debug for DurableGraphState {
     fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
-        f.debug_struct("GraphState")
+        f.debug_struct("DurableGraphState")
             .field("graph", &self.graph)
-            .field("reports", &self.reports)
+            .field("published_outputs", &self.published_outputs)
+            .field("lifecycle", &self.lifecycle)
             .finish()
     }
 }
-impl GraphState {
+impl DurableGraphState {
     /// Protobuf type URL for this message, for use with `Any::pack` and
     /// `Any::unpack_if`.
     ///
     /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
-    pub const TYPE_URL: &'static str = "type.googleapis.com/henosis.v1.GraphState";
+    pub const TYPE_URL: &'static str = "type.googleapis.com/henosis.v1.DurableGraphState";
 }
-::buffa::impl_default_instance!(GraphState);
-impl ::buffa::MessageName for GraphState {
+impl DurableGraphState {
+    #[must_use = "with_* setters return `self` by value; assign or chain the result"]
+    #[inline]
+    ///Sets [`Self::lifecycle`] to `Some(value)`, consuming and returning `self`.
+    pub fn with_lifecycle(
+        mut self,
+        value: impl Into<::buffa::EnumValue<GraphLifecycle>>,
+    ) -> Self {
+        self.lifecycle = Some(value.into());
+        self
+    }
+}
+::buffa::impl_default_instance!(DurableGraphState);
+impl ::buffa::MessageName for DurableGraphState {
     const PACKAGE: &'static str = "henosis.v1";
-    const NAME: &'static str = "GraphState";
-    const FULL_NAME: &'static str = "henosis.v1.GraphState";
-    const TYPE_URL: &'static str = "type.googleapis.com/henosis.v1.GraphState";
+    const NAME: &'static str = "DurableGraphState";
+    const FULL_NAME: &'static str = "henosis.v1.DurableGraphState";
+    const TYPE_URL: &'static str = "type.googleapis.com/henosis.v1.DurableGraphState";
 }
-impl ::buffa::Message for GraphState {
+impl ::buffa::Message for DurableGraphState {
     /// Returns the total encoded size in bytes.
     ///
     /// The result is a `u32`; the protobuf specification requires all
@@ -2100,13 +2522,16 @@ impl ::buffa::Message for GraphState {
                 += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
                     + inner_size;
         }
-        for v in &self.reports {
+        for v in &self.published_outputs {
             let __slot = __cache.reserve();
             let inner_size = v.compute_size(__cache);
             __cache.set(__slot, inner_size);
             size
                 += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
                     + inner_size;
+        }
+        if let Some(ref v) = self.lifecycle {
+            size += 1u32 + ::buffa::types::int32_encoded_len(v.to_i32()) as u32;
         }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
         size
@@ -2122,9 +2547,12 @@ impl ::buffa::Message for GraphState {
             ::buffa::types::put_len_delimited_header(1u32, __cache.consume_next(), buf);
             self.graph.write_to(__cache, buf);
         }
-        for v in &self.reports {
+        for v in &self.published_outputs {
             ::buffa::types::put_len_delimited_header(2u32, __cache.consume_next(), buf);
             v.write_to(__cache, buf);
+        }
+        if let Some(ref v) = self.lifecycle {
+            ::buffa::types::put_int32_field(3u32, v.to_i32(), buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
     }
@@ -2157,7 +2585,16 @@ impl ::buffa::Message for GraphState {
                 )?;
                 let mut elem = ::core::default::Default::default();
                 ::buffa::Message::merge_length_delimited(&mut elem, buf, ctx)?;
-                self.reports.push(elem);
+                self.published_outputs.push(elem);
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.lifecycle = ::core::option::Option::Some(
+                    ::buffa::EnumValue::from(::buffa::types::decode_int32(buf)?),
+                );
             }
             _ => {
                 self.__buffa_unknown_fields
@@ -2168,6 +2605,173 @@ impl ::buffa::Message for GraphState {
     }
     fn clear(&mut self) {
         self.graph = ::buffa::MessageField::none();
+        self.published_outputs.clear();
+        self.lifecycle = ::core::option::Option::None;
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for DurableGraphState {
+    const PROTO_FQN: &'static str = "henosis.v1.DurableGraphState";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for DurableGraphState {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __DURABLE_GRAPH_STATE_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/henosis.v1.DurableGraphState",
+    to_json: ::buffa::type_registry::any_to_json::<DurableGraphState>,
+    from_json: ::buffa::type_registry::any_from_json::<DurableGraphState>,
+    is_wkt: false,
+};
+/// GraphState separates durable desired state and published outputs from current memory-only
+/// connector reports. After a core restart, reports is empty until connectors report again; core
+/// never fabricates a report from durable output records.
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct GraphState {
+    /// Field 1: `durable`
+    #[serde(
+        rename = "durable",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub durable: ::buffa::MessageField<DurableGraphState>,
+    /// Field 2: `reports`
+    #[serde(
+        rename = "reports",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec",
+        deserialize_with = "::buffa::json_helpers::null_as_default"
+    )]
+    pub reports: ::buffa::alloc::vec::Vec<SliceReport>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for GraphState {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("GraphState")
+            .field("durable", &self.durable)
+            .field("reports", &self.reports)
+            .finish()
+    }
+}
+impl GraphState {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/henosis.v1.GraphState";
+}
+::buffa::impl_default_instance!(GraphState);
+impl ::buffa::MessageName for GraphState {
+    const PACKAGE: &'static str = "henosis.v1";
+    const NAME: &'static str = "GraphState";
+    const FULL_NAME: &'static str = "henosis.v1.GraphState";
+    const TYPE_URL: &'static str = "type.googleapis.com/henosis.v1.GraphState";
+}
+impl ::buffa::Message for GraphState {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if self.durable.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.durable.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        for v in &self.reports {
+            let __slot = __cache.reserve();
+            let inner_size = v.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if self.durable.is_set() {
+            ::buffa::types::put_len_delimited_header(1u32, __cache.consume_next(), buf);
+            self.durable.write_to(__cache, buf);
+        }
+        for v in &self.reports {
+            ::buffa::types::put_len_delimited_header(2u32, __cache.consume_next(), buf);
+            v.write_to(__cache, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.durable.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let mut elem = ::core::default::Default::default();
+                ::buffa::Message::merge_length_delimited(&mut elem, buf, ctx)?;
+                self.reports.push(elem);
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.durable = ::buffa::MessageField::none();
         self.reports.clear();
         self.__buffa_unknown_fields.clear();
     }

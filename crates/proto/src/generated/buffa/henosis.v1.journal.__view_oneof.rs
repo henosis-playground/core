@@ -20,22 +20,22 @@ pub mod graph_stream_record_v1 {
     pub enum Event<'a> {
         GraphCreated(
             ::buffa::alloc::boxed::Box<
-                super::super::super::super::__buffa::view::GraphCreatedView<'a>,
+                super::super::super::super::__buffa::view::GraphCreatedV1View<'a>,
             >,
         ),
         GenerationAccepted(
             ::buffa::alloc::boxed::Box<
-                super::super::super::super::__buffa::view::GenerationAcceptedView<'a>,
+                super::super::super::super::__buffa::view::GenerationAcceptedV1View<'a>,
             >,
         ),
         OutputsPublished(
             ::buffa::alloc::boxed::Box<
-                super::super::super::super::__buffa::view::OutputsPublishedView<'a>,
+                super::super::super::super::__buffa::view::OutputsPublishedV1View<'a>,
             >,
         ),
         GraphRetired(
             ::buffa::alloc::boxed::Box<
-                super::super::super::super::__buffa::view::GraphRetiredView<'a>,
+                super::super::super::super::__buffa::view::GraphRetiredV1View<'a>,
             >,
         ),
     }
@@ -59,12 +59,12 @@ pub mod registry_stream_record_v1 {
     pub enum Event<'a> {
         GraphCreated(
             ::buffa::alloc::boxed::Box<
-                super::super::super::super::__buffa::view::RegistryGraphCreatedView<'a>,
+                super::super::super::super::__buffa::view::RegistryGraphCreatedV1View<'a>,
             >,
         ),
         GraphRetired(
             ::buffa::alloc::boxed::Box<
-                super::super::super::super::__buffa::view::RegistryGraphRetiredView<'a>,
+                super::super::super::super::__buffa::view::RegistryGraphRetiredV1View<'a>,
             >,
         ),
     }

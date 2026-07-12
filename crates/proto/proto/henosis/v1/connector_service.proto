@@ -2,76 +2,149 @@ edition = "2023";
 
 package henosis.v1;
 
+import "buf/validate/validate.proto";
 import "henosis/v1/types.proto";
 
 // ConnectorService is served by each connector. Core pushes desired slices to it.
 service ConnectorService {
-  rpc ReconcileSlice(ReconcileSliceRequest) returns (ReconcileSliceResponse);
-  rpc RetireSlice(RetireSliceRequest) returns (RetireSliceResponse);
+  // ReconcileSlice is level-triggered and idempotent by (graph_id, connector, generation). Core
+  // serializes generations per graph and connector and retries a generation until acknowledged
+  // before sending a later generation.
+  rpc ReconcileSlice(ReconcileSliceRequest) returns (ReconcileSliceResponse) {
+    option idempotency_level = IDEMPOTENT;
+  }
+
+  // RetireSlice is a terminal, safely repeatable level operation.
+  rpc RetireSlice(RetireSliceRequest) returns (RetireSliceResponse) {
+    option idempotency_level = IDEMPOTENT;
+  }
 }
 
 // ConnectorCallbackService is served by core. Connectors report complete slice observations and
 // fetch desired slices on demand for startup, recovery, and re-reads.
 service ConnectorCallbackService {
-  rpc ReportSlice(ReportSliceRequest) returns (ReportSliceResponse);
-  rpc FetchSlice(FetchSliceRequest) returns (FetchSliceResponse);
+  rpc ReportSlice(ReportSliceRequest) returns (ReportSliceResponse) {
+    option idempotency_level = IDEMPOTENT;
+  }
+  rpc FetchSlice(FetchSliceRequest) returns (FetchSliceResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
 }
 
-// GraphSlice is the complete set of components one connector owns in a graph generation, plus
-// published outputs from direct or transitive upstream components owned by other connectors.
+// GraphSlice is the complete set of components one connector owns in a graph generation, plus the
+// latest published outputs from direct or transitive upstream components owned by other connectors.
+// Component and upstream-output IDs are unique and must belong to the corresponding graph.
 message GraphSlice {
-  // graph_id is a raw 16-byte UUID.
-  bytes graph_id = 1;
-  uint64 generation = 2;
-  string connector = 3;
+  option (buf.validate.message).cel = {
+    id: "graph_slice.components.unique_ids"
+    message: "component IDs must be unique"
+    expression: "this.components.map(c, c.id).unique()"
+  };
+  option (buf.validate.message).cel = {
+    id: "graph_slice.upstream_outputs.unique_ids"
+    message: "upstream output component IDs must be unique"
+    expression: "this.upstream_outputs.map(o, o.component_id).unique()"
+  };
+
+  // graph_id follows the UUID/ProtoJSON/TypeID convention in types.proto.
+  bytes graph_id = 1 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).bytes.len = 16
+  ];
+  uint64 generation = 2 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).uint64.gt = 0
+  ];
+  string connector = 3 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).string.min_len = 1
+  ];
   repeated Component components = 4;
   repeated ComponentOutputs upstream_outputs = 5;
 }
 
+// Core delivers generation N to every connector that owns components at N or owned components at
+// N-1, including an empty current slice for a former owner. superseded_components contains the old
+// forms, including their component-level context, that this connector must clean up because they
+// were removed, reassigned, or changed since its acknowledged previous generation.
 message ReconcileSliceRequest {
-  GraphSlice slice = 1;
+  option (buf.validate.message).cel = {
+    id: "reconcile_slice.superseded_components.unique_ids"
+    message: "superseded component IDs must be unique"
+    expression: "this.superseded_components.map(c, c.id).unique()"
+  };
+
+  GraphSlice slice = 1 [(buf.validate.field).required = true];
+  repeated Component superseded_components = 2;
 }
 
-// A successful RPC acknowledges that the connector accepted the complete slice for reconciliation.
-// Reconciliation results arrive asynchronously through ConnectorCallbackService.ReportSlice.
-message ReconcileSliceResponse {}
+// A connector durably retains its highest accepted generation. A higher generation replaces its
+// desired level, an equal generation is acknowledged without duplicating effects, and an older
+// generation is ignored and acknowledged with the retained highest generation. Graph retirement is
+// terminal; later reconciliation fails with FAILED_PRECONDITION. Reconciliation observations arrive
+// asynchronously through ConnectorCallbackService.ReportSlice.
+message ReconcileSliceResponse {
+  uint64 accepted_generation = 1 [(buf.validate.field).uint64.gt = 0];
+}
 
 message RetireSliceRequest {
-  // slice is the connector's last complete owned slice and supplies the component context needed
-  // to remove connector-owned state.
-  GraphSlice slice = 1;
+  // slice is the connector's last complete owned slice and supplies component context for cleanup.
+  GraphSlice slice = 1 [(buf.validate.field).required = true];
 }
 
-message RetireSliceResponse {}
+message RetireSliceResponse {
+  uint64 retired_generation = 1 [(buf.validate.field).uint64.gt = 0];
+}
 
 message ReportSliceRequest {
-  SliceReport report = 1;
+  // request_id follows the UUID/ProtoJSON/TypeID convention in types.proto. It is scoped to
+  // (graph_id, connector) for the graph lifetime. A publishable report persists it with the output
+  // snapshot; retrying the same report returns the original publication sequence. Reusing it with
+  // different input returns ALREADY_EXISTS. Repeating a non-publishing level report is side-effect
+  // safe even when its volatile acknowledgement was lost.
+  bytes request_id = 1 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).bytes.len = 16
+  ];
+  SliceReport report = 2 [(buf.validate.field).required = true];
 }
 
 message ReportSliceResponse {
-  oneof result {
-    ReportSliceAccepted accepted = 1;
-    ReportSliceRejected rejected = 2;
-  }
-}
-
-message ReportSliceAccepted {
-  // publication_sequence is present when this report published a durable outputs event. Status and
-  // diagnostics remain memory-only and do not allocate journal sequences.
+  // publication_sequence is present when the report atomically published its complete output
+  // snapshot. Status and diagnostics remain memory-only and allocate no journal sequence.
   uint64 publication_sequence = 1;
 }
 
-message ReportSliceRejected {
+// ReportRejectionDetails is attached to ReportSlice Connect errors and preserves diagnostics
+// verbatim. ReportSlice uses INVALID_ARGUMENT for malformed reports, NOT_FOUND for a missing slice,
+// ALREADY_EXISTS for request-ID reuse, ABORTED for a superseded generation, and FAILED_PRECONDITION
+// when dispositions, diagnostics, or outputs do not satisfy publication rules.
+message ReportRejectionDetails {
   repeated Diagnostic diagnostics = 1;
 }
 
 message FetchSliceRequest {
-  // graph_id is a raw 16-byte UUID.
-  bytes graph_id = 1;
-  uint64 generation = 2;
-  string connector = 3;
+  // graph_id follows the UUID/ProtoJSON/TypeID convention in types.proto.
+  bytes graph_id = 1 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).bytes.len = 16
+  ];
+
+  // generation selects an exact historical generation, not "latest".
+  uint64 generation = 2 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).uint64.gt = 0
+  ];
+  string connector = 3 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).string.min_len = 1
+  ];
 }
 
+// Exact historical slices remain fetchable for the graph lifetime and through retirement until
+// every affected connector has acknowledged terminal cleanup. Outside that window FetchSlice
+// returns NOT_FOUND. This retention plus serialized pushes lets a recovering connector retrieve any
+// cleanup context required before it accepts a later generation.
 message FetchSliceResponse {
   GraphSlice slice = 1;
 }

@@ -25,8 +25,24 @@ check-deny:
 check-pre-commit:
     prek run --all-files
 
-# Runs all lints (fmt, clippy, deny, pre-commit hooks)
-lint: check-fmt clippy check-deny check-pre-commit
+# Checks source format/lint/compatibility and that committed bindings match the protos.
+check-proto:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd crates/proto
+    buf format --diff --exit-code
+    buf lint
+    buf breaking --exclude-imports --against proto/henosis-v1-baseline.binpb.gz
+    before="$(mktemp -d)"
+    trap 'rm -rf "$before"' EXIT
+    cp -R src/generated "$before/generated"
+    buf generate
+    cd ../..
+    cargo fmt -p henosis-proto
+    diff -ru "$before/generated" crates/proto/src/generated
+
+# Runs all lints (fmt, clippy, deny, protobuf, pre-commit hooks)
+lint: check-fmt clippy check-deny check-proto check-pre-commit
 
 test *flags:
     cargo nextest run --cargo-profile testing --no-tests=pass {{ flags }}

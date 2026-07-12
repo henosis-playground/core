@@ -204,7 +204,7 @@ pub const GRAPH_SERVICE_CREATE_GRAPH_SPEC: ::connectrpc::Spec = ::connectrpc::Sp
         "/henosis.v1.GraphService/CreateGraph",
         ::connectrpc::StreamType::Unary,
     )
-    .with_idempotency_level(::connectrpc::IdempotencyLevel::Unknown);
+    .with_idempotency_level(::connectrpc::IdempotencyLevel::Idempotent);
 /// Static [`Spec`](::connectrpc::Spec) for the server-side `AddComponents` RPC.
 ///
 /// The dispatcher surfaces this on
@@ -213,7 +213,7 @@ pub const GRAPH_SERVICE_ADD_COMPONENTS_SPEC: ::connectrpc::Spec = ::connectrpc::
         "/henosis.v1.GraphService/AddComponents",
         ::connectrpc::StreamType::Unary,
     )
-    .with_idempotency_level(::connectrpc::IdempotencyLevel::Unknown);
+    .with_idempotency_level(::connectrpc::IdempotencyLevel::Idempotent);
 /// Static [`Spec`](::connectrpc::Spec) for the server-side `UpdateComponents` RPC.
 ///
 /// The dispatcher surfaces this on
@@ -222,7 +222,7 @@ pub const GRAPH_SERVICE_UPDATE_COMPONENTS_SPEC: ::connectrpc::Spec = ::connectrp
         "/henosis.v1.GraphService/UpdateComponents",
         ::connectrpc::StreamType::Unary,
     )
-    .with_idempotency_level(::connectrpc::IdempotencyLevel::Unknown);
+    .with_idempotency_level(::connectrpc::IdempotencyLevel::Idempotent);
 /// Static [`Spec`](::connectrpc::Spec) for the server-side `RemoveComponents` RPC.
 ///
 /// The dispatcher surfaces this on
@@ -231,7 +231,7 @@ pub const GRAPH_SERVICE_REMOVE_COMPONENTS_SPEC: ::connectrpc::Spec = ::connectrp
         "/henosis.v1.GraphService/RemoveComponents",
         ::connectrpc::StreamType::Unary,
     )
-    .with_idempotency_level(::connectrpc::IdempotencyLevel::Unknown);
+    .with_idempotency_level(::connectrpc::IdempotencyLevel::Idempotent);
 /// Static [`Spec`](::connectrpc::Spec) for the server-side `GetGraph` RPC.
 ///
 /// The dispatcher surfaces this on
@@ -240,7 +240,7 @@ pub const GRAPH_SERVICE_GET_GRAPH_SPEC: ::connectrpc::Spec = ::connectrpc::Spec:
         "/henosis.v1.GraphService/GetGraph",
         ::connectrpc::StreamType::Unary,
     )
-    .with_idempotency_level(::connectrpc::IdempotencyLevel::Unknown);
+    .with_idempotency_level(::connectrpc::IdempotencyLevel::NoSideEffects);
 /// Static [`Spec`](::connectrpc::Spec) for the server-side `RetireGraph` RPC.
 ///
 /// The dispatcher surfaces this on
@@ -249,7 +249,7 @@ pub const GRAPH_SERVICE_RETIRE_GRAPH_SPEC: ::connectrpc::Spec = ::connectrpc::Sp
         "/henosis.v1.GraphService/RetireGraph",
         ::connectrpc::StreamType::Unary,
     )
-    .with_idempotency_level(::connectrpc::IdempotencyLevel::Unknown);
+    .with_idempotency_level(::connectrpc::IdempotencyLevel::Idempotent);
 /// Static [`Spec`](::connectrpc::Spec) for the server-side `WatchGraph` RPC.
 ///
 /// The dispatcher surfaces this on
@@ -258,8 +258,15 @@ pub const GRAPH_SERVICE_WATCH_GRAPH_SPEC: ::connectrpc::Spec = ::connectrpc::Spe
         "/henosis.v1.GraphService/WatchGraph",
         ::connectrpc::StreamType::ServerStream,
     )
-    .with_idempotency_level(::connectrpc::IdempotencyLevel::Unknown);
+    .with_idempotency_level(::connectrpc::IdempotencyLevel::NoSideEffects);
 /// GraphService is the workflow-facing API used by automation and interactive clients.
+/// Mutations return only accepted results. Expected domain failures are Connect errors with an
+/// EditRejectionDetails detail: INVALID_ARGUMENT for malformed edits, NOT_FOUND for a missing graph,
+/// ALREADY_EXISTS for create conflicts or request-ID reuse with different input, ABORTED for a stale
+/// expected_generation, and FAILED_PRECONDITION for lifecycle or dependency violations.
+/// request_id values are scoped to a graph for its lifetime across all mutation methods. Repeating a
+/// request with the same semantic input returns the original success even after a lost response;
+/// reusing an ID with different input or for a different mutation returns ALREADY_EXISTS.
 ///
 /// # Implementing handlers
 ///
@@ -619,7 +626,7 @@ impl<S: GraphService> GraphServiceExt for S {
                 },
             )
             .with_spec(GRAPH_SERVICE_REMOVE_COMPONENTS_SPEC)
-            .route_view(
+            .route_view_idempotent(
                 GRAPH_SERVICE_SERVICE_NAME,
                 "GetGraph",
                 {
@@ -785,7 +792,7 @@ impl<T: GraphService> ::connectrpc::Dispatcher for GraphServiceServer<T> {
             }
             "GetGraph" => {
                 Some(
-                    ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(false)
+                    ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(true)
                         .with_spec(GRAPH_SERVICE_GET_GRAPH_SPEC),
                 )
             }
