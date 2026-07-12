@@ -246,13 +246,10 @@ pub fn decode_spec_record(
         Some(oneof::spec_stream_envelope::Version::V1(value)) => value,
         None => return Err(JournalDecodeError::Missing("spec record version")),
     };
-    let value = match version
+    let oneof::spec_stream_record_v1::Event::ComponentSpecRegistered(value) = version
         .event
         .as_ref()
-        .ok_or(JournalDecodeError::Missing("spec event"))?
-    {
-        oneof::spec_stream_record_v1::Event::ComponentSpecRegistered(value) => value,
-    };
+        .ok_or(JournalDecodeError::Missing("spec event"))?;
     let expected =
         spec_hash(value.hash, "registered spec hash").map_err(JournalDecodeError::InvalidDomain)?;
     let spec = value

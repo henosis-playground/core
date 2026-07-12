@@ -236,7 +236,6 @@ impl SpecCatalog {
             .collect()
     }
 
-    #[must_use]
     pub fn iter(&self) -> impl Iterator<Item = &RegisteredComponentSpec> {
         self.specs.iter()
     }

@@ -291,12 +291,12 @@ impl GetGraph {
 #[derive(Clone, Copy, Debug)]
 pub struct WatchGraph {
     graph_id: GraphId,
-    after_sequence: u64,
+    after_sequence: Option<u64>,
 }
 
 impl WatchGraph {
     #[must_use]
-    pub const fn new(graph_id: GraphId, after_sequence: u64) -> Self {
+    pub const fn new(graph_id: GraphId, after_sequence: Option<u64>) -> Self {
         Self {
             graph_id,
             after_sequence,
@@ -309,7 +309,7 @@ impl WatchGraph {
     }
 
     #[must_use]
-    pub const fn after_sequence(self) -> u64 {
+    pub const fn after_sequence(self) -> Option<u64> {
         self.after_sequence
     }
 }

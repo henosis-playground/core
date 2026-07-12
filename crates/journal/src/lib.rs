@@ -78,7 +78,9 @@ impl Journal {
         .context("invalid S2 endpoint configuration")?;
         let client = S2::new(S2Config::new(access_token).with_endpoints(endpoints))
             .context("failed to construct S2 client")?;
-        let basin = basin.parse::<BasinName>().context("invalid S2 basin name")?;
+        let basin = basin
+            .parse::<BasinName>()
+            .context("invalid S2 basin name")?;
         Ok(Self {
             basin: client.basin(basin),
         })
@@ -98,16 +100,16 @@ impl Journal {
         if tail == 0 {
             return Err(Fault::Domain(JournalError::NotFound));
         }
-        let records = read_records(&stream, tail).await.map_err(upcast_read_fault)?;
+        let records = read_records(&stream, tail)
+            .await
+            .map_err(upcast_read_fault)?;
         let mut parsed = Box::pin(decode_graph_stream(futures::stream::iter(
             records.into_iter().map(Ok::<_, Infallible>),
         )));
         let mut history = GraphHistory::new(graph_id);
         while let Some(item) = parsed.next().await {
             let event = item.map_err(decode_invariant)?;
-            history
-                .apply(event)
-                .map_err(journal_invariant)?;
+            history.apply(event).map_err(journal_invariant)?;
         }
         Ok(history)
     }
@@ -131,11 +133,7 @@ impl Journal {
     pub async fn graph_list(
         &self,
     ) -> Result<Vec<GraphId>, Fault<Never, anyhow::Error, anyhow::Error>> {
-        Ok(self
-            .registry_load()
-            .await?
-            .graph_ids()
-            .collect::<Vec<_>>())
+        Ok(self.registry_load().await?.graph_ids().collect::<Vec<_>>())
     }
 
     /// Convergently record one graph lifecycle level in the registry.
@@ -147,11 +145,7 @@ impl Journal {
     ) -> Result<(), Fault<Never, anyhow::Error, anyhow::Error>> {
         for _ in 0..8 {
             let stream = self.named_stream(REGISTRY_STREAM)?;
-            let tail = stream
-                .check_tail()
-                .await
-                .map_err(never_transient)?
-                .seq_num;
+            let tail = stream.check_tail().await.map_err(never_transient)?.seq_num;
             let registry = self.registry_load_until(&stream, tail).await?;
             let current = registry.retirement(graph_id);
             if current == Some(retired) || (!retired && current.is_some()) {
@@ -194,11 +188,7 @@ impl Journal {
     ) -> Result<RegisteredComponentSpec, Fault<Never, anyhow::Error, anyhow::Error>> {
         for _ in 0..8 {
             let stream = self.named_stream(SPEC_STREAM)?;
-            let tail = stream
-                .check_tail()
-                .await
-                .map_err(never_transient)?
-                .seq_num;
+            let tail = stream.check_tail().await.map_err(never_transient)?.seq_num;
             let mut history = self.spec_history_load_until(&stream, tail).await?;
             if let Some(stored) = history.catalog().get(component.hash()) {
                 if stored == &component {
@@ -236,11 +226,7 @@ impl Journal {
         &self,
     ) -> Result<SpecCatalog, Fault<Never, anyhow::Error, anyhow::Error>> {
         let stream = self.named_stream(SPEC_STREAM)?;
-        let tail = stream
-            .check_tail()
-            .await
-            .map_err(never_transient)?
-            .seq_num;
+        let tail = stream.check_tail().await.map_err(never_transient)?.seq_num;
         Ok(self
             .spec_history_load_until(&stream, tail)
             .await?
@@ -252,11 +238,7 @@ impl Journal {
         &self,
     ) -> Result<RegistryHistory, Fault<Never, anyhow::Error, anyhow::Error>> {
         let stream = self.named_stream(REGISTRY_STREAM)?;
-        let tail = stream
-            .check_tail()
-            .await
-            .map_err(never_transient)?
-            .seq_num;
+        let tail = stream.check_tail().await.map_err(never_transient)?.seq_num;
         self.registry_load_until(&stream, tail).await
     }
 
@@ -272,9 +254,7 @@ impl Journal {
         let mut history = RegistryHistory::default();
         while let Some(item) = parsed.next().await {
             let event = item.map_err(decode_invariant)?;
-            history
-                .apply(event)
-                .map_err(never_invariant)?;
+            history.apply(event).map_err(never_invariant)?;
         }
         Ok(history)
     }
@@ -291,9 +271,7 @@ impl Journal {
         let mut history = SpecHistory::default();
         while let Some(item) = parsed.next().await {
             let event = item.map_err(decode_invariant)?;
-            history
-                .apply(event)
-                .map_err(never_invariant)?;
+            history.apply(event).map_err(never_invariant)?;
         }
         Ok(history)
     }
@@ -354,8 +332,7 @@ async fn append_record(
     body: Vec<u8>,
 ) -> Result<u64, Fault<JournalError, anyhow::Error, anyhow::Error>> {
     let record = AppendRecord::new(body).map_err(journal_invariant)?;
-    let batch = AppendRecordBatch::try_from_iter([record])
-        .map_err(journal_invariant)?;
+    let batch = AppendRecordBatch::try_from_iter([record]).map_err(journal_invariant)?;
     match stream
         .append(AppendInput::new(batch).with_match_seq_num(expected_tail))
         .await
@@ -368,9 +345,7 @@ async fn append_record(
     }
 }
 
-fn classify_graph_read(
-    error: S2Error,
-) -> Fault<JournalError, anyhow::Error, anyhow::Error> {
+fn classify_graph_read(error: S2Error) -> Fault<JournalError, anyhow::Error, anyhow::Error> {
     match &error {
         S2Error::Server(response)
             if response.code.to_ascii_lowercase().contains("not_found")

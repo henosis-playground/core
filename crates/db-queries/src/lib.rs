@@ -41,7 +41,8 @@ pub struct MetadataDb {
 }
 
 impl MetadataDb {
-    /// Connect to a database whose schema has already been migrated by Diesel CLI.
+    /// Connect to a database whose schema has already been migrated by Diesel
+    /// CLI.
     pub async fn connect(database_url: &str) -> anyhow::Result<Self> {
         let manager = AsyncDieselConnectionManager::<AsyncPgConnection>::new(database_url);
         let pool = Pool::builder().max_size(8).build(manager).await?;
@@ -56,22 +57,15 @@ pub trait ConnectorCheckpointStore {
         graph_id: GraphId,
         connector: &ConnectorKey,
     ) -> impl Future<
-        Output = Result<
-            Option<ConnectorCheckpoint>,
-            Fault<Never, anyhow::Error, anyhow::Error>,
-        >,
+        Output = Result<Option<ConnectorCheckpoint>, Fault<Never, anyhow::Error, anyhow::Error>>,
     > + Send;
 
     /// Advance a checkpoint monotonically; an older resend cannot regress it.
     fn connector_checkpoint_upsert(
         &self,
         checkpoint: NewConnectorCheckpoint,
-    ) -> impl Future<
-        Output = Result<
-            (),
-            Fault<CheckpointUpsertError, anyhow::Error, anyhow::Error>,
-        >,
-    > + Send;
+    ) -> impl Future<Output = Result<(), Fault<CheckpointUpsertError, anyhow::Error, anyhow::Error>>>
+    + Send;
 }
 
 impl ConnectorCheckpointStore for MetadataDb {
@@ -79,10 +73,7 @@ impl ConnectorCheckpointStore for MetadataDb {
         &self,
         graph_id: GraphId,
         connector: &ConnectorKey,
-    ) -> Result<
-        Option<ConnectorCheckpoint>,
-        Fault<Never, anyhow::Error, anyhow::Error>,
-    > {
+    ) -> Result<Option<ConnectorCheckpoint>, Fault<Never, anyhow::Error, anyhow::Error>> {
         let mut connection = self.pool.get().await.map_err(pool_transient)?;
         let row = DbConnectorCheckpoint::query()
             .filter(checkpoint_filter(graph_id.as_uuid(), connector.as_str()))
@@ -90,22 +81,16 @@ impl ConnectorCheckpointStore for MetadataDb {
             .await
             .optional()
             .map_err(diesel_fault)?;
-        row.map(TryInto::try_into)
-            .transpose()
-            .map_err(invariant)
+        row.map(TryInto::try_into).transpose().map_err(invariant)
     }
 
     async fn connector_checkpoint_upsert(
         &self,
         checkpoint: NewConnectorCheckpoint,
     ) -> Result<(), Fault<CheckpointUpsertError, anyhow::Error, anyhow::Error>> {
-        let row = DbConnectorCheckpoint::try_from_new(checkpoint)
-            .map_err(|_| checkpoint_domain())?;
-        let mut connection = self
-            .pool
-            .get()
-            .await
-            .map_err(checkpoint_transient)?;
+        let row =
+            DbConnectorCheckpoint::try_from_new(checkpoint).map_err(|_| checkpoint_domain())?;
+        let mut connection = self.pool.get().await.map_err(checkpoint_transient)?;
         let upsert = diesel::insert_into(connector_checkpoints::table)
             .values(&row)
             .on_conflict((
@@ -119,12 +104,12 @@ impl ConnectorCheckpointStore for MetadataDb {
             );
         diesel::query_dsl::methods::FilterDsl::filter(
             upsert,
-                connector_checkpoints::accepted_sequence
-                    .lt(excluded(connector_checkpoints::accepted_sequence)),
-            )
-            .execute(&mut connection)
-            .await
-            .map_err(diesel_fault_with_domain)?;
+            connector_checkpoints::accepted_sequence
+                .lt(excluded(connector_checkpoints::accepted_sequence)),
+        )
+        .execute(&mut connection)
+        .await
+        .map_err(diesel_fault_with_domain)?;
         Ok(())
     }
 }
@@ -134,9 +119,7 @@ pub trait GraphLabelStore {
     fn graph_label_upsert(
         &self,
         label: NewGraphLabel,
-    ) -> impl Future<
-        Output = Result<GraphLabel, Fault<Never, anyhow::Error, anyhow::Error>>,
-    > + Send;
+    ) -> impl Future<Output = Result<GraphLabel, Fault<Never, anyhow::Error, anyhow::Error>>> + Send;
 }
 
 impl GraphLabelStore for MetadataDb {

@@ -11,11 +11,7 @@ pub struct ConnectorCheckpoint {
 impl ConnectorCheckpoint {
     #[doc(hidden)]
     #[must_use]
-    pub const fn new(
-        graph_id: GraphId,
-        connector: ConnectorKey,
-        accepted_sequence: u64,
-    ) -> Self {
+    pub const fn new(graph_id: GraphId, connector: ConnectorKey, accepted_sequence: u64) -> Self {
         Self {
             graph_id,
             connector,

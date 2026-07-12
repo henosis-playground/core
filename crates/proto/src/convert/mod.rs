@@ -10,7 +10,9 @@ use henosis_types as domain;
 use thiserror::Error;
 
 pub use fingerprint::*;
+pub use value::reconcile_slice_request;
 pub use value::register_component_spec;
+pub use value::retire_slice_request;
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum ConversionError {

@@ -405,3 +405,23 @@ impl From<&domain::GraphSlice> for pb::GraphSlice {
         }
     }
 }
+
+#[must_use]
+pub fn reconcile_slice_request(
+    slice: &domain::GraphSlice,
+    superseded: &[domain::RegisteredComponentSpec],
+) -> pb::ReconcileSliceRequest {
+    pb::ReconcileSliceRequest {
+        slice: MessageField::some(slice.into()),
+        superseded_components: superseded.iter().map(Into::into).collect(),
+        ..Default::default()
+    }
+}
+
+#[must_use]
+pub fn retire_slice_request(slice: &domain::GraphSlice) -> pb::RetireSliceRequest {
+    pb::RetireSliceRequest {
+        slice: MessageField::some(slice.into()),
+        ..Default::default()
+    }
+}

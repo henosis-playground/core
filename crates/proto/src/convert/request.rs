@@ -112,6 +112,41 @@ impl TryFrom<&view::RetireGraphRequestView<'_>> for domain::RetireGraph {
     }
 }
 
+impl TryFrom<&view::GetGraphRequestView<'_>> for domain::GetGraph {
+    type Error = ConversionError;
+
+    fn try_from(value: &view::GetGraphRequestView<'_>) -> Result<Self, Self::Error> {
+        Ok(Self::new(graph_id(value.graph_id, "graph_id")?))
+    }
+}
+
+impl TryFrom<&view::WatchGraphRequestView<'_>> for domain::WatchGraph {
+    type Error = ConversionError;
+
+    fn try_from(value: &view::WatchGraphRequestView<'_>) -> Result<Self, Self::Error> {
+        Ok(Self::new(
+            graph_id(value.graph_id, "graph_id")?,
+            value.after_sequence,
+        ))
+    }
+}
+
+impl TryFrom<&view::FetchSliceRequestView<'_>> for domain::FetchSlice {
+    type Error = ConversionError;
+
+    fn try_from(value: &view::FetchSliceRequestView<'_>) -> Result<Self, Self::Error> {
+        Ok(Self::new(
+            graph_id(value.graph_id, "graph_id")?,
+            value
+                .connector
+                .ok_or_else(|| missing("connector"))?
+                .parse()
+                .map_err(|error| invalid("connector", error))?,
+            value.sequence.ok_or_else(|| missing("sequence"))?,
+        ))
+    }
+}
+
 impl TryFrom<&view::ReportSliceRequestView<'_>> for domain::ReportSlice {
     type Error = ConversionError;
 

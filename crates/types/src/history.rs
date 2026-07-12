@@ -333,7 +333,8 @@ impl GraphHistory {
     pub fn apply(&mut self, record: SequencedGraphEvent) -> Result<(), HistoryError> {
         let expected = self
             .head_sequence
-            .map_or(0, |sequence| sequence.saturating_add(1));
+            .map(|sequence| sequence.saturating_add(1))
+            .unwrap_or(0);
         if record.sequence != expected {
             return Err(HistoryError::NonContiguous);
         }
@@ -536,7 +537,8 @@ impl GraphHistory {
     #[must_use]
     pub fn next_sequence(&self) -> u64 {
         self.head_sequence
-            .map_or(0, |sequence| sequence.saturating_add(1))
+            .map(|sequence| sequence.saturating_add(1))
+            .unwrap_or(0)
     }
 
     #[must_use]

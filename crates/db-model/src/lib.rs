@@ -19,9 +19,7 @@ pub struct DbConnectorCheckpoint {
 }
 
 impl DbConnectorCheckpoint {
-    pub fn try_from_new(
-        value: domain::NewConnectorCheckpoint,
-    ) -> Result<Self, SequenceOutOfRange> {
+    pub fn try_from_new(value: domain::NewConnectorCheckpoint) -> Result<Self, SequenceOutOfRange> {
         Ok(Self {
             graph_id: value.graph_id.as_uuid(),
             connector: value.connector.to_string(),
