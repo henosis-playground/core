@@ -20,6 +20,7 @@ henosis-types.workspace = true
 http.workspace = true
 iddqd.workspace = true
 newtype-uuid.workspace = true
+scoped-futures.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

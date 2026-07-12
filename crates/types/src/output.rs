@@ -7,6 +7,7 @@ use iddqd::IdOrdItem;
 use iddqd::id_upcast;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// JSON outputs published for one component-spec identity.
 pub struct ComponentOutputs {
     component_spec_hash: ComponentSpecHash,
     values_json: Vec<u8>,
@@ -43,6 +44,7 @@ impl IdOrdItem for ComponentOutputs {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Latest durable outputs published by one connector.
 pub struct PublishedSliceOutputs {
     generation: u64,
     connector: ConnectorKey,
@@ -115,6 +117,7 @@ impl IdOrdItem for PublishedSliceOutputs {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Durable publication event before its graph-stream sequence is assigned.
 pub struct OutputPublication {
     pub generation: u64,
     pub input_sequence: u64,

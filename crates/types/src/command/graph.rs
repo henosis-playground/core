@@ -1,34 +1,9 @@
 use crate::ComponentReplacement;
 use crate::ComponentSpecHash;
-use crate::ConnectorKey;
 use crate::GraphId;
-use crate::PublicationId;
-use crate::RegisteredComponentSpec;
 use crate::RequestId;
-use crate::SliceReport;
 
-#[derive(Clone, Debug)]
-pub struct RegisterComponentSpec {
-    component: RegisteredComponentSpec,
-}
-
-impl RegisterComponentSpec {
-    #[must_use]
-    pub const fn new(component: RegisteredComponentSpec) -> Self {
-        Self { component }
-    }
-
-    #[must_use]
-    pub const fn component(&self) -> &RegisteredComponentSpec {
-        &self.component
-    }
-
-    #[must_use]
-    pub fn into_component(self) -> RegisteredComponentSpec {
-        self.component
-    }
-}
-
+/// Creates generation one of a graph.
 #[derive(Clone, Debug)]
 pub struct CreateGraph {
     graph_id: GraphId,
@@ -66,6 +41,7 @@ impl CreateGraph {
     }
 }
 
+/// Adds component specs to the next graph generation.
 #[derive(Clone, Debug)]
 pub struct AddComponents {
     graph_id: GraphId,
@@ -111,6 +87,7 @@ impl AddComponents {
     }
 }
 
+/// Replaces component specs in the next graph generation.
 #[derive(Clone, Debug)]
 pub struct UpdateComponents {
     graph_id: GraphId,
@@ -156,6 +133,7 @@ impl UpdateComponents {
     }
 }
 
+/// Removes component specs from the next graph generation.
 #[derive(Clone, Debug)]
 pub struct RemoveComponents {
     graph_id: GraphId,
@@ -201,6 +179,7 @@ impl RemoveComponents {
     }
 }
 
+/// Retires an active graph at an expected generation.
 #[derive(Clone, Copy, Debug)]
 pub struct RetireGraph {
     graph_id: GraphId,
@@ -234,48 +213,25 @@ impl RetireGraph {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct ReportSlice {
-    request_id: RequestId,
-    report: SliceReport,
-    publication_id: Option<PublicationId>,
-}
-
-impl ReportSlice {
-    #[must_use]
-    pub const fn new(
-        request_id: RequestId,
-        report: SliceReport,
-        publication_id: Option<PublicationId>,
-    ) -> Self {
-        Self {
-            request_id,
-            report,
-            publication_id,
-        }
-    }
-
-    #[must_use]
-    pub const fn request_id(&self) -> RequestId {
-        self.request_id
-    }
-
-    #[must_use]
-    pub const fn report(&self) -> &SliceReport {
-        &self.report
-    }
-
-    #[must_use]
-    pub const fn publication_id(&self) -> Option<PublicationId> {
-        self.publication_id
-    }
-}
-
+/// Reads the current state of one graph.
 #[derive(Clone, Copy, Debug)]
 pub struct GetGraph {
     graph_id: GraphId,
 }
 
+impl GetGraph {
+    #[must_use]
+    pub const fn new(graph_id: GraphId) -> Self {
+        Self { graph_id }
+    }
+
+    #[must_use]
+    pub const fn graph_id(self) -> GraphId {
+        self.graph_id
+    }
+}
+
+/// Reads one accepted generation of a graph.
 #[derive(Clone, Copy, Debug)]
 pub struct GetGraphGeneration {
     graph_id: GraphId,
@@ -302,18 +258,7 @@ impl GetGraphGeneration {
     }
 }
 
-impl GetGraph {
-    #[must_use]
-    pub const fn new(graph_id: GraphId) -> Self {
-        Self { graph_id }
-    }
-
-    #[must_use]
-    pub const fn graph_id(self) -> GraphId {
-        self.graph_id
-    }
-}
-
+/// Watches durable and volatile state changes for one graph.
 #[derive(Clone, Copy, Debug)]
 pub struct WatchGraph {
     graph_id: GraphId,
@@ -337,38 +282,5 @@ impl WatchGraph {
     #[must_use]
     pub const fn after_sequence(self) -> Option<u64> {
         self.after_sequence
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct FetchSlice {
-    graph_id: GraphId,
-    connector: ConnectorKey,
-    sequence: u64,
-}
-
-impl FetchSlice {
-    #[must_use]
-    pub const fn new(graph_id: GraphId, connector: ConnectorKey, sequence: u64) -> Self {
-        Self {
-            graph_id,
-            connector,
-            sequence,
-        }
-    }
-
-    #[must_use]
-    pub const fn graph_id(&self) -> GraphId {
-        self.graph_id
-    }
-
-    #[must_use]
-    pub const fn connector(&self) -> &ConnectorKey {
-        &self.connector
-    }
-
-    #[must_use]
-    pub const fn sequence(&self) -> u64 {
-        self.sequence
     }
 }

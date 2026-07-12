@@ -1,290 +1,33 @@
 use iddqd::IdHashItem;
 use iddqd::IdHashMap;
-use iddqd::IdOrdItem;
 use iddqd::IdOrdMap;
 use iddqd::id_upcast;
 use thiserror::Error;
 
+use super::receipt::OutputRequestKey;
+use super::receipt::PublicationKey;
 use crate::ConnectorKey;
 use crate::DurableGraphState;
 use crate::Fingerprint;
 use crate::Graph;
+use crate::GraphEvent;
 use crate::GraphId;
 use crate::GraphLifecycle;
+use crate::MutationKind;
+use crate::MutationReceipt;
+use crate::MutationResponse;
 use crate::OutputPublication;
+use crate::OutputRequestReceipt;
 use crate::PublicationId;
+use crate::PublicationReceipt;
 use crate::PublishedSliceOutputs;
+use crate::RecordedSliceReport;
 use crate::RequestId;
+use crate::SequencedGraphEvent;
+use crate::SequencedGraphState;
 use crate::SliceReport;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum MutationKind {
-    Create,
-    AddComponents,
-    UpdateComponents,
-    RemoveComponents,
-    Retire,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum MutationResponse {
-    Graph(Graph),
-    Retired {
-        graph_id: GraphId,
-        last_generation: u64,
-    },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct MutationReceipt {
-    request_id: RequestId,
-    kind: MutationKind,
-    fingerprint: Fingerprint,
-    response: MutationResponse,
-}
-
-impl MutationReceipt {
-    #[must_use]
-    pub const fn request_id(&self) -> RequestId {
-        self.request_id
-    }
-
-    #[must_use]
-    pub const fn kind(&self) -> MutationKind {
-        self.kind
-    }
-
-    #[must_use]
-    pub const fn fingerprint(&self) -> Fingerprint {
-        self.fingerprint
-    }
-
-    #[must_use]
-    pub const fn response(&self) -> &MutationResponse {
-        &self.response
-    }
-}
-
-impl IdHashItem for MutationReceipt {
-    type Key<'a> = RequestId;
-
-    id_upcast!();
-
-    fn key(&self) -> Self::Key<'_> {
-        self.request_id
-    }
-}
-
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct OutputRequestKey<'a> {
-    connector: &'a ConnectorKey,
-    request_id: RequestId,
-}
-
-impl<'a> OutputRequestKey<'a> {
-    #[must_use]
-    pub const fn new(connector: &'a ConnectorKey, request_id: RequestId) -> Self {
-        Self {
-            connector,
-            request_id,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct OutputRequestReceipt {
-    connector: ConnectorKey,
-    request_id: RequestId,
-    fingerprint: Fingerprint,
-    publication_sequence: Option<u64>,
-}
-
-impl OutputRequestReceipt {
-    #[must_use]
-    pub const fn fingerprint(&self) -> Fingerprint {
-        self.fingerprint
-    }
-
-    #[must_use]
-    pub const fn publication_sequence(&self) -> Option<u64> {
-        self.publication_sequence
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct RecordedSliceReport {
-    pub report: SliceReport,
-    pub request_id: RequestId,
-    pub request_fingerprint: Fingerprint,
-    pub publication_id: Option<PublicationId>,
-    pub publication_fingerprint: Option<Fingerprint>,
-}
-
-impl IdHashItem for OutputRequestReceipt {
-    type Key<'a> = OutputRequestKey<'a>;
-
-    id_upcast!();
-
-    fn key(&self) -> Self::Key<'_> {
-        OutputRequestKey::new(&self.connector, self.request_id)
-    }
-}
-
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct PublicationKey<'a> {
-    connector: &'a ConnectorKey,
-    publication_id: PublicationId,
-}
-
-impl<'a> PublicationKey<'a> {
-    #[must_use]
-    pub const fn new(connector: &'a ConnectorKey, publication_id: PublicationId) -> Self {
-        Self {
-            connector,
-            publication_id,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PublicationReceipt {
-    connector: ConnectorKey,
-    publication_id: PublicationId,
-    fingerprint: Fingerprint,
-    publication_sequence: u64,
-}
-
-impl PublicationReceipt {
-    #[must_use]
-    pub const fn fingerprint(&self) -> Fingerprint {
-        self.fingerprint
-    }
-
-    #[must_use]
-    pub const fn publication_sequence(&self) -> u64 {
-        self.publication_sequence
-    }
-}
-
-impl IdHashItem for PublicationReceipt {
-    type Key<'a> = PublicationKey<'a>;
-
-    id_upcast!();
-
-    fn key(&self) -> Self::Key<'_> {
-        PublicationKey::new(&self.connector, self.publication_id)
-    }
-}
-
-#[derive(Clone, Debug)]
-pub enum GraphEvent {
-    Created {
-        graph: Graph,
-        request_id: RequestId,
-        request_fingerprint: Fingerprint,
-    },
-    GenerationAccepted {
-        graph: Graph,
-        request_id: RequestId,
-        mutation_kind: MutationKind,
-        request_fingerprint: Fingerprint,
-    },
-    OutputsPublished(OutputPublication),
-    SliceReported(RecordedSliceReport),
-    Retired {
-        graph_id: GraphId,
-        last_generation: u64,
-        request_id: RequestId,
-        request_fingerprint: Fingerprint,
-    },
-}
-
-#[derive(Clone, Copy, Debug)]
-pub enum RegistryEvent {
-    Created {
-        graph_id: GraphId,
-        request_id: RequestId,
-    },
-    Retired {
-        graph_id: GraphId,
-        request_id: RequestId,
-    },
-}
-
-#[derive(Clone, Debug)]
-pub struct SequencedGraphEvent {
-    sequence: u64,
-    event: GraphEvent,
-}
-
-impl SequencedGraphEvent {
-    #[must_use]
-    pub const fn new(sequence: u64, event: GraphEvent) -> Self {
-        Self { sequence, event }
-    }
-
-    #[must_use]
-    pub const fn sequence(&self) -> u64 {
-        self.sequence
-    }
-
-    #[must_use]
-    pub const fn event(&self) -> &GraphEvent {
-        &self.event
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct SequencedRegistryEvent {
-    sequence: u64,
-    event: RegistryEvent,
-}
-
-impl SequencedRegistryEvent {
-    #[must_use]
-    pub const fn new(sequence: u64, event: RegistryEvent) -> Self {
-        Self { sequence, event }
-    }
-
-    #[must_use]
-    pub const fn sequence(self) -> u64 {
-        self.sequence
-    }
-
-    #[must_use]
-    pub const fn event(self) -> RegistryEvent {
-        self.event
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SequencedGraphState {
-    sequence: u64,
-    state: DurableGraphState,
-}
-
-impl SequencedGraphState {
-    #[must_use]
-    pub const fn sequence(&self) -> u64 {
-        self.sequence
-    }
-
-    #[must_use]
-    pub const fn state(&self) -> &DurableGraphState {
-        &self.state
-    }
-}
-
-impl IdOrdItem for SequencedGraphState {
-    type Key<'a> = u64;
-
-    id_upcast!();
-
-    fn key(&self) -> Self::Key<'_> {
-        self.sequence
-    }
-}
-
+/// Folded state and idempotency indexes for one graph stream.
 #[derive(Clone, Debug)]
 pub struct GraphHistory {
     graph_id: GraphId,
@@ -299,6 +42,7 @@ pub struct GraphHistory {
     reports: IdOrdMap<SliceReport>,
 }
 
+/// Invalid graph-stream history.
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum HistoryError {
     #[error("graph stream sequence is not contiguous")]
@@ -328,6 +72,8 @@ pub enum HistoryError {
 }
 
 impl GraphHistory {
+    // === Construction and folding ===
+
     #[must_use]
     pub fn new(graph_id: GraphId) -> Self {
         Self {
@@ -614,6 +360,8 @@ impl GraphHistory {
         self.durable.as_mut().ok_or(HistoryError::InvalidLifecycle)
     }
 
+    // === History queries ===
+
     #[must_use]
     pub const fn graph_id(&self) -> GraphId {
         self.graph_id
@@ -750,73 +498,5 @@ impl IdHashItem for GraphHistory {
 
     fn key(&self) -> Self::Key<'_> {
         self.graph_id
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RegistryGraph {
-    graph_id: GraphId,
-    retired: bool,
-}
-
-impl IdOrdItem for RegistryGraph {
-    type Key<'a> = GraphId;
-
-    id_upcast!();
-
-    fn key(&self) -> Self::Key<'_> {
-        self.graph_id
-    }
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct RegistryHistory {
-    graphs: IdOrdMap<RegistryGraph>,
-    next_sequence: u64,
-}
-
-#[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
-pub enum RegistryHistoryError {
-    #[error("registry stream sequence is not contiguous")]
-    NonContiguous,
-    #[error("registry contains duplicate graph creation")]
-    DuplicateCreation,
-    #[error("registry retires a graph that is not active")]
-    InvalidRetirement,
-}
-
-impl RegistryHistory {
-    pub fn apply(&mut self, record: SequencedRegistryEvent) -> Result<(), RegistryHistoryError> {
-        if record.sequence() != self.next_sequence {
-            return Err(RegistryHistoryError::NonContiguous);
-        }
-        match record.event() {
-            RegistryEvent::Created { graph_id, .. } => self
-                .graphs
-                .insert_unique(RegistryGraph {
-                    graph_id,
-                    retired: false,
-                })
-                .map_err(|_| RegistryHistoryError::DuplicateCreation)?,
-            RegistryEvent::Retired { graph_id, .. } => {
-                let mut graph = self
-                    .graphs
-                    .get_mut(&graph_id)
-                    .filter(|graph| !graph.retired)
-                    .ok_or(RegistryHistoryError::InvalidRetirement)?;
-                graph.retired = true;
-            }
-        }
-        self.next_sequence = self.next_sequence.saturating_add(1);
-        Ok(())
-    }
-
-    pub fn graph_ids(&self) -> impl ExactSizeIterator<Item = GraphId> + '_ {
-        self.graphs.iter().map(|graph| graph.graph_id)
-    }
-
-    #[must_use]
-    pub fn retirement(&self, graph_id: GraphId) -> Option<bool> {
-        self.graphs.get(&graph_id).map(|graph| graph.retired)
     }
 }

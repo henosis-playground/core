@@ -53,6 +53,8 @@ impl Api {
 }
 
 impl GraphService for Api {
+    // === RegisterComponentSpec ===
+
     async fn register_component_spec<'a>(
         &'a self,
         context: RequestContext,
@@ -73,6 +75,8 @@ impl GraphService for Api {
         }))
     }
 
+    // === CreateGraph ===
+
     async fn create_graph<'a>(
         &'a self,
         context: RequestContext,
@@ -90,6 +94,8 @@ impl GraphService for Api {
             ..Default::default()
         }))
     }
+
+    // === AddComponents ===
 
     async fn add_components<'a>(
         &'a self,
@@ -109,6 +115,8 @@ impl GraphService for Api {
             ..Default::default()
         }))
     }
+
+    // === UpdateComponents ===
 
     async fn update_components<'a>(
         &'a self,
@@ -130,6 +138,8 @@ impl GraphService for Api {
         }))
     }
 
+    // === RemoveComponents ===
+
     async fn remove_components<'a>(
         &'a self,
         context: RequestContext,
@@ -150,6 +160,8 @@ impl GraphService for Api {
         }))
     }
 
+    // === GetGraph ===
+
     async fn get_graph<'a>(
         &'a self,
         context: RequestContext,
@@ -167,6 +179,8 @@ impl GraphService for Api {
             ..Default::default()
         }))
     }
+
+    // === GetGraphGeneration ===
 
     async fn get_graph_generation<'a>(
         &'a self,
@@ -195,6 +209,8 @@ impl GraphService for Api {
         }))
     }
 
+    // === RetireGraph ===
+
     async fn retire_graph<'a>(
         &'a self,
         context: RequestContext,
@@ -213,6 +229,8 @@ impl GraphService for Api {
             ..Default::default()
         }))
     }
+
+    // === WatchGraph ===
 
     async fn watch_graph(
         &self,
@@ -282,6 +300,8 @@ impl GraphService for Api {
 }
 
 impl ConnectorCallbackService for Api {
+    // === ReportSlice ===
+
     async fn report_slice<'a>(
         &'a self,
         context: RequestContext,
@@ -299,6 +319,8 @@ impl ConnectorCallbackService for Api {
             ..Default::default()
         }))
     }
+
+    // === FetchSlice ===
 
     async fn fetch_slice<'a>(
         &'a self,

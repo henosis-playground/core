@@ -13,6 +13,7 @@ use henosis_types::ConnectorKey;
 use henosis_types::GraphHistory;
 use henosis_types::GraphId;
 use henosis_types::NewConnectorCheckpoint;
+use scoped_futures::ScopedFutureExt;
 use tokio::time::sleep;
 use tracing::Span;
 use tracing::field::Empty;
@@ -75,7 +76,14 @@ impl Orchestrator {
             for connector in connectors_for_sequence(&history, &specs, state.sequence())? {
                 let checkpoint = self
                     .metadata
-                    .connector_checkpoint_get(graph_id, &connector)
+                    .transaction(|connection| {
+                        async {
+                            connection
+                                .connector_checkpoint_get(graph_id, &connector)
+                                .await
+                        }
+                        .scope_boxed()
+                    })
                     .await
                     .map_err(anyhow::Error::new)?;
                 if checkpoint
@@ -124,10 +132,17 @@ impl Orchestrator {
             match reconcile(config, request.clone()).await {
                 Ok(accepted) if accepted >= sequence => {
                     self.metadata
-                        .connector_checkpoint_upsert(NewConnectorCheckpoint {
-                            graph_id,
-                            connector: connector.clone(),
-                            accepted_sequence: accepted,
+                        .transaction(|connection| {
+                            async move {
+                                connection
+                                    .connector_checkpoint_upsert(NewConnectorCheckpoint {
+                                        graph_id,
+                                        connector: connector.clone(),
+                                        accepted_sequence: accepted,
+                                    })
+                                    .await
+                            }
+                            .scope_boxed()
                         })
                         .await
                         .map_err(anyhow::Error::new)?;

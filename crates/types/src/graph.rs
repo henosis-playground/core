@@ -7,6 +7,7 @@ use crate::ComponentSpecHash;
 use crate::GraphId;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// One component-spec identity included in a graph generation.
 pub struct GraphComponent {
     spec_hash: ComponentSpecHash,
 }
@@ -34,6 +35,7 @@ impl IdOrdItem for GraphComponent {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Unvalidated input used to construct a graph generation.
 pub struct NewGraph {
     pub id: GraphId,
     pub generation: u64,
@@ -49,6 +51,7 @@ pub struct Graph {
 }
 
 #[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
+/// Invalid graph-generation input.
 pub enum GraphError {
     #[error("graph generation must be greater than zero")]
     InvalidGeneration,
@@ -166,6 +169,7 @@ impl IdOrdItem for Graph {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Replacement of one component-spec identity with another.
 pub struct ComponentReplacement {
     current: ComponentSpecHash,
     replacement: ComponentSpecHash,
@@ -192,6 +196,7 @@ impl ComponentReplacement {
 }
 
 #[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
+/// Invalid edit to an accepted graph generation.
 pub enum GraphEditError {
     #[error("an edit must contain at least one component")]
     EmptyEdit,

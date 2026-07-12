@@ -867,6 +867,7 @@ dependencies = [
  "henosis-db-model",
  "henosis-db-schema",
  "henosis-types",
+ "scoped-futures",
  "thiserror",
  "uuid",
  "workspace-hack",
@@ -911,6 +912,7 @@ dependencies = [
  "http",
  "iddqd",
  "newtype-uuid",
+ "scoped-futures",
  "serde",
  "serde_json",
  "thiserror",
@@ -1715,6 +1717,15 @@ dependencies = [
  "quote",
  "serde_derive_internals",
  "syn",
+]
+
+[[package]]
+name = "scoped-futures"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b24aae2d0636530f359e9d5ef0c04669d11c5e756699b27a6a6d845d8329091"
+dependencies = [
+ "pin-project-lite",
 ]
 
 [[package]]

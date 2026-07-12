@@ -39,6 +39,8 @@ use crate::validation::GraphValidationError;
 use crate::validation::validate_graph;
 
 impl Orchestrator {
+    // === Initialization ===
+
     /// Rebuild immutable specs and graph histories, then resume delivery.
     pub async fn initialize(
         self: &Arc<Self>,
@@ -68,6 +70,8 @@ impl Orchestrator {
         Ok(())
     }
 
+    // === RegisterComponentSpec ===
+
     /// Durably register a content-addressed component spec before graph use.
     pub async fn component_spec_register(
         &self,
@@ -86,6 +90,8 @@ impl Orchestrator {
         *self.specs.write().await = catalog;
         Ok(registered)
     }
+
+    // === CreateGraph ===
 
     /// Accept generation one and add the graph to the discovery registry.
     pub async fn graph_create(
@@ -139,6 +145,8 @@ impl Orchestrator {
         Ok(graph)
     }
 
+    // === EditGraph ===
+
     pub async fn graph_add_components(
         self: &Arc<Self>,
         command: AddComponents,
@@ -186,6 +194,8 @@ impl Orchestrator {
         )
         .await
     }
+
+    // === ReadGraph ===
 
     pub async fn graph_get(
         &self,
@@ -243,6 +253,8 @@ impl Orchestrator {
         ))
     }
 
+    // === RetireGraph ===
+
     pub async fn graph_retire(
         self: &Arc<Self>,
         command: RetireGraph,
@@ -296,6 +308,8 @@ impl Orchestrator {
         self.schedule_delivery(graph_id).await;
         Ok((graph_id, generation))
     }
+
+    // === Internal operations ===
 
     async fn graph_edit(
         self: &Arc<Self>,
@@ -387,6 +401,8 @@ impl Orchestrator {
             .map_err(|error| error.squash())
     }
 }
+
+// === Replay helpers ===
 
 fn replay_graph(
     history: &GraphHistory,
