@@ -8,10 +8,15 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+anyhow.workspace = true
 diesel.workspace = true
 diesel-async.workspace = true
+faultline.workspace = true
 henosis-db-model.workspace = true
 henosis-db-schema.workspace = true
+henosis-types.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [lints]

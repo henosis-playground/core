@@ -45,6 +45,10 @@ lint: check-fmt clippy check-deny check-proto check-pre-commit
 test *flags:
     cargo nextest run --cargo-profile testing --no-tests=pass {{ flags }}
 
+# Apply root db/migrations and verify the generated Rust schema is unchanged.
+db-migrate *flags:
+    diesel migration run --locked-schema {{ flags }}
+
 doc *flags:
     RUSTDOCFLAGS="--cfg docsrs" cargo doc --all-features --no-deps --document-private-items --keep-going {{ flags }}
 

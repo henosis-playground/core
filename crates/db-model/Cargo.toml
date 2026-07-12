@@ -10,6 +10,9 @@ publish.workspace = true
 [dependencies]
 diesel.workspace = true
 henosis-db-schema.workspace = true
+henosis-types.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [lints]
