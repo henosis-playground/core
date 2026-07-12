@@ -1,0 +1,19 @@
+[package]
+name = "henosis-core-server"
+version = "0.0.0"
+description = "ConnectRPC server for the Henosis graph orchestrator"
+repository.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+buffa.workspace = true
+connectrpc.workspace = true
+faultline.workspace = true
+henosis-orchestrator.workspace = true
+henosis-proto.workspace = true
+workspace-hack = { version = "0.0.0", path = "../../crates/workspace-hack" }
+
+[lints]
+workspace = true

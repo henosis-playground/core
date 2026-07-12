@@ -1,0 +1,16 @@
+[package]
+name = "henosis-journal"
+version = "0.0.0"
+description = "S2 journal access for Henosis graph lifecycle streams"
+repository.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+faultline.workspace = true
+s2-sdk.workspace = true
+workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+
+[lints]
+workspace = true

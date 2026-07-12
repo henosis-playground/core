@@ -8,6 +8,68 @@ publish.workspace = true
 description = "workspace-hack package, managed by hakari"
 
 ### BEGIN HAKARI SECTION
+[dependencies]
+anyhow = { version = "1" }
+bytes = { version = "1", features = ["serde"] }
+diesel = { version = "2", default-features = false, features = [
+  "i-implement-a-third-party-backend-and-opt-into-breaking-changes",
+  "postgres_backend",
+] }
+either = { version = "1", features = ["serde", "use_std"] }
+flate2 = { version = "1", features = ["zlib-rs"] }
+futures-channel = { version = "0.3", features = ["sink"] }
+futures-task = { version = "0.3", default-features = false, features = ["std"] }
+futures-util = { version = "0.3", features = ["channel", "io", "sink"] }
+hyper = { version = "1", features = ["client", "http1", "http2", "server"] }
+hyper-util = { version = "0.1", features = [
+  "client-legacy",
+  "server-auto",
+  "server-graceful",
+] }
+percent-encoding = { version = "2" }
+serde = { version = "1", features = ["alloc", "derive"] }
+serde_core = { version = "1", default-features = false, features = [
+  "alloc",
+  "result",
+  "std",
+] }
+slab = { version = "0.4" }
+smallvec = { version = "1", default-features = false, features = ["const_new"] }
+tokio = { version = "1", features = [
+  "io-util",
+  "macros",
+  "net",
+  "rt",
+  "sync",
+  "time",
+] }
+tokio-util = { version = "0.7", features = ["codec", "io", "rt"] }
+tracing = { version = "0.1" }
+
+[build-dependencies]
+anyhow = { version = "1" }
+darling = { version = "0.21" }
+darling_core = { version = "0.21", default-features = false, features = [
+  "suggestions",
+] }
+either = { version = "1", features = ["serde", "use_std"] }
+serde = { version = "1", features = ["alloc", "derive"] }
+serde_core = { version = "1", default-features = false, features = [
+  "alloc",
+  "result",
+  "std",
+] }
+syn = { version = "2", features = [
+  "extra-traits",
+  "fold",
+  "full",
+  "visit",
+  "visit-mut",
+] }
+
+[target.aarch64-apple-darwin.dependencies]
+bitflags = { version = "2", default-features = false, features = ["std"] }
+
 ### END HAKARI SECTION
 
 [lints]

@@ -1,9 +1,9 @@
 [workspace]
 resolver = "3"
-members = ["crates/*", "tests/*"]
+members = ["crates/*", "services/*"]
 
 [workspace.package]
-repository = "{{REPOSITORY}}"
+repository = "https://github.com/henosis-playground/core"
 edition = "2024"
 # LINT.IfChange(msrv)
 rust-version = "1.96.0"
@@ -16,7 +16,22 @@ rust-version = "1.96.0"
 publish = false
 
 [workspace.dependencies]
-automod = "1.0.14"
+buffa = "0.8.1"
+connectrpc = { version = "0.8.1", features = ["server"] }
+diesel = { version = "=2.3.11", default-features = false, features = [
+  "postgres_backend",
+] }
+diesel-async = { version = "=0.9.2", features = ["postgres"] }
+faultline = "0.1.0"
+s2-sdk = "=0.31.9"
+
+henosis-db-model = { path = "crates/db-model" }
+henosis-db-queries = { path = "crates/db-queries" }
+henosis-db-schema = { path = "crates/db-schema" }
+henosis-journal = { path = "crates/journal" }
+henosis-orchestrator = { path = "crates/orchestrator" }
+henosis-proto = { path = "crates/proto" }
+henosis-types = { path = "crates/types" }
 
 [workspace.lints.rust]
 rust_2018_idioms = { level = "warn", priority = -1 }

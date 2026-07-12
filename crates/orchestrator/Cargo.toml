@@ -1,0 +1,18 @@
+[package]
+name = "henosis-orchestrator"
+version = "0.0.0"
+description = "Graph lifecycle domain logic for Henosis"
+repository.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+faultline.workspace = true
+henosis-db-queries.workspace = true
+henosis-journal.workspace = true
+henosis-types.workspace = true
+workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+
+[lints]
+workspace = true

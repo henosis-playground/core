@@ -1,6 +1,6 @@
-# {{PROJECT}}
+# core
 
-{{DESCRIPTION}}
+The Henosis graph orchestrator.
 
 ## Layout
 
