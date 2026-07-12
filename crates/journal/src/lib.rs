@@ -145,7 +145,7 @@ impl Journal {
     ) -> Result<(), Fault<Never, anyhow::Error, anyhow::Error>> {
         for _ in 0..8 {
             let stream = self.named_stream(REGISTRY_STREAM)?;
-            let tail = stream.check_tail().await.map_err(never_transient)?.seq_num;
+            let tail = named_tail(&stream).await?;
             let registry = self.registry_load_until(&stream, tail).await?;
             let current = registry.retirement(graph_id);
             if current == Some(retired) || (!retired && current.is_some()) {
@@ -188,7 +188,7 @@ impl Journal {
     ) -> Result<RegisteredComponentSpec, Fault<Never, anyhow::Error, anyhow::Error>> {
         for _ in 0..8 {
             let stream = self.named_stream(SPEC_STREAM)?;
-            let tail = stream.check_tail().await.map_err(never_transient)?.seq_num;
+            let tail = named_tail(&stream).await?;
             let mut history = self.spec_history_load_until(&stream, tail).await?;
             if let Some(stored) = history.catalog().get(component.hash()) {
                 if stored == &component {
@@ -226,7 +226,7 @@ impl Journal {
         &self,
     ) -> Result<SpecCatalog, Fault<Never, anyhow::Error, anyhow::Error>> {
         let stream = self.named_stream(SPEC_STREAM)?;
-        let tail = stream.check_tail().await.map_err(never_transient)?.seq_num;
+        let tail = named_tail(&stream).await?;
         Ok(self
             .spec_history_load_until(&stream, tail)
             .await?
@@ -238,7 +238,7 @@ impl Journal {
         &self,
     ) -> Result<RegistryHistory, Fault<Never, anyhow::Error, anyhow::Error>> {
         let stream = self.named_stream(REGISTRY_STREAM)?;
-        let tail = stream.check_tail().await.map_err(never_transient)?.seq_num;
+        let tail = named_tail(&stream).await?;
         self.registry_load_until(&stream, tail).await
     }
 
@@ -342,6 +342,19 @@ async fn append_record(
             current_tail,
         ))) => Err(Fault::Domain(JournalError::CasConflict { current_tail })),
         Err(error) => Err(Fault::Transient(anyhow::Error::new(error))),
+    }
+}
+
+async fn named_tail(stream: &S2Stream) -> Result<u64, Fault<Never, anyhow::Error, anyhow::Error>> {
+    match stream.check_tail().await {
+        Ok(tail) => Ok(tail.seq_num),
+        Err(S2Error::Server(response))
+            if response.code.to_ascii_lowercase().contains("not_found")
+                || response.message.to_ascii_lowercase().contains("not found") =>
+        {
+            Ok(0)
+        }
+        Err(error) => Err(never_transient(error)),
     }
 }
 
