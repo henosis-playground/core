@@ -172,9 +172,8 @@ impl GraphService for Api {
         &'a self,
         context: RequestContext,
         request: ServiceRequest<'_, pb::GetGraphGenerationRequest>,
-    ) -> ServiceResult<
-        impl connectrpc::Encodable<pb::GetGraphGenerationResponse> + Send + use<'a>,
-    > {
+    ) -> ServiceResult<impl connectrpc::Encodable<pb::GetGraphGenerationResponse> + Send + use<'a>>
+    {
         self.authorize(&context)?;
         let command =
             henosis_types::GetGraphGeneration::try_from(&*request).map_err(conversion_error)?;

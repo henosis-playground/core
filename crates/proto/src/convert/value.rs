@@ -260,7 +260,12 @@ fn contract_failure(
         Some(EnumValue::Known(pb::ContractFailureKind::Resolve)) => {
             domain::ContractFailureKind::Resolve
         }
-        _ => return Err(invalid("diagnostic.contract_failure.kind", "must be specified")),
+        _ => {
+            return Err(invalid(
+                "diagnostic.contract_failure.kind",
+                "must be specified",
+            ));
+        }
     };
     let mut consumed_paths = value
         .consumed_paths
@@ -300,7 +305,10 @@ fn contract_failure(
     })
 }
 
-fn optional_json(value: Option<&[u8]>, field: &'static str) -> Result<Option<Vec<u8>>, ConversionError> {
+fn optional_json(
+    value: Option<&[u8]>,
+    field: &'static str,
+) -> Result<Option<Vec<u8>>, ConversionError> {
     value
         .filter(|value| !value.is_empty())
         .map(|value| normalize_json(value, field))

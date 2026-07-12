@@ -654,10 +654,7 @@ impl GraphHistory {
         self.states.get(&sequence).map(SequencedGraphState::state)
     }
 
-    pub fn reports_for_generation(
-        &self,
-        generation: u64,
-    ) -> impl Iterator<Item = &SliceReport> {
+    pub fn reports_for_generation(&self, generation: u64) -> impl Iterator<Item = &SliceReport> {
         self.reports
             .iter()
             .filter(move |report| report.generation() == generation)
