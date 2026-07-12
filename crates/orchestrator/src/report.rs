@@ -111,9 +111,15 @@ impl Orchestrator {
             .await
             .map_err(map_journal)?;
         *runtime.reports.write().await = history.reports().cloned().collect();
-        publish_history(&runtime, &mut cached, history)?;
+        if publishable {
+            publish_history(&runtime, &mut cached, history)?;
+        } else {
+            *cached = Some(history);
+        }
         drop(cached);
-        self.schedule_delivery(graph_id).await;
+        if publishable {
+            self.schedule_delivery(graph_id).await;
+        }
         let publication_sequence = publishable.then_some(sequence);
         let reports = runtime.reports.read().await.iter().cloned().collect();
         let _ = runtime.events.send(WatchEvent::Volatile { reports });
