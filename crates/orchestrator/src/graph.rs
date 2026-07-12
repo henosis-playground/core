@@ -15,6 +15,7 @@ use henosis_types::GraphEditError;
 use henosis_types::GraphEvent;
 use henosis_types::GraphHistory;
 use henosis_types::GraphState;
+use henosis_types::GraphGenerationState;
 use henosis_types::MutationKind;
 use henosis_types::MutationResponse;
 use henosis_types::NewGraph;
@@ -55,12 +56,13 @@ impl Orchestrator {
             .map_err(|error| error.squash())?;
         for graph_id in graph_ids {
             let runtime = self.runtime(graph_id).await;
-            *runtime.history.lock().await = Some(
-                self.journal
-                    .graph_load(graph_id)
-                    .await
-                    .map_err(map_journal)?,
-            );
+            let history = self
+                .journal
+                .graph_load(graph_id)
+                .await
+                .map_err(map_journal)?;
+            *runtime.reports.write().await = history.reports().cloned().collect();
+            *runtime.history.lock().await = Some(history);
             self.schedule_delivery(graph_id).await;
         }
         Ok(())
@@ -199,6 +201,49 @@ impl Orchestrator {
             .ok_or_else(|| invariant("loaded graph has no state"))?;
         let reports = runtime.reports.read().await.iter().cloned().collect();
         GraphState::new(durable, reports).map_err(|error| Fault::Invariant(Error::new(error)))
+    }
+
+    pub async fn graph_generation_get(
+        &self,
+        command: henosis_types::GetGraphGeneration,
+    ) -> Result<GraphGenerationState, Fault<OrchestratorError, Error, Error>> {
+        let runtime = self.runtime(command.graph_id()).await;
+        let mut cached = runtime.history.lock().await;
+        self.ensure_loaded(command.graph_id(), &mut cached).await?;
+        let history = cached.as_ref().expect("history was loaded");
+        let durable = history
+            .durable_for_generation(command.generation())
+            .ok_or(Fault::<OrchestratorError, Error, Error>::Domain(
+                OrchestratorError::NotFound,
+            ))?;
+        let reports = history
+            .reports_for_generation(command.generation())
+            .cloned()
+            .collect();
+        let graph = durable.graph();
+        let specs = self.specs.read().await;
+        let components = graph
+            .components()
+            .map(|component| {
+                specs
+                    .get(component.spec_hash())
+                    .cloned()
+                    .ok_or_else(|| invariant("generation references an unregistered spec"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let current_lifecycle = history
+            .desired_state()
+            .ok_or_else(|| invariant("loaded graph has no state"))?
+            .lifecycle();
+        let state = GraphState::new(durable, reports).map_err(|error| {
+            Fault::<OrchestratorError, Error, Error>::Invariant(Error::new(error))
+        })?;
+        Ok(GraphGenerationState::new(
+            state,
+            components,
+            current_lifecycle,
+            history.last_published_generation(),
+        ))
     }
 
     pub async fn graph_retire(

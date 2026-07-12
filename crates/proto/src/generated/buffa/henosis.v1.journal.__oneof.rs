@@ -121,6 +121,7 @@ pub mod graph_stream_record_v1 {
             ::buffa::alloc::boxed::Box<super::super::super::OutputsPublishedV1>,
         ),
         GraphRetired(::buffa::alloc::boxed::Box<super::super::super::GraphRetiredV1>),
+        SliceReported(::buffa::alloc::boxed::Box<super::super::super::SliceReportedV1>),
     }
     impl ::buffa::Oneof for Event {}
     impl From<super::super::super::GraphCreatedV1> for Event {
@@ -165,6 +166,16 @@ pub mod graph_stream_record_v1 {
             Self::Some(Event::from(v))
         }
     }
+    impl From<super::super::super::SliceReportedV1> for Event {
+        fn from(v: super::super::super::SliceReportedV1) -> Self {
+            Self::SliceReported(::buffa::alloc::boxed::Box::new(v))
+        }
+    }
+    impl From<super::super::super::SliceReportedV1> for ::core::option::Option<Event> {
+        fn from(v: super::super::super::SliceReportedV1) -> Self {
+            Self::Some(Event::from(v))
+        }
+    }
     impl serde::Serialize for Event {
         fn serialize<S: serde::Serializer>(
             &self,
@@ -184,6 +195,9 @@ pub mod graph_stream_record_v1 {
                 }
                 Self::GraphRetired(v) => {
                     map.serialize_entry("graphRetired", v)?;
+                }
+                Self::SliceReported(v) => {
+                    map.serialize_entry("sliceReported", v)?;
                 }
             }
             map.end()

@@ -6,7 +6,7 @@ use henosis_proto::publication_fingerprint;
 use henosis_proto::report_fingerprint;
 use henosis_types::GraphEvent;
 use henosis_types::GraphHistory;
-use henosis_types::OutputPublication;
+use henosis_types::RecordedSliceReport;
 use henosis_types::ReportSlice;
 
 use crate::Orchestrator;
@@ -42,7 +42,7 @@ impl Orchestrator {
             if receipt.fingerprint() != request_fingerprint {
                 return Err(already_exists("request_id.reused"));
             }
-            return Ok(Some(receipt.publication_sequence()));
+            return Ok(receipt.publication_sequence());
         }
 
         let candidate_publication_fingerprint = command
@@ -55,7 +55,6 @@ impl Orchestrator {
             if receipt.fingerprint() != fingerprint {
                 return Err(already_exists("publication_id.reused"));
             }
-            self.report_store(&runtime, report.clone()).await;
             return Ok(Some(receipt.publication_sequence()));
         }
 
@@ -84,33 +83,22 @@ impl Orchestrator {
             }
             _ => {}
         }
-        self.report_store(&runtime, report.clone()).await;
-        if !publishable {
-            return Ok(None);
-        }
-
-        let publication_id = command
-            .publication_id()
-            .expect("publishable report has publication identity");
-        let publication_fingerprint = candidate_publication_fingerprint
-            .expect("publishable report has publication fingerprint");
-        if history
-            .latest_publication(&connector)
-            .is_some_and(|receipt| receipt.fingerprint() == publication_fingerprint)
+        let publication_id = command.publication_id();
+        if let Some(publication_fingerprint) = candidate_publication_fingerprint
+            && history
+                .latest_publication(&connector)
+                .is_some_and(|receipt| receipt.fingerprint() == publication_fingerprint)
         {
             return Err(failed_precondition(
                 "publication_id.changed_for_unchanged_level",
             ));
         }
-        let event = GraphEvent::OutputsPublished(OutputPublication {
-            generation: report.generation(),
-            input_sequence: report.sequence(),
-            connector,
-            outputs: report.outputs().cloned().collect(),
+        let event = GraphEvent::SliceReported(RecordedSliceReport {
+            report: report.clone(),
             request_id: command.request_id(),
             request_fingerprint,
             publication_id,
-            publication_fingerprint,
+            publication_fingerprint: candidate_publication_fingerprint,
         });
         let sequence = self
             .journal
@@ -122,20 +110,14 @@ impl Orchestrator {
             .graph_load(graph_id)
             .await
             .map_err(map_journal)?;
+        *runtime.reports.write().await = history.reports().cloned().collect();
         publish_history(&runtime, &mut cached, history)?;
         drop(cached);
         self.schedule_delivery(graph_id).await;
-        Ok(Some(sequence))
-    }
-
-    async fn report_store(
-        &self,
-        runtime: &crate::GraphRuntime,
-        report: henosis_types::SliceReport,
-    ) {
-        runtime.reports.write().await.insert_overwrite(report);
+        let publication_sequence = publishable.then_some(sequence);
         let reports = runtime.reports.read().await.iter().cloned().collect();
         let _ = runtime.events.send(WatchEvent::Volatile { reports });
+        Ok(publication_sequence)
     }
 }
 

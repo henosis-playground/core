@@ -3,6 +3,7 @@ edition = "2023";
 package henosis.v1;
 
 import "buf/validate/validate.proto";
+import "henosis/v1/types.proto";
 
 // Every durable envelope is fail-closed: unknown versions and unknown/unset events stop parsing.
 
@@ -63,7 +64,22 @@ message GraphStreamRecordV1 {
     GenerationAcceptedV1 generation_accepted = 2;
     OutputsPublishedV1 outputs_published = 3;
     GraphRetiredV1 graph_retired = 4;
+    SliceReportedV1 slice_reported = 5;
   }
+}
+
+message SliceReportedV1 {
+  SliceReport report = 1 [(buf.validate.field).required = true];
+  bytes request_id = 2 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).bytes.len = 16
+  ];
+  bytes request_fingerprint = 3 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).bytes.len = 32
+  ];
+  bytes publication_id = 4 [(buf.validate.field).bytes.len = 16];
+  bytes publication_fingerprint = 5 [(buf.validate.field).bytes.len = 32];
 }
 
 message GraphCreatedV1 {

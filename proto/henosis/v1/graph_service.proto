@@ -26,6 +26,9 @@ service GraphService {
   rpc GetGraph(GetGraphRequest) returns (GetGraphResponse) {
     option idempotency_level = NO_SIDE_EFFECTS;
   }
+  rpc GetGraphGeneration(GetGraphGenerationRequest) returns (GetGraphGenerationResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
   rpc RetireGraph(RetireGraphRequest) returns (RetireGraphResponse) {
     option idempotency_level = IDEMPOTENT;
   }
@@ -152,6 +155,27 @@ message GetGraphRequest {
 
 message GetGraphResponse {
   GraphState state = 1;
+}
+
+message GetGraphGenerationRequest {
+  bytes graph_id = 1 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).bytes.len = 16
+  ];
+  uint64 generation = 2 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).uint64.gt = 0
+  ];
+}
+
+message GetGraphGenerationResponse {
+  GraphState state = 1 [(buf.validate.field).required = true];
+  repeated RegisteredComponentSpec components = 2;
+  GraphLifecycle current_lifecycle = 3 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).enum.defined_only = true
+  ];
+  uint64 last_published_generation = 4;
 }
 
 message RetireGraphRequest {

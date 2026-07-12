@@ -168,6 +168,34 @@ impl GraphService for Api {
         }))
     }
 
+    async fn get_graph_generation<'a>(
+        &'a self,
+        context: RequestContext,
+        request: ServiceRequest<'_, pb::GetGraphGenerationRequest>,
+    ) -> ServiceResult<
+        impl connectrpc::Encodable<pb::GetGraphGenerationResponse> + Send + use<'a>,
+    > {
+        self.authorize(&context)?;
+        let command =
+            henosis_types::GetGraphGeneration::try_from(&*request).map_err(conversion_error)?;
+        let generation = self
+            .core
+            .graph_generation_get(command)
+            .await
+            .map_err(|error| connect_error(error, ErrorSurface::Edit))?;
+        let current_lifecycle = match generation.current_lifecycle() {
+            henosis_types::GraphLifecycle::Active => pb::GraphLifecycle::Active,
+            henosis_types::GraphLifecycle::Retired => pb::GraphLifecycle::Retired,
+        };
+        Ok(Response::new(pb::GetGraphGenerationResponse {
+            state: MessageField::some(generation.state().into()),
+            components: generation.components().iter().map(Into::into).collect(),
+            current_lifecycle: Some(current_lifecycle.into()),
+            last_published_generation: generation.last_published_generation(),
+            ..Default::default()
+        }))
+    }
+
     async fn retire_graph<'a>(
         &'a self,
         context: RequestContext,

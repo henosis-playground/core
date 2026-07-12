@@ -41,6 +41,7 @@ pub mod __buffa {
     /// Register this package's `Any` type entries and extension entries.
     pub fn register_types(reg: &mut ::buffa::type_registry::TypeRegistry) {
         reg.register_json_any(super::__DIAGNOSTIC_JSON_ANY);
+        reg.register_json_any(super::__CONTRACT_FAILURE_DETAIL_JSON_ANY);
         reg.register_json_any(super::__COMPONENT_SPEC_JSON_ANY);
         reg.register_json_any(super::__REGISTERED_COMPONENT_SPEC_JSON_ANY);
         reg.register_json_any(super::__GRAPH_JSON_ANY);
@@ -48,6 +49,7 @@ pub mod __buffa {
         reg.register_json_any(super::__PUBLISHED_SLICE_OUTPUTS_JSON_ANY);
         reg.register_json_any(super::__COMPONENT_DISPOSITION_JSON_ANY);
         reg.register_json_any(super::__SLICE_REPORT_JSON_ANY);
+        reg.register_json_any(super::__PUBLICATION_EVIDENCE_JSON_ANY);
         reg.register_json_any(super::__DURABLE_GRAPH_STATE_JSON_ANY);
         reg.register_json_any(super::__GRAPH_STATE_JSON_ANY);
         reg.register_json_any(super::__GRAPH_SLICE_JSON_ANY);
@@ -74,6 +76,8 @@ pub mod __buffa {
         reg.register_json_any(super::__EDIT_REJECTION_DETAILS_JSON_ANY);
         reg.register_json_any(super::__GET_GRAPH_REQUEST_JSON_ANY);
         reg.register_json_any(super::__GET_GRAPH_RESPONSE_JSON_ANY);
+        reg.register_json_any(super::__GET_GRAPH_GENERATION_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__GET_GRAPH_GENERATION_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__RETIRE_GRAPH_REQUEST_JSON_ANY);
         reg.register_json_any(super::__RETIRE_GRAPH_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__WATCH_GRAPH_REQUEST_JSON_ANY);
@@ -89,6 +93,7 @@ pub mod __buffa {
         reg.register_json_any(super::__COMPONENT_SPEC_RECORD_V1_JSON_ANY);
         reg.register_json_any(super::__GRAPH_STREAM_ENVELOPE_JSON_ANY);
         reg.register_json_any(super::__GRAPH_STREAM_RECORD_V1_JSON_ANY);
+        reg.register_json_any(super::__SLICE_REPORTED_V1_JSON_ANY);
         reg.register_json_any(super::__GRAPH_CREATED_V1_JSON_ANY);
         reg.register_json_any(super::__GENERATION_ACCEPTED_V1_JSON_ANY);
         reg.register_json_any(super::__OUTPUTS_PUBLISHED_V1_JSON_ANY);
@@ -105,6 +110,10 @@ pub mod __buffa {
 pub use self::__buffa::view::DiagnosticView;
 #[doc(inline)]
 pub use self::__buffa::view::DiagnosticOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ContractFailureDetailView;
+#[doc(inline)]
+pub use self::__buffa::view::ContractFailureDetailOwnedView;
 #[doc(inline)]
 pub use self::__buffa::view::ComponentSpecView;
 #[doc(inline)]
@@ -133,6 +142,10 @@ pub use self::__buffa::view::ComponentDispositionOwnedView;
 pub use self::__buffa::view::SliceReportView;
 #[doc(inline)]
 pub use self::__buffa::view::SliceReportOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::PublicationEvidenceView;
+#[doc(inline)]
+pub use self::__buffa::view::PublicationEvidenceOwnedView;
 #[doc(inline)]
 pub use self::__buffa::view::DurableGraphStateView;
 #[doc(inline)]
@@ -238,6 +251,14 @@ pub use self::__buffa::view::GetGraphResponseView;
 #[doc(inline)]
 pub use self::__buffa::view::GetGraphResponseOwnedView;
 #[doc(inline)]
+pub use self::__buffa::view::GetGraphGenerationRequestView;
+#[doc(inline)]
+pub use self::__buffa::view::GetGraphGenerationRequestOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::GetGraphGenerationResponseView;
+#[doc(inline)]
+pub use self::__buffa::view::GetGraphGenerationResponseOwnedView;
+#[doc(inline)]
 pub use self::__buffa::view::RetireGraphRequestView;
 #[doc(inline)]
 pub use self::__buffa::view::RetireGraphRequestOwnedView;
@@ -297,6 +318,10 @@ pub use self::__buffa::view::GraphStreamEnvelopeOwnedView;
 pub use self::__buffa::view::GraphStreamRecordV1View;
 #[doc(inline)]
 pub use self::__buffa::view::GraphStreamRecordV1OwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::SliceReportedV1View;
+#[doc(inline)]
+pub use self::__buffa::view::SliceReportedV1OwnedView;
 #[doc(inline)]
 pub use self::__buffa::view::GraphCreatedV1View;
 #[doc(inline)]

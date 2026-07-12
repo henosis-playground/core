@@ -120,6 +120,20 @@ impl TryFrom<&view::GetGraphRequestView<'_>> for domain::GetGraph {
     }
 }
 
+impl TryFrom<&view::GetGraphGenerationRequestView<'_>> for domain::GetGraphGeneration {
+    type Error = ConversionError;
+
+    fn try_from(value: &view::GetGraphGenerationRequestView<'_>) -> Result<Self, Self::Error> {
+        Ok(Self::new(
+            graph_id(value.graph_id, "get_generation.graph_id")?,
+            value
+                .generation
+                .filter(|generation| *generation > 0)
+                .ok_or_else(|| missing("get_generation.generation"))?,
+        ))
+    }
+}
+
 impl TryFrom<&view::WatchGraphRequestView<'_>> for domain::WatchGraph {
     type Error = ConversionError;
 

@@ -1465,6 +1465,14 @@ impl ::buffa::Message for GraphStreamRecordV1 {
                         += 1u32 + ::buffa::encoding::varint_len(inner as u64) as u32
                             + inner;
                 }
+                __buffa::oneof::graph_stream_record_v1::Event::SliceReported(x) => {
+                    let __slot = __cache.reserve();
+                    let inner = x.compute_size(__cache);
+                    __cache.set(__slot, inner);
+                    size
+                        += 1u32 + ::buffa::encoding::varint_len(inner as u64) as u32
+                            + inner;
+                }
             }
         }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
@@ -1506,6 +1514,14 @@ impl ::buffa::Message for GraphStreamRecordV1 {
                 __buffa::oneof::graph_stream_record_v1::Event::GraphRetired(x) => {
                     ::buffa::types::put_len_delimited_header(
                         4u32,
+                        __cache.consume_next(),
+                        buf,
+                    );
+                    x.write_to(__cache, buf);
+                }
+                __buffa::oneof::graph_stream_record_v1::Event::SliceReported(x) => {
+                    ::buffa::types::put_len_delimited_header(
+                        5u32,
                         __cache.consume_next(),
                         buf,
                     );
@@ -1609,6 +1625,28 @@ impl ::buffa::Message for GraphStreamRecordV1 {
                     ::buffa::Message::merge_length_delimited(&mut val, buf, ctx)?;
                     self.event = ::core::option::Option::Some(
                         __buffa::oneof::graph_stream_record_v1::Event::GraphRetired(
+                            ::buffa::alloc::boxed::Box::new(val),
+                        ),
+                    );
+                }
+            }
+            5u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                if let ::core::option::Option::Some(
+                    __buffa::oneof::graph_stream_record_v1::Event::SliceReported(
+                        ref mut existing,
+                    ),
+                ) = self.event
+                {
+                    ::buffa::Message::merge_length_delimited(&mut **existing, buf, ctx)?;
+                } else {
+                    let mut val = ::core::default::Default::default();
+                    ::buffa::Message::merge_length_delimited(&mut val, buf, ctx)?;
+                    self.event = ::core::option::Option::Some(
+                        __buffa::oneof::graph_stream_record_v1::Event::SliceReported(
                             ::buffa::alloc::boxed::Box::new(val),
                         ),
                     );
@@ -1751,6 +1789,30 @@ impl<'de> serde::Deserialize<'de> for GraphStreamRecordV1 {
                                 );
                             }
                         }
+                        "sliceReported" | "slice_reported" => {
+                            let v: ::core::option::Option<SliceReportedV1> = map
+                                .next_value_seed(
+                                    ::buffa::json_helpers::NullableDeserializeSeed(
+                                        ::buffa::json_helpers::DefaultDeserializeSeed::<
+                                            SliceReportedV1,
+                                        >::new(),
+                                    ),
+                                )?;
+                            if let Some(v) = v {
+                                if __oneof_event.is_some() {
+                                    return Err(
+                                        serde::de::Error::custom(
+                                            "multiple oneof fields set for 'event'",
+                                        ),
+                                    );
+                                }
+                                __oneof_event = Some(
+                                    __buffa::oneof::graph_stream_record_v1::Event::SliceReported(
+                                        ::buffa::alloc::boxed::Box::new(v),
+                                    ),
+                                );
+                            }
+                        }
                         _ => {
                             map.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -1792,6 +1854,291 @@ pub mod graph_stream_record_v1 {
     #[doc(inline)]
     pub use super::__buffa::view::oneof::graph_stream_record_v1::Event as EventView;
 }
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct SliceReportedV1 {
+    /// Field 1: `report`
+    #[serde(
+        rename = "report",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub report: ::buffa::MessageField<SliceReport>,
+    /// Field 2: `request_id`
+    #[serde(
+        rename = "requestId",
+        alias = "request_id",
+        with = "::buffa::json_helpers::opt_bytes",
+        skip_serializing_if = "::core::option::Option::is_none"
+    )]
+    pub request_id: ::core::option::Option<::buffa::alloc::vec::Vec<u8>>,
+    /// Field 3: `request_fingerprint`
+    #[serde(
+        rename = "requestFingerprint",
+        alias = "request_fingerprint",
+        with = "::buffa::json_helpers::opt_bytes",
+        skip_serializing_if = "::core::option::Option::is_none"
+    )]
+    pub request_fingerprint: ::core::option::Option<::buffa::alloc::vec::Vec<u8>>,
+    /// Field 4: `publication_id`
+    #[serde(
+        rename = "publicationId",
+        alias = "publication_id",
+        with = "::buffa::json_helpers::opt_bytes",
+        skip_serializing_if = "::core::option::Option::is_none"
+    )]
+    pub publication_id: ::core::option::Option<::buffa::alloc::vec::Vec<u8>>,
+    /// Field 5: `publication_fingerprint`
+    #[serde(
+        rename = "publicationFingerprint",
+        alias = "publication_fingerprint",
+        with = "::buffa::json_helpers::opt_bytes",
+        skip_serializing_if = "::core::option::Option::is_none"
+    )]
+    pub publication_fingerprint: ::core::option::Option<::buffa::alloc::vec::Vec<u8>>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for SliceReportedV1 {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("SliceReportedV1")
+            .field("report", &self.report)
+            .field("request_id", &self.request_id)
+            .field("request_fingerprint", &self.request_fingerprint)
+            .field("publication_id", &self.publication_id)
+            .field("publication_fingerprint", &self.publication_fingerprint)
+            .finish()
+    }
+}
+impl SliceReportedV1 {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/henosis.v1.SliceReportedV1";
+}
+impl SliceReportedV1 {
+    #[must_use = "with_* setters return `self` by value; assign or chain the result"]
+    #[inline]
+    ///Sets [`Self::request_id`] to `Some(value)`, consuming and returning `self`.
+    pub fn with_request_id(
+        mut self,
+        value: impl Into<::buffa::alloc::vec::Vec<u8>>,
+    ) -> Self {
+        self.request_id = Some(value.into());
+        self
+    }
+    #[must_use = "with_* setters return `self` by value; assign or chain the result"]
+    #[inline]
+    ///Sets [`Self::request_fingerprint`] to `Some(value)`, consuming and returning `self`.
+    pub fn with_request_fingerprint(
+        mut self,
+        value: impl Into<::buffa::alloc::vec::Vec<u8>>,
+    ) -> Self {
+        self.request_fingerprint = Some(value.into());
+        self
+    }
+    #[must_use = "with_* setters return `self` by value; assign or chain the result"]
+    #[inline]
+    ///Sets [`Self::publication_id`] to `Some(value)`, consuming and returning `self`.
+    pub fn with_publication_id(
+        mut self,
+        value: impl Into<::buffa::alloc::vec::Vec<u8>>,
+    ) -> Self {
+        self.publication_id = Some(value.into());
+        self
+    }
+    #[must_use = "with_* setters return `self` by value; assign or chain the result"]
+    #[inline]
+    ///Sets [`Self::publication_fingerprint`] to `Some(value)`, consuming and returning `self`.
+    pub fn with_publication_fingerprint(
+        mut self,
+        value: impl Into<::buffa::alloc::vec::Vec<u8>>,
+    ) -> Self {
+        self.publication_fingerprint = Some(value.into());
+        self
+    }
+}
+::buffa::impl_default_instance!(SliceReportedV1);
+impl ::buffa::MessageName for SliceReportedV1 {
+    const PACKAGE: &'static str = "henosis.v1";
+    const NAME: &'static str = "SliceReportedV1";
+    const FULL_NAME: &'static str = "henosis.v1.SliceReportedV1";
+    const TYPE_URL: &'static str = "type.googleapis.com/henosis.v1.SliceReportedV1";
+}
+impl ::buffa::Message for SliceReportedV1 {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if self.report.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.report.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
+        if let Some(ref v) = self.request_id {
+            size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
+        }
+        if let Some(ref v) = self.request_fingerprint {
+            size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
+        }
+        if let Some(ref v) = self.publication_id {
+            size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
+        }
+        if let Some(ref v) = self.publication_fingerprint {
+            size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        __cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if self.report.is_set() {
+            ::buffa::types::put_len_delimited_header(1u32, __cache.consume_next(), buf);
+            self.report.write_to(__cache, buf);
+        }
+        if let Some(ref v) = self.request_id {
+            ::buffa::types::put_bytes_field(2u32, v, buf);
+        }
+        if let Some(ref v) = self.request_fingerprint {
+            ::buffa::types::put_bytes_field(3u32, v, buf);
+        }
+        if let Some(ref v) = self.publication_id {
+            ::buffa::types::put_bytes_field(4u32, v, buf);
+        }
+        if let Some(ref v) = self.publication_fingerprint {
+            ::buffa::types::put_bytes_field(5u32, v, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.report.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_bytes(
+                    self.request_id.get_or_insert_with(::buffa::alloc::vec::Vec::new),
+                    buf,
+                )?;
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_bytes(
+                    self
+                        .request_fingerprint
+                        .get_or_insert_with(::buffa::alloc::vec::Vec::new),
+                    buf,
+                )?;
+            }
+            4u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_bytes(
+                    self
+                        .publication_id
+                        .get_or_insert_with(::buffa::alloc::vec::Vec::new),
+                    buf,
+                )?;
+            }
+            5u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_bytes(
+                    self
+                        .publication_fingerprint
+                        .get_or_insert_with(::buffa::alloc::vec::Vec::new),
+                    buf,
+                )?;
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.report = ::buffa::MessageField::none();
+        self.request_id = ::core::option::Option::None;
+        self.request_fingerprint = ::core::option::Option::None;
+        self.publication_id = ::core::option::Option::None;
+        self.publication_fingerprint = ::core::option::Option::None;
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for SliceReportedV1 {
+    const PROTO_FQN: &'static str = "henosis.v1.SliceReportedV1";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for SliceReportedV1 {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __SLICE_REPORTED_V1_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/henosis.v1.SliceReportedV1",
+    to_json: ::buffa::type_registry::any_to_json::<SliceReportedV1>,
+    from_json: ::buffa::type_registry::any_from_json::<SliceReportedV1>,
+    is_wkt: false,
+};
 #[derive(Clone, PartialEq, Default)]
 #[derive(::serde::Serialize, ::serde::Deserialize)]
 #[serde(default)]

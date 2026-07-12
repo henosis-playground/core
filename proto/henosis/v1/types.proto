@@ -17,6 +17,39 @@ message Diagnostic {
   string pointer = 4;
   string help = 5;
   DiagnosticSeverity severity = 6;
+  ContractFailureDetail contract_failure = 7;
+}
+
+enum ContractFailureKind {
+  CONTRACT_FAILURE_KIND_UNSPECIFIED = 0;
+  CONTRACT_FAILURE_KIND_COMPILE = 1;
+  CONTRACT_FAILURE_KIND_RENDER = 2;
+  CONTRACT_FAILURE_KIND_VALIDATE = 3;
+  CONTRACT_FAILURE_KIND_RESOLVE = 4;
+}
+
+// Lossless renderer evidence. Presentation adapters, rather than connectors, turn this into the
+// D20 error/note/help form.
+message ContractFailureDetail {
+  string consumer = 1 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).string.min_len = 1
+  ];
+  string producer = 2 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).string.min_len = 1
+  ];
+  string pinned_sha = 3;
+  string resolved_sha = 4;
+  bytes outputs_schema_at_pinned_json = 5;
+  bytes outputs_schema_at_resolved_json = 6;
+  repeated string consumed_paths = 7 [(buf.validate.field).repeated.unique = true];
+  ContractFailureKind kind = 8 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).enum.defined_only = true
+  ];
+  string excerpt = 9;
+  string source_url = 10;
 }
 
 enum DiagnosticSeverity {
@@ -149,6 +182,20 @@ message SliceReport {
   repeated ComponentOutputs outputs = 5;
   repeated Diagnostic diagnostics = 6;
   uint64 sequence = 7 [(buf.validate.field).required = true];
+  PublicationEvidence publication = 8;
+}
+
+// Connector-owned immutable publication evidence. `uri` addresses the exact revision, never a
+// moving branch.
+message PublicationEvidence {
+  string revision = 1 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).string.min_len = 1
+  ];
+  string uri = 2 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).string.uri = true
+  ];
 }
 
 enum GraphLifecycle {

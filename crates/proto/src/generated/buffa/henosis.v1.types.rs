@@ -3,6 +3,181 @@
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 #[repr(i32)]
+pub enum ContractFailureKind {
+    CONTRACT_FAILURE_KIND_UNSPECIFIED = 0i32,
+    CONTRACT_FAILURE_KIND_COMPILE = 1i32,
+    CONTRACT_FAILURE_KIND_RENDER = 2i32,
+    CONTRACT_FAILURE_KIND_VALIDATE = 3i32,
+    CONTRACT_FAILURE_KIND_RESOLVE = 4i32,
+}
+impl ContractFailureKind {
+    ///Idiomatic alias for [`Self::CONTRACT_FAILURE_KIND_UNSPECIFIED`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Unspecified: Self = Self::CONTRACT_FAILURE_KIND_UNSPECIFIED;
+    ///Idiomatic alias for [`Self::CONTRACT_FAILURE_KIND_COMPILE`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Compile: Self = Self::CONTRACT_FAILURE_KIND_COMPILE;
+    ///Idiomatic alias for [`Self::CONTRACT_FAILURE_KIND_RENDER`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Render: Self = Self::CONTRACT_FAILURE_KIND_RENDER;
+    ///Idiomatic alias for [`Self::CONTRACT_FAILURE_KIND_VALIDATE`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Validate: Self = Self::CONTRACT_FAILURE_KIND_VALIDATE;
+    ///Idiomatic alias for [`Self::CONTRACT_FAILURE_KIND_RESOLVE`]; `Debug` prints the variant name.
+    #[allow(non_upper_case_globals)]
+    pub const Resolve: Self = Self::CONTRACT_FAILURE_KIND_RESOLVE;
+}
+impl ::core::default::Default for ContractFailureKind {
+    fn default() -> Self {
+        Self::CONTRACT_FAILURE_KIND_UNSPECIFIED
+    }
+}
+impl ::serde::Serialize for ContractFailureKind {
+    fn serialize<S: ::serde::Serializer>(
+        &self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        s.serialize_str(::buffa::Enumeration::proto_name(self))
+    }
+}
+impl<'de> ::serde::Deserialize<'de> for ContractFailureKind {
+    fn deserialize<D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        struct _V;
+        impl ::serde::de::Visitor<'_> for _V {
+            type Value = ContractFailureKind;
+            fn expecting(
+                &self,
+                f: &mut ::core::fmt::Formatter<'_>,
+            ) -> ::core::fmt::Result {
+                f.write_str(
+                    concat!(
+                        "a string, integer, or null for ",
+                        stringify!(ContractFailureKind)
+                    ),
+                )
+            }
+            fn visit_str<E: ::serde::de::Error>(
+                self,
+                v: &str,
+            ) -> ::core::result::Result<ContractFailureKind, E> {
+                <ContractFailureKind as ::buffa::Enumeration>::from_proto_name(v)
+                    .ok_or_else(|| { ::serde::de::Error::unknown_variant(v, &[]) })
+            }
+            fn visit_i64<E: ::serde::de::Error>(
+                self,
+                v: i64,
+            ) -> ::core::result::Result<ContractFailureKind, E> {
+                let v32 = i32::try_from(v)
+                    .map_err(|_| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("enum value {v} out of i32 range"),
+                        )
+                    })?;
+                <ContractFailureKind as ::buffa::Enumeration>::from_i32(v32)
+                    .ok_or_else(|| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("unknown enum value {v32}"),
+                        )
+                    })
+            }
+            fn visit_u64<E: ::serde::de::Error>(
+                self,
+                v: u64,
+            ) -> ::core::result::Result<ContractFailureKind, E> {
+                let v32 = i32::try_from(v)
+                    .map_err(|_| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("enum value {v} out of i32 range"),
+                        )
+                    })?;
+                <ContractFailureKind as ::buffa::Enumeration>::from_i32(v32)
+                    .ok_or_else(|| {
+                        ::serde::de::Error::custom(
+                            ::buffa::alloc::format!("unknown enum value {v32}"),
+                        )
+                    })
+            }
+            fn visit_unit<E: ::serde::de::Error>(
+                self,
+            ) -> ::core::result::Result<ContractFailureKind, E> {
+                ::core::result::Result::Ok(::core::default::Default::default())
+            }
+        }
+        d.deserialize_any(_V)
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for ContractFailureKind {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+impl ::buffa::Enumeration for ContractFailureKind {
+    fn from_i32(value: i32) -> ::core::option::Option<Self> {
+        match value {
+            0i32 => ::core::option::Option::Some(Self::CONTRACT_FAILURE_KIND_UNSPECIFIED),
+            1i32 => ::core::option::Option::Some(Self::CONTRACT_FAILURE_KIND_COMPILE),
+            2i32 => ::core::option::Option::Some(Self::CONTRACT_FAILURE_KIND_RENDER),
+            3i32 => ::core::option::Option::Some(Self::CONTRACT_FAILURE_KIND_VALIDATE),
+            4i32 => ::core::option::Option::Some(Self::CONTRACT_FAILURE_KIND_RESOLVE),
+            _ => ::core::option::Option::None,
+        }
+    }
+    fn to_i32(&self) -> i32 {
+        *self as i32
+    }
+    fn proto_name(&self) -> &'static str {
+        match self {
+            Self::CONTRACT_FAILURE_KIND_UNSPECIFIED => {
+                "CONTRACT_FAILURE_KIND_UNSPECIFIED"
+            }
+            Self::CONTRACT_FAILURE_KIND_COMPILE => "CONTRACT_FAILURE_KIND_COMPILE",
+            Self::CONTRACT_FAILURE_KIND_RENDER => "CONTRACT_FAILURE_KIND_RENDER",
+            Self::CONTRACT_FAILURE_KIND_VALIDATE => "CONTRACT_FAILURE_KIND_VALIDATE",
+            Self::CONTRACT_FAILURE_KIND_RESOLVE => "CONTRACT_FAILURE_KIND_RESOLVE",
+        }
+    }
+    fn from_proto_name(name: &str) -> ::core::option::Option<Self> {
+        match name {
+            "CONTRACT_FAILURE_KIND_UNSPECIFIED" => {
+                ::core::option::Option::Some(Self::CONTRACT_FAILURE_KIND_UNSPECIFIED)
+            }
+            "CONTRACT_FAILURE_KIND_COMPILE" => {
+                ::core::option::Option::Some(Self::CONTRACT_FAILURE_KIND_COMPILE)
+            }
+            "CONTRACT_FAILURE_KIND_RENDER" => {
+                ::core::option::Option::Some(Self::CONTRACT_FAILURE_KIND_RENDER)
+            }
+            "CONTRACT_FAILURE_KIND_VALIDATE" => {
+                ::core::option::Option::Some(Self::CONTRACT_FAILURE_KIND_VALIDATE)
+            }
+            "CONTRACT_FAILURE_KIND_RESOLVE" => {
+                ::core::option::Option::Some(Self::CONTRACT_FAILURE_KIND_RESOLVE)
+            }
+            _ => ::core::option::Option::None,
+        }
+    }
+    fn values() -> &'static [Self] {
+        &[
+            Self::CONTRACT_FAILURE_KIND_UNSPECIFIED,
+            Self::CONTRACT_FAILURE_KIND_COMPILE,
+            Self::CONTRACT_FAILURE_KIND_RENDER,
+            Self::CONTRACT_FAILURE_KIND_VALIDATE,
+            Self::CONTRACT_FAILURE_KIND_RESOLVE,
+        ]
+    }
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[repr(i32)]
 pub enum DiagnosticSeverity {
     DIAGNOSTIC_SEVERITY_UNSPECIFIED = 0i32,
     DIAGNOSTIC_SEVERITY_ERROR = 1i32,
@@ -543,6 +718,13 @@ pub struct Diagnostic {
         skip_serializing_if = "::core::option::Option::is_none"
     )]
     pub severity: ::core::option::Option<::buffa::EnumValue<DiagnosticSeverity>>,
+    /// Field 7: `contract_failure`
+    #[serde(
+        rename = "contractFailure",
+        alias = "contract_failure",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub contract_failure: ::buffa::MessageField<ContractFailureDetail>,
     #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
@@ -556,6 +738,7 @@ impl ::core::fmt::Debug for Diagnostic {
             .field("pointer", &self.pointer)
             .field("help", &self.help)
             .field("severity", &self.severity)
+            .field("contract_failure", &self.contract_failure)
             .finish()
     }
 }
@@ -642,7 +825,7 @@ impl ::buffa::Message for Diagnostic {
     /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
     /// compliant message will never overflow this type.
     #[allow(clippy::let_and_return)]
-    fn compute_size(&self, _cache: &mut ::buffa::SizeCache) -> u32 {
+    fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
         #[allow(unused_imports)]
         use ::buffa::Enumeration as _;
         let mut size = 0u32;
@@ -664,12 +847,20 @@ impl ::buffa::Message for Diagnostic {
         if let Some(ref v) = self.severity {
             size += 1u32 + ::buffa::types::int32_encoded_len(v.to_i32()) as u32;
         }
+        if self.contract_failure.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.contract_failure.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
         size
     }
     fn write_to(
         &self,
-        _cache: &mut ::buffa::SizeCache,
+        __cache: &mut ::buffa::SizeCache,
         buf: &mut impl ::buffa::bytes::BufMut,
     ) {
         #[allow(unused_imports)]
@@ -691,6 +882,10 @@ impl ::buffa::Message for Diagnostic {
         }
         if let Some(ref v) = self.severity {
             ::buffa::types::put_int32_field(6u32, v.to_i32(), buf);
+        }
+        if self.contract_failure.is_set() {
+            ::buffa::types::put_len_delimited_header(7u32, __cache.consume_next(), buf);
+            self.contract_failure.write_to(__cache, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
     }
@@ -766,6 +961,17 @@ impl ::buffa::Message for Diagnostic {
                     ::buffa::EnumValue::from(::buffa::types::decode_int32(buf)?),
                 );
             }
+            7u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.contract_failure.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
             _ => {
                 self.__buffa_unknown_fields
                     .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
@@ -780,6 +986,7 @@ impl ::buffa::Message for Diagnostic {
         self.pointer = ::core::option::Option::None;
         self.help = ::core::option::Option::None;
         self.severity = ::core::option::Option::None;
+        self.contract_failure = ::buffa::MessageField::none();
         self.__buffa_unknown_fields.clear();
     }
 }
@@ -810,6 +1017,466 @@ pub const __DIAGNOSTIC_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa:
     type_url: "type.googleapis.com/henosis.v1.Diagnostic",
     to_json: ::buffa::type_registry::any_to_json::<Diagnostic>,
     from_json: ::buffa::type_registry::any_from_json::<Diagnostic>,
+    is_wkt: false,
+};
+/// Lossless renderer evidence. Presentation adapters, rather than connectors, turn this into the
+/// D20 error/note/help form.
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct ContractFailureDetail {
+    /// Field 1: `consumer`
+    #[serde(
+        rename = "consumer",
+        skip_serializing_if = "::core::option::Option::is_none"
+    )]
+    pub consumer: ::core::option::Option<::buffa::alloc::string::String>,
+    /// Field 2: `producer`
+    #[serde(
+        rename = "producer",
+        skip_serializing_if = "::core::option::Option::is_none"
+    )]
+    pub producer: ::core::option::Option<::buffa::alloc::string::String>,
+    /// Field 3: `pinned_sha`
+    #[serde(
+        rename = "pinnedSha",
+        alias = "pinned_sha",
+        skip_serializing_if = "::core::option::Option::is_none"
+    )]
+    pub pinned_sha: ::core::option::Option<::buffa::alloc::string::String>,
+    /// Field 4: `resolved_sha`
+    #[serde(
+        rename = "resolvedSha",
+        alias = "resolved_sha",
+        skip_serializing_if = "::core::option::Option::is_none"
+    )]
+    pub resolved_sha: ::core::option::Option<::buffa::alloc::string::String>,
+    /// Field 5: `outputs_schema_at_pinned_json`
+    #[serde(
+        rename = "outputsSchemaAtPinnedJson",
+        alias = "outputs_schema_at_pinned_json",
+        with = "::buffa::json_helpers::opt_bytes",
+        skip_serializing_if = "::core::option::Option::is_none"
+    )]
+    pub outputs_schema_at_pinned_json: ::core::option::Option<
+        ::buffa::alloc::vec::Vec<u8>,
+    >,
+    /// Field 6: `outputs_schema_at_resolved_json`
+    #[serde(
+        rename = "outputsSchemaAtResolvedJson",
+        alias = "outputs_schema_at_resolved_json",
+        with = "::buffa::json_helpers::opt_bytes",
+        skip_serializing_if = "::core::option::Option::is_none"
+    )]
+    pub outputs_schema_at_resolved_json: ::core::option::Option<
+        ::buffa::alloc::vec::Vec<u8>,
+    >,
+    /// Field 7: `consumed_paths`
+    #[serde(
+        rename = "consumedPaths",
+        alias = "consumed_paths",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec",
+        deserialize_with = "::buffa::json_helpers::null_as_default"
+    )]
+    pub consumed_paths: ::buffa::alloc::vec::Vec<::buffa::alloc::string::String>,
+    /// Field 8: `kind`
+    #[serde(
+        rename = "kind",
+        with = "::buffa::json_helpers::opt_enum",
+        skip_serializing_if = "::core::option::Option::is_none"
+    )]
+    pub kind: ::core::option::Option<::buffa::EnumValue<ContractFailureKind>>,
+    /// Field 9: `excerpt`
+    #[serde(rename = "excerpt", skip_serializing_if = "::core::option::Option::is_none")]
+    pub excerpt: ::core::option::Option<::buffa::alloc::string::String>,
+    /// Field 10: `source_url`
+    #[serde(
+        rename = "sourceUrl",
+        alias = "source_url",
+        skip_serializing_if = "::core::option::Option::is_none"
+    )]
+    pub source_url: ::core::option::Option<::buffa::alloc::string::String>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for ContractFailureDetail {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("ContractFailureDetail")
+            .field("consumer", &self.consumer)
+            .field("producer", &self.producer)
+            .field("pinned_sha", &self.pinned_sha)
+            .field("resolved_sha", &self.resolved_sha)
+            .field("outputs_schema_at_pinned_json", &self.outputs_schema_at_pinned_json)
+            .field(
+                "outputs_schema_at_resolved_json",
+                &self.outputs_schema_at_resolved_json,
+            )
+            .field("consumed_paths", &self.consumed_paths)
+            .field("kind", &self.kind)
+            .field("excerpt", &self.excerpt)
+            .field("source_url", &self.source_url)
+            .finish()
+    }
+}
+impl ContractFailureDetail {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/henosis.v1.ContractFailureDetail";
+}
+impl ContractFailureDetail {
+    #[must_use = "with_* setters return `self` by value; assign or chain the result"]
+    #[inline]
+    ///Sets [`Self::consumer`] to `Some(value)`, consuming and returning `self`.
+    pub fn with_consumer(
+        mut self,
+        value: impl Into<::buffa::alloc::string::String>,
+    ) -> Self {
+        self.consumer = Some(value.into());
+        self
+    }
+    #[must_use = "with_* setters return `self` by value; assign or chain the result"]
+    #[inline]
+    ///Sets [`Self::producer`] to `Some(value)`, consuming and returning `self`.
+    pub fn with_producer(
+        mut self,
+        value: impl Into<::buffa::alloc::string::String>,
+    ) -> Self {
+        self.producer = Some(value.into());
+        self
+    }
+    #[must_use = "with_* setters return `self` by value; assign or chain the result"]
+    #[inline]
+    ///Sets [`Self::pinned_sha`] to `Some(value)`, consuming and returning `self`.
+    pub fn with_pinned_sha(
+        mut self,
+        value: impl Into<::buffa::alloc::string::String>,
+    ) -> Self {
+        self.pinned_sha = Some(value.into());
+        self
+    }
+    #[must_use = "with_* setters return `self` by value; assign or chain the result"]
+    #[inline]
+    ///Sets [`Self::resolved_sha`] to `Some(value)`, consuming and returning `self`.
+    pub fn with_resolved_sha(
+        mut self,
+        value: impl Into<::buffa::alloc::string::String>,
+    ) -> Self {
+        self.resolved_sha = Some(value.into());
+        self
+    }
+    #[must_use = "with_* setters return `self` by value; assign or chain the result"]
+    #[inline]
+    ///Sets [`Self::outputs_schema_at_pinned_json`] to `Some(value)`, consuming and returning `self`.
+    pub fn with_outputs_schema_at_pinned_json(
+        mut self,
+        value: impl Into<::buffa::alloc::vec::Vec<u8>>,
+    ) -> Self {
+        self.outputs_schema_at_pinned_json = Some(value.into());
+        self
+    }
+    #[must_use = "with_* setters return `self` by value; assign or chain the result"]
+    #[inline]
+    ///Sets [`Self::outputs_schema_at_resolved_json`] to `Some(value)`, consuming and returning `self`.
+    pub fn with_outputs_schema_at_resolved_json(
+        mut self,
+        value: impl Into<::buffa::alloc::vec::Vec<u8>>,
+    ) -> Self {
+        self.outputs_schema_at_resolved_json = Some(value.into());
+        self
+    }
+    #[must_use = "with_* setters return `self` by value; assign or chain the result"]
+    #[inline]
+    ///Sets [`Self::kind`] to `Some(value)`, consuming and returning `self`.
+    pub fn with_kind(
+        mut self,
+        value: impl Into<::buffa::EnumValue<ContractFailureKind>>,
+    ) -> Self {
+        self.kind = Some(value.into());
+        self
+    }
+    #[must_use = "with_* setters return `self` by value; assign or chain the result"]
+    #[inline]
+    ///Sets [`Self::excerpt`] to `Some(value)`, consuming and returning `self`.
+    pub fn with_excerpt(
+        mut self,
+        value: impl Into<::buffa::alloc::string::String>,
+    ) -> Self {
+        self.excerpt = Some(value.into());
+        self
+    }
+    #[must_use = "with_* setters return `self` by value; assign or chain the result"]
+    #[inline]
+    ///Sets [`Self::source_url`] to `Some(value)`, consuming and returning `self`.
+    pub fn with_source_url(
+        mut self,
+        value: impl Into<::buffa::alloc::string::String>,
+    ) -> Self {
+        self.source_url = Some(value.into());
+        self
+    }
+}
+::buffa::impl_default_instance!(ContractFailureDetail);
+impl ::buffa::MessageName for ContractFailureDetail {
+    const PACKAGE: &'static str = "henosis.v1";
+    const NAME: &'static str = "ContractFailureDetail";
+    const FULL_NAME: &'static str = "henosis.v1.ContractFailureDetail";
+    const TYPE_URL: &'static str = "type.googleapis.com/henosis.v1.ContractFailureDetail";
+}
+impl ::buffa::Message for ContractFailureDetail {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, _cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if let Some(ref v) = self.consumer {
+            size += 1u32 + ::buffa::types::string_encoded_len(v) as u32;
+        }
+        if let Some(ref v) = self.producer {
+            size += 1u32 + ::buffa::types::string_encoded_len(v) as u32;
+        }
+        if let Some(ref v) = self.pinned_sha {
+            size += 1u32 + ::buffa::types::string_encoded_len(v) as u32;
+        }
+        if let Some(ref v) = self.resolved_sha {
+            size += 1u32 + ::buffa::types::string_encoded_len(v) as u32;
+        }
+        if let Some(ref v) = self.outputs_schema_at_pinned_json {
+            size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
+        }
+        if let Some(ref v) = self.outputs_schema_at_resolved_json {
+            size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
+        }
+        for v in &self.consumed_paths {
+            size += 1u32 + ::buffa::types::string_encoded_len(v) as u32;
+        }
+        if let Some(ref v) = self.kind {
+            size += 1u32 + ::buffa::types::int32_encoded_len(v.to_i32()) as u32;
+        }
+        if let Some(ref v) = self.excerpt {
+            size += 1u32 + ::buffa::types::string_encoded_len(v) as u32;
+        }
+        if let Some(ref v) = self.source_url {
+            size += 1u32 + ::buffa::types::string_encoded_len(v) as u32;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        _cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if let Some(ref v) = self.consumer {
+            ::buffa::types::put_string_field(1u32, v, buf);
+        }
+        if let Some(ref v) = self.producer {
+            ::buffa::types::put_string_field(2u32, v, buf);
+        }
+        if let Some(ref v) = self.pinned_sha {
+            ::buffa::types::put_string_field(3u32, v, buf);
+        }
+        if let Some(ref v) = self.resolved_sha {
+            ::buffa::types::put_string_field(4u32, v, buf);
+        }
+        if let Some(ref v) = self.outputs_schema_at_pinned_json {
+            ::buffa::types::put_bytes_field(5u32, v, buf);
+        }
+        if let Some(ref v) = self.outputs_schema_at_resolved_json {
+            ::buffa::types::put_bytes_field(6u32, v, buf);
+        }
+        for v in &self.consumed_paths {
+            ::buffa::types::put_string_field(7u32, v, buf);
+        }
+        if let Some(ref v) = self.kind {
+            ::buffa::types::put_int32_field(8u32, v.to_i32(), buf);
+        }
+        if let Some(ref v) = self.excerpt {
+            ::buffa::types::put_string_field(9u32, v, buf);
+        }
+        if let Some(ref v) = self.source_url {
+            ::buffa::types::put_string_field(10u32, v, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(
+                    self
+                        .consumer
+                        .get_or_insert_with(::buffa::alloc::string::String::new),
+                    buf,
+                )?;
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(
+                    self
+                        .producer
+                        .get_or_insert_with(::buffa::alloc::string::String::new),
+                    buf,
+                )?;
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(
+                    self
+                        .pinned_sha
+                        .get_or_insert_with(::buffa::alloc::string::String::new),
+                    buf,
+                )?;
+            }
+            4u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(
+                    self
+                        .resolved_sha
+                        .get_or_insert_with(::buffa::alloc::string::String::new),
+                    buf,
+                )?;
+            }
+            5u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_bytes(
+                    self
+                        .outputs_schema_at_pinned_json
+                        .get_or_insert_with(::buffa::alloc::vec::Vec::new),
+                    buf,
+                )?;
+            }
+            6u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_bytes(
+                    self
+                        .outputs_schema_at_resolved_json
+                        .get_or_insert_with(::buffa::alloc::vec::Vec::new),
+                    buf,
+                )?;
+            }
+            7u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                self.consumed_paths.push(::buffa::types::decode_string(buf)?);
+            }
+            8u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.kind = ::core::option::Option::Some(
+                    ::buffa::EnumValue::from(::buffa::types::decode_int32(buf)?),
+                );
+            }
+            9u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(
+                    self.excerpt.get_or_insert_with(::buffa::alloc::string::String::new),
+                    buf,
+                )?;
+            }
+            10u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(
+                    self
+                        .source_url
+                        .get_or_insert_with(::buffa::alloc::string::String::new),
+                    buf,
+                )?;
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.consumer = ::core::option::Option::None;
+        self.producer = ::core::option::Option::None;
+        self.pinned_sha = ::core::option::Option::None;
+        self.resolved_sha = ::core::option::Option::None;
+        self.outputs_schema_at_pinned_json = ::core::option::Option::None;
+        self.outputs_schema_at_resolved_json = ::core::option::Option::None;
+        self.consumed_paths.clear();
+        self.kind = ::core::option::Option::None;
+        self.excerpt = ::core::option::Option::None;
+        self.source_url = ::core::option::Option::None;
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for ContractFailureDetail {
+    const PROTO_FQN: &'static str = "henosis.v1.ContractFailureDetail";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for ContractFailureDetail {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __CONTRACT_FAILURE_DETAIL_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/henosis.v1.ContractFailureDetail",
+    to_json: ::buffa::type_registry::any_to_json::<ContractFailureDetail>,
+    from_json: ::buffa::type_registry::any_from_json::<ContractFailureDetail>,
     is_wkt: false,
 };
 /// ComponentSpec is immutable connector input. Its identity is the BLAKE3 hash of its canonical
@@ -2153,6 +2820,12 @@ pub struct SliceReport {
         skip_serializing_if = "::core::option::Option::is_none"
     )]
     pub sequence: ::core::option::Option<u64>,
+    /// Field 8: `publication`
+    #[serde(
+        rename = "publication",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_unset_message_field"
+    )]
+    pub publication: ::buffa::MessageField<PublicationEvidence>,
     #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
@@ -2167,6 +2840,7 @@ impl ::core::fmt::Debug for SliceReport {
             .field("outputs", &self.outputs)
             .field("diagnostics", &self.diagnostics)
             .field("sequence", &self.sequence)
+            .field("publication", &self.publication)
             .finish()
     }
 }
@@ -2267,6 +2941,14 @@ impl ::buffa::Message for SliceReport {
         if let Some(v) = self.sequence {
             size += 1u32 + ::buffa::types::uint64_encoded_len(v) as u32;
         }
+        if self.publication.is_set() {
+            let __slot = __cache.reserve();
+            let inner_size = self.publication.compute_size(__cache);
+            __cache.set(__slot, inner_size);
+            size
+                += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
+                    + inner_size;
+        }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
         size
     }
@@ -2300,6 +2982,10 @@ impl ::buffa::Message for SliceReport {
         }
         if let Some(v) = self.sequence {
             ::buffa::types::put_uint64_field(7u32, v, buf);
+        }
+        if self.publication.is_set() {
+            ::buffa::types::put_len_delimited_header(8u32, __cache.consume_next(), buf);
+            self.publication.write_to(__cache, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
     }
@@ -2381,6 +3067,17 @@ impl ::buffa::Message for SliceReport {
                     ::buffa::types::decode_uint64(buf)?,
                 );
             }
+            8u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::Message::merge_length_delimited(
+                    self.publication.get_or_insert_default(),
+                    buf,
+                    ctx,
+                )?;
+            }
             _ => {
                 self.__buffa_unknown_fields
                     .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
@@ -2396,6 +3093,7 @@ impl ::buffa::Message for SliceReport {
         self.outputs.clear();
         self.diagnostics.clear();
         self.sequence = ::core::option::Option::None;
+        self.publication = ::buffa::MessageField::none();
         self.__buffa_unknown_fields.clear();
     }
 }
@@ -2426,6 +3124,176 @@ pub const __SLICE_REPORT_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buff
     type_url: "type.googleapis.com/henosis.v1.SliceReport",
     to_json: ::buffa::type_registry::any_to_json::<SliceReport>,
     from_json: ::buffa::type_registry::any_from_json::<SliceReport>,
+    is_wkt: false,
+};
+/// Connector-owned immutable publication evidence. `uri` addresses the exact revision, never a
+/// moving branch.
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct PublicationEvidence {
+    /// Field 1: `revision`
+    #[serde(
+        rename = "revision",
+        skip_serializing_if = "::core::option::Option::is_none"
+    )]
+    pub revision: ::core::option::Option<::buffa::alloc::string::String>,
+    /// Field 2: `uri`
+    #[serde(rename = "uri", skip_serializing_if = "::core::option::Option::is_none")]
+    pub uri: ::core::option::Option<::buffa::alloc::string::String>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for PublicationEvidence {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("PublicationEvidence")
+            .field("revision", &self.revision)
+            .field("uri", &self.uri)
+            .finish()
+    }
+}
+impl PublicationEvidence {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/henosis.v1.PublicationEvidence";
+}
+impl PublicationEvidence {
+    #[must_use = "with_* setters return `self` by value; assign or chain the result"]
+    #[inline]
+    ///Sets [`Self::revision`] to `Some(value)`, consuming and returning `self`.
+    pub fn with_revision(
+        mut self,
+        value: impl Into<::buffa::alloc::string::String>,
+    ) -> Self {
+        self.revision = Some(value.into());
+        self
+    }
+    #[must_use = "with_* setters return `self` by value; assign or chain the result"]
+    #[inline]
+    ///Sets [`Self::uri`] to `Some(value)`, consuming and returning `self`.
+    pub fn with_uri(mut self, value: impl Into<::buffa::alloc::string::String>) -> Self {
+        self.uri = Some(value.into());
+        self
+    }
+}
+::buffa::impl_default_instance!(PublicationEvidence);
+impl ::buffa::MessageName for PublicationEvidence {
+    const PACKAGE: &'static str = "henosis.v1";
+    const NAME: &'static str = "PublicationEvidence";
+    const FULL_NAME: &'static str = "henosis.v1.PublicationEvidence";
+    const TYPE_URL: &'static str = "type.googleapis.com/henosis.v1.PublicationEvidence";
+}
+impl ::buffa::Message for PublicationEvidence {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, _cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if let Some(ref v) = self.revision {
+            size += 1u32 + ::buffa::types::string_encoded_len(v) as u32;
+        }
+        if let Some(ref v) = self.uri {
+            size += 1u32 + ::buffa::types::string_encoded_len(v) as u32;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u32;
+        size
+    }
+    fn write_to(
+        &self,
+        _cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if let Some(ref v) = self.revision {
+            ::buffa::types::put_string_field(1u32, v, buf);
+        }
+        if let Some(ref v) = self.uri {
+            ::buffa::types::put_string_field(2u32, v, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(
+                    self
+                        .revision
+                        .get_or_insert_with(::buffa::alloc::string::String::new),
+                    buf,
+                )?;
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(
+                    self.uri.get_or_insert_with(::buffa::alloc::string::String::new),
+                    buf,
+                )?;
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.revision = ::core::option::Option::None;
+        self.uri = ::core::option::Option::None;
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for PublicationEvidence {
+    const PROTO_FQN: &'static str = "henosis.v1.PublicationEvidence";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for PublicationEvidence {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __PUBLICATION_EVIDENCE_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/henosis.v1.PublicationEvidence",
+    to_json: ::buffa::type_registry::any_to_json::<PublicationEvidence>,
+    from_json: ::buffa::type_registry::any_from_json::<PublicationEvidence>,
     is_wkt: false,
 };
 #[derive(Clone, PartialEq, Default)]

@@ -17,6 +17,28 @@ pub enum DiagnosticSeverity {
     Info,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ContractFailureKind {
+    Compile,
+    Render,
+    Validate,
+    Resolve,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ContractFailureDetail {
+    pub consumer: String,
+    pub producer: String,
+    pub pinned_sha: Option<String>,
+    pub resolved_sha: Option<String>,
+    pub outputs_schema_at_pinned_json: Option<Vec<u8>>,
+    pub outputs_schema_at_resolved_json: Option<Vec<u8>>,
+    pub consumed_paths: Vec<String>,
+    pub kind: ContractFailureKind,
+    pub excerpt: String,
+    pub source_url: Option<String>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Diagnostic {
     code: String,
@@ -25,6 +47,7 @@ pub struct Diagnostic {
     pointer: String,
     help: String,
     severity: DiagnosticSeverity,
+    contract_failure: Option<ContractFailureDetail>,
 }
 
 impl Diagnostic {
@@ -37,6 +60,7 @@ impl Diagnostic {
             pointer: String::new(),
             help: String::new(),
             severity: DiagnosticSeverity::Error,
+            contract_failure: None,
         }
     }
 
@@ -49,6 +73,7 @@ impl Diagnostic {
         pointer: String,
         help: String,
         severity: DiagnosticSeverity,
+        contract_failure: Option<ContractFailureDetail>,
     ) -> Self {
         Self {
             code,
@@ -57,6 +82,7 @@ impl Diagnostic {
             pointer,
             help,
             severity,
+            contract_failure,
         }
     }
 
@@ -95,6 +121,17 @@ impl Diagnostic {
     pub const fn severity(&self) -> DiagnosticSeverity {
         self.severity
     }
+
+    #[must_use]
+    pub const fn contract_failure(&self) -> Option<&ContractFailureDetail> {
+        self.contract_failure.as_ref()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PublicationEvidence {
+    pub revision: String,
+    pub uri: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -153,6 +190,7 @@ pub struct SliceReport {
     outputs: IdOrdMap<ComponentOutputs>,
     diagnostics: Vec<Diagnostic>,
     sequence: u64,
+    publication: Option<PublicationEvidence>,
 }
 
 #[derive(Clone, Debug)]
@@ -164,6 +202,7 @@ pub struct NewSliceReport {
     pub outputs: Vec<ComponentOutputs>,
     pub diagnostics: Vec<Diagnostic>,
     pub sequence: u64,
+    pub publication: Option<PublicationEvidence>,
 }
 
 #[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
@@ -193,6 +232,7 @@ impl SliceReport {
             outputs,
             diagnostics: new.diagnostics,
             sequence: new.sequence,
+            publication: new.publication,
         })
     }
 
@@ -230,15 +270,20 @@ impl SliceReport {
     pub const fn sequence(&self) -> u64 {
         self.sequence
     }
+
+    #[must_use]
+    pub const fn publication(&self) -> Option<&PublicationEvidence> {
+        self.publication.as_ref()
+    }
 }
 
 impl IdOrdItem for SliceReport {
-    type Key<'a> = &'a ConnectorKey;
+    type Key<'a> = (u64, &'a ConnectorKey);
 
     id_upcast!();
 
     fn key(&self) -> Self::Key<'_> {
-        &self.connector
+        (self.generation, &self.connector)
     }
 }
 
@@ -304,6 +349,51 @@ pub struct GraphState {
     reports: IdOrdMap<SliceReport>,
 }
 
+#[derive(Clone, Debug)]
+pub struct GraphGenerationState {
+    state: GraphState,
+    components: Vec<RegisteredComponentSpec>,
+    current_lifecycle: GraphLifecycle,
+    last_published_generation: Option<u64>,
+}
+
+impl GraphGenerationState {
+    #[must_use]
+    pub fn new(
+        state: GraphState,
+        components: Vec<RegisteredComponentSpec>,
+        current_lifecycle: GraphLifecycle,
+        last_published_generation: Option<u64>,
+    ) -> Self {
+        Self {
+            state,
+            components,
+            current_lifecycle,
+            last_published_generation,
+        }
+    }
+
+    #[must_use]
+    pub const fn state(&self) -> &GraphState {
+        &self.state
+    }
+
+    #[must_use]
+    pub fn components(&self) -> &[RegisteredComponentSpec] {
+        &self.components
+    }
+
+    #[must_use]
+    pub const fn current_lifecycle(&self) -> GraphLifecycle {
+        self.current_lifecycle
+    }
+
+    #[must_use]
+    pub const fn last_published_generation(&self) -> Option<u64> {
+        self.last_published_generation
+    }
+}
+
 impl GraphState {
     pub fn new(
         durable: DurableGraphState,
@@ -327,7 +417,7 @@ impl GraphState {
 }
 
 #[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
-#[error("graph state contains more than one report for a connector")]
+#[error("graph state contains more than one report for a connector and generation")]
 pub struct DuplicateConnectorReport;
 
 #[derive(Clone, Debug)]

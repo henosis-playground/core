@@ -15,6 +15,7 @@ use crate::OutputPublication;
 use crate::PublicationId;
 use crate::PublishedSliceOutputs;
 use crate::RequestId;
+use crate::SliceReport;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MutationKind {
@@ -95,7 +96,7 @@ pub struct OutputRequestReceipt {
     connector: ConnectorKey,
     request_id: RequestId,
     fingerprint: Fingerprint,
-    publication_sequence: u64,
+    publication_sequence: Option<u64>,
 }
 
 impl OutputRequestReceipt {
@@ -105,9 +106,18 @@ impl OutputRequestReceipt {
     }
 
     #[must_use]
-    pub const fn publication_sequence(&self) -> u64 {
+    pub const fn publication_sequence(&self) -> Option<u64> {
         self.publication_sequence
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct RecordedSliceReport {
+    pub report: SliceReport,
+    pub request_id: RequestId,
+    pub request_fingerprint: Fingerprint,
+    pub publication_id: Option<PublicationId>,
+    pub publication_fingerprint: Option<Fingerprint>,
 }
 
 impl IdHashItem for OutputRequestReceipt {
@@ -180,6 +190,7 @@ pub enum GraphEvent {
         request_fingerprint: Fingerprint,
     },
     OutputsPublished(OutputPublication),
+    SliceReported(RecordedSliceReport),
     Retired {
         graph_id: GraphId,
         last_generation: u64,
@@ -277,13 +288,15 @@ impl IdOrdItem for SequencedGraphState {
 #[derive(Clone, Debug)]
 pub struct GraphHistory {
     graph_id: GraphId,
-    head_sequence: Option<u64>,
+    tail_sequence: Option<u64>,
+    desired_sequence: Option<u64>,
     durable: Option<DurableGraphState>,
     generations: IdOrdMap<Graph>,
     states: IdOrdMap<SequencedGraphState>,
     requests: IdHashMap<MutationReceipt>,
     output_requests: IdHashMap<OutputRequestReceipt>,
     publications: IdHashMap<PublicationReceipt>,
+    reports: IdOrdMap<SliceReport>,
 }
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
@@ -319,56 +332,133 @@ impl GraphHistory {
     pub fn new(graph_id: GraphId) -> Self {
         Self {
             graph_id,
-            head_sequence: None,
+            tail_sequence: None,
+            desired_sequence: None,
             durable: None,
             generations: IdOrdMap::new(),
             states: IdOrdMap::new(),
             requests: IdHashMap::new(),
             output_requests: IdHashMap::new(),
             publications: IdHashMap::new(),
+            reports: IdOrdMap::new(),
         }
     }
 
     /// Fold one already-parsed domain event into this history.
     pub fn apply(&mut self, record: SequencedGraphEvent) -> Result<(), HistoryError> {
         let expected = self
-            .head_sequence
+            .tail_sequence
             .map(|sequence| sequence.saturating_add(1))
             .unwrap_or(0);
         if record.sequence != expected {
             return Err(HistoryError::NonContiguous);
         }
-        match record.event {
+        let state_changed = match record.event {
             GraphEvent::Created {
                 graph,
                 request_id,
                 request_fingerprint,
-            } => self.apply_created(graph, request_id, request_fingerprint)?,
+            } => {
+                self.apply_created(graph, request_id, request_fingerprint)?;
+                true
+            }
             GraphEvent::GenerationAccepted {
                 graph,
                 request_id,
                 mutation_kind,
                 request_fingerprint,
-            } => self.apply_generation(graph, request_id, mutation_kind, request_fingerprint)?,
+            } => {
+                self.apply_generation(graph, request_id, mutation_kind, request_fingerprint)?;
+                true
+            }
             GraphEvent::OutputsPublished(publication) => {
                 self.apply_outputs(record.sequence, publication)?;
+                true
             }
+            GraphEvent::SliceReported(report) => self.apply_report(record.sequence, report)?,
             GraphEvent::Retired {
                 graph_id,
                 last_generation,
                 request_id,
                 request_fingerprint,
-            } => self.apply_retired(graph_id, last_generation, request_id, request_fingerprint)?,
-        }
-        self.head_sequence = Some(record.sequence);
-        let state = SequencedGraphState {
-            sequence: record.sequence,
-            state: self.durable()?.clone(),
+            } => {
+                self.apply_retired(graph_id, last_generation, request_id, request_fingerprint)?;
+                true
+            }
         };
-        self.states
-            .insert_unique(state)
-            .map_err(|_| HistoryError::NonContiguous)?;
+        self.tail_sequence = Some(record.sequence);
+        if state_changed {
+            self.desired_sequence = Some(record.sequence);
+            let state = SequencedGraphState {
+                sequence: record.sequence,
+                state: self.durable()?.clone(),
+            };
+            self.states
+                .insert_unique(state)
+                .map_err(|_| HistoryError::NonContiguous)?;
+        }
         Ok(())
+    }
+
+    fn apply_report(
+        &mut self,
+        record_sequence: u64,
+        recorded: RecordedSliceReport,
+    ) -> Result<bool, HistoryError> {
+        self.require_active()?;
+        if recorded.report.graph_id() != self.graph_id
+            || recorded.report.generation() != self.durable()?.graph().generation()
+            || Some(recorded.report.sequence()) != self.desired_sequence
+        {
+            return Err(HistoryError::StaleOutputGeneration);
+        }
+        let connector = recorded.report.connector().clone();
+        let publishes = match (recorded.publication_id, recorded.publication_fingerprint) {
+            (Some(publication_id), Some(publication_fingerprint)) => {
+                let outputs = recorded.report.outputs().cloned().collect::<Vec<_>>();
+                self.output_requests
+                    .insert_unique(OutputRequestReceipt {
+                        connector: connector.clone(),
+                        request_id: recorded.request_id,
+                        fingerprint: recorded.request_fingerprint,
+                        publication_sequence: Some(record_sequence),
+                    })
+                    .map_err(|_| HistoryError::DuplicateOutputRequest)?;
+                self.publications
+                    .insert_unique(PublicationReceipt {
+                        connector: connector.clone(),
+                        publication_id,
+                        fingerprint: publication_fingerprint,
+                        publication_sequence: record_sequence,
+                    })
+                    .map_err(|_| HistoryError::DuplicatePublication)?;
+                self.durable_mut()?
+                    .published_outputs_mut()
+                    .insert_overwrite(PublishedSliceOutputs::new(
+                        recorded.report.generation(),
+                        connector,
+                        outputs,
+                        record_sequence,
+                        publication_id,
+                        recorded.report.sequence(),
+                    ));
+                true
+            }
+            (None, None) => {
+                self.output_requests
+                    .insert_unique(OutputRequestReceipt {
+                        connector,
+                        request_id: recorded.request_id,
+                        fingerprint: recorded.request_fingerprint,
+                        publication_sequence: None,
+                    })
+                    .map_err(|_| HistoryError::DuplicateOutputRequest)?;
+                false
+            }
+            _ => return Err(HistoryError::DuplicatePublication),
+        };
+        self.reports.insert_overwrite(recorded.report);
+        Ok(publishes)
     }
 
     fn apply_created(
@@ -448,7 +538,7 @@ impl GraphHistory {
                 connector: publication.connector.clone(),
                 request_id: publication.request_id,
                 fingerprint: publication.request_fingerprint,
-                publication_sequence: sequence,
+                publication_sequence: Some(sequence),
             })
             .map_err(|_| HistoryError::DuplicateOutputRequest)?;
         self.publications
@@ -531,12 +621,12 @@ impl GraphHistory {
 
     #[must_use]
     pub const fn head_sequence(&self) -> Option<u64> {
-        self.head_sequence
+        self.desired_sequence
     }
 
     #[must_use]
     pub fn next_sequence(&self) -> u64 {
-        self.head_sequence
+        self.tail_sequence
             .map(|sequence| sequence.saturating_add(1))
             .unwrap_or(0)
     }
@@ -562,6 +652,49 @@ impl GraphHistory {
     #[must_use]
     pub fn state_at(&self, sequence: u64) -> Option<&DurableGraphState> {
         self.states.get(&sequence).map(SequencedGraphState::state)
+    }
+
+    pub fn reports_for_generation(
+        &self,
+        generation: u64,
+    ) -> impl Iterator<Item = &SliceReport> {
+        self.reports
+            .iter()
+            .filter(move |report| report.generation() == generation)
+    }
+
+    pub fn reports(&self) -> impl ExactSizeIterator<Item = &SliceReport> {
+        self.reports.iter()
+    }
+
+    #[must_use]
+    pub fn last_published_generation(&self) -> Option<u64> {
+        self.states
+            .iter()
+            .flat_map(|state| state.state().published_outputs())
+            .map(PublishedSliceOutputs::generation)
+            .max()
+    }
+
+    #[must_use]
+    pub fn durable_for_generation(&self, generation: u64) -> Option<DurableGraphState> {
+        let graph = self.generation(generation)?.clone();
+        let mut selected = None;
+        for state in self.states.iter() {
+            if state.state().graph().generation() == generation {
+                selected = Some(state.state());
+            }
+        }
+        let published_outputs = selected?
+            .published_outputs()
+            .filter(|output| output.generation() == generation)
+            .cloned()
+            .collect();
+        Some(DurableGraphState::new(
+            graph,
+            published_outputs,
+            GraphLifecycle::Active,
+        ))
     }
 
     #[must_use]

@@ -66,6 +66,19 @@ pub fn encode_graph_event(event: &domain::GraphEvent) -> Vec<u8> {
             ..Default::default()
         }
         .into(),
+        domain::GraphEvent::SliceReported(value) => pb::SliceReportedV1 {
+            report: MessageField::some((&value.report).into()),
+            request_id: Some(value.request_id.to_bytes().to_vec()),
+            request_fingerprint: Some(value.request_fingerprint.as_bytes().to_vec()),
+            publication_id: value
+                .publication_id
+                .map(|publication_id| publication_id.to_bytes().to_vec()),
+            publication_fingerprint: value
+                .publication_fingerprint
+                .map(|fingerprint| fingerprint.as_bytes().to_vec()),
+            ..Default::default()
+        }
+        .into(),
         domain::GraphEvent::Retired {
             graph_id,
             last_generation,

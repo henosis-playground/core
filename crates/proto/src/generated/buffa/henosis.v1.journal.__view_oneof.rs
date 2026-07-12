@@ -64,6 +64,11 @@ pub mod graph_stream_record_v1 {
                 super::super::super::super::__buffa::view::GraphRetiredV1View<'a>,
             >,
         ),
+        SliceReported(
+            ::buffa::alloc::boxed::Box<
+                super::super::super::super::__buffa::view::SliceReportedV1View<'a>,
+            >,
+        ),
     }
 }
 pub mod registry_stream_envelope {

@@ -276,6 +276,32 @@ pub struct GetGraph {
     graph_id: GraphId,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct GetGraphGeneration {
+    graph_id: GraphId,
+    generation: u64,
+}
+
+impl GetGraphGeneration {
+    #[must_use]
+    pub const fn new(graph_id: GraphId, generation: u64) -> Self {
+        Self {
+            graph_id,
+            generation,
+        }
+    }
+
+    #[must_use]
+    pub const fn graph_id(self) -> GraphId {
+        self.graph_id
+    }
+
+    #[must_use]
+    pub const fn generation(self) -> u64 {
+        self.generation
+    }
+}
+
 impl GetGraph {
     #[must_use]
     pub const fn new(graph_id: GraphId) -> Self {

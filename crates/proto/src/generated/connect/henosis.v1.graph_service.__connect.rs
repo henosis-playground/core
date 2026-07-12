@@ -46,6 +46,14 @@ pub type OwnedGetGraphRequestView = ::buffa::view::OwnedView<
 pub type OwnedGetGraphResponseView = ::buffa::view::OwnedView<
     crate::proto::henosis::v1::__buffa::view::GetGraphResponseView<'static>,
 >;
+///Shorthand for `OwnedView<GetGraphGenerationRequestView<'static>>`.
+pub type OwnedGetGraphGenerationRequestView = ::buffa::view::OwnedView<
+    crate::proto::henosis::v1::__buffa::view::GetGraphGenerationRequestView<'static>,
+>;
+///Shorthand for `OwnedView<GetGraphGenerationResponseView<'static>>`.
+pub type OwnedGetGraphGenerationResponseView = ::buffa::view::OwnedView<
+    crate::proto::henosis::v1::__buffa::view::GetGraphGenerationResponseView<'static>,
+>;
 ///Shorthand for `OwnedView<RetireGraphRequestView<'static>>`.
 pub type OwnedRetireGraphRequestView = ::buffa::view::OwnedView<
     crate::proto::henosis::v1::__buffa::view::RetireGraphRequestView<'static>,
@@ -182,6 +190,26 @@ for ::buffa::view::OwnedView<
         ::connectrpc::__codegen::encode_view_body(self.reborrow(), codec)
     }
 }
+impl ::connectrpc::Encodable<crate::proto::henosis::v1::GetGraphGenerationResponse>
+for crate::proto::henosis::v1::__buffa::view::GetGraphGenerationResponseView<'_> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self, codec)
+    }
+}
+impl ::connectrpc::Encodable<crate::proto::henosis::v1::GetGraphGenerationResponse>
+for ::buffa::view::OwnedView<
+    crate::proto::henosis::v1::__buffa::view::GetGraphGenerationResponseView<'static>,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self.reborrow(), codec)
+    }
+}
 impl ::connectrpc::Encodable<crate::proto::henosis::v1::RetireGraphResponse>
 for crate::proto::henosis::v1::__buffa::view::RetireGraphResponseView<'_> {
     fn encode(
@@ -275,6 +303,15 @@ pub const GRAPH_SERVICE_REMOVE_COMPONENTS_SPEC: ::connectrpc::Spec = ::connectrp
 /// [`RequestContext::spec`](::connectrpc::RequestContext::spec).
 pub const GRAPH_SERVICE_GET_GRAPH_SPEC: ::connectrpc::Spec = ::connectrpc::Spec::server(
         "/henosis.v1.GraphService/GetGraph",
+        ::connectrpc::StreamType::Unary,
+    )
+    .with_idempotency_level(::connectrpc::IdempotencyLevel::NoSideEffects);
+/// Static [`Spec`](::connectrpc::Spec) for the server-side `GetGraphGeneration` RPC.
+///
+/// The dispatcher surfaces this on
+/// [`RequestContext::spec`](::connectrpc::RequestContext::spec).
+pub const GRAPH_SERVICE_GET_GRAPH_GENERATION_SPEC: ::connectrpc::Spec = ::connectrpc::Spec::server(
+        "/henosis.v1.GraphService/GetGraphGeneration",
         ::connectrpc::StreamType::Unary,
     )
     .with_idempotency_level(::connectrpc::IdempotencyLevel::NoSideEffects);
@@ -483,6 +520,29 @@ pub trait GraphService: Send + Sync + 'static {
         Output = ::connectrpc::ServiceResult<
             impl ::connectrpc::Encodable<
                 crate::proto::henosis::v1::GetGraphResponse,
+            > + Send + use<'a, Self>,
+        >,
+    > + Send;
+    /// Handle the GetGraphGeneration RPC.
+    ///
+    /// `'a` lets the response body borrow from `&self` (e.g. server-resident state).
+    ///
+    /// `request` is borrowed from the request body and is valid for the
+    /// duration of the call; message fields are read directly on it
+    /// (zero-copy). The response cannot borrow from `request` — use
+    /// `.to_owned_message()` (or copy the specific fields) for anything
+    /// returned, stored, or moved into `tokio::spawn`.
+    fn get_graph_generation<'a>(
+        &'a self,
+        ctx: ::connectrpc::RequestContext,
+        request: ::connectrpc::ServiceRequest<
+            '_,
+            crate::proto::henosis::v1::GetGraphGenerationRequest,
+        >,
+    ) -> impl ::std::future::Future<
+        Output = ::connectrpc::ServiceResult<
+            impl ::connectrpc::Encodable<
+                crate::proto::henosis::v1::GetGraphGenerationResponse,
             > + Send + use<'a, Self>,
         >,
     > + Send;
@@ -738,6 +798,35 @@ impl<S: GraphService> GraphServiceExt for S {
                 },
             )
             .with_spec(GRAPH_SERVICE_GET_GRAPH_SPEC)
+            .route_view_idempotent(
+                GRAPH_SERVICE_SERVICE_NAME,
+                "GetGraphGeneration",
+                {
+                    let svc = ::std::sync::Arc::clone(&self);
+                    ::connectrpc::view_handler_fn(move |
+                        ctx,
+                        req: ::buffa::view::OwnedView<
+                            crate::proto::henosis::v1::__buffa::view::GetGraphGenerationRequestView<
+                                'static,
+                            >,
+                        >,
+                        format|
+                    {
+                        let svc = ::std::sync::Arc::clone(&svc);
+                        async move {
+                            let sreq = ::connectrpc::ServiceRequest::<
+                                crate::proto::henosis::v1::GetGraphGenerationRequest,
+                            >::from_parts(req.reborrow(), req.bytes());
+                            svc.get_graph_generation(ctx, sreq)
+                                .await?
+                                .encode::<
+                                    crate::proto::henosis::v1::GetGraphGenerationResponse,
+                                >(format)
+                        }
+                    })
+                },
+            )
+            .with_spec(GRAPH_SERVICE_GET_GRAPH_GENERATION_SPEC)
             .route_view(
                 GRAPH_SERVICE_SERVICE_NAME,
                 "RetireGraph",
@@ -883,6 +972,12 @@ impl<T: GraphService> ::connectrpc::Dispatcher for GraphServiceServer<T> {
                 Some(
                     ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(true)
                         .with_spec(GRAPH_SERVICE_GET_GRAPH_SPEC),
+                )
+            }
+            "GetGraphGeneration" => {
+                Some(
+                    ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(true)
+                        .with_spec(GRAPH_SERVICE_GET_GRAPH_GENERATION_SPEC),
                 )
             }
             "RetireGraph" => {
@@ -1032,6 +1127,27 @@ impl<T: GraphService> ::connectrpc::Dispatcher for GraphServiceServer<T> {
                     svc.get_graph(ctx, req)
                         .await?
                         .encode::<crate::proto::henosis::v1::GetGraphResponse>(format)
+                })
+            }
+            "GetGraphGeneration" => {
+                let svc = ::std::sync::Arc::clone(&self.inner);
+                Box::pin(async move {
+                    let body = ::connectrpc::dispatcher::codegen::request_proto_bytes::<
+                        crate::proto::henosis::v1::GetGraphGenerationRequest,
+                    >(request.encoded()?, format)?;
+                    let req: crate::proto::henosis::v1::__buffa::view::GetGraphGenerationRequestView<
+                        '_,
+                    > = ::connectrpc::dispatcher::codegen::decode_borrowed_request_view(
+                        &body,
+                    )?;
+                    let req = ::connectrpc::ServiceRequest::<
+                        crate::proto::henosis::v1::GetGraphGenerationRequest,
+                    >::from_parts(&req, &body);
+                    svc.get_graph_generation(ctx, req)
+                        .await?
+                        .encode::<
+                            crate::proto::henosis::v1::GetGraphGenerationResponse,
+                        >(format)
                 })
             }
             "RetireGraph" => {
@@ -1467,6 +1583,51 @@ where
                 &self.config,
                 GRAPH_SERVICE_SERVICE_NAME,
                 "GetGraph",
+                request,
+                options,
+            )
+            .await
+    }
+    /// Call the GetGraphGeneration RPC. Sends a request to /henosis.v1.GraphService/GetGraphGeneration.
+    pub async fn get_graph_generation(
+        &self,
+        request: crate::proto::henosis::v1::GetGraphGenerationRequest,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::proto::henosis::v1::__buffa::view::GetGraphGenerationResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        self.get_graph_generation_with_options(
+                request,
+                ::connectrpc::client::CallOptions::default(),
+            )
+            .await
+    }
+    /// Call the GetGraphGeneration RPC with explicit per-call options. Options override [`ClientConfig`](::connectrpc::client::ClientConfig) defaults.
+    pub async fn get_graph_generation_with_options(
+        &self,
+        request: crate::proto::henosis::v1::GetGraphGenerationRequest,
+        options: ::connectrpc::client::CallOptions,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::proto::henosis::v1::__buffa::view::GetGraphGenerationResponseView<
+                    'static,
+                >,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        ::connectrpc::client::call_unary(
+                &self.transport,
+                &self.config,
+                GRAPH_SERVICE_SERVICE_NAME,
+                "GetGraphGeneration",
                 request,
                 options,
             )

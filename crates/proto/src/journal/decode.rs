@@ -180,6 +180,33 @@ pub fn decode_graph_record(
                 .map_err(JournalDecodeError::InvalidDomain)?,
             })
         }
+        oneof::graph_stream_record_v1::Event::SliceReported(value) => {
+            domain::GraphEvent::SliceReported(domain::RecordedSliceReport {
+                report: value
+                    .report
+                    .as_option()
+                    .ok_or(JournalDecodeError::Missing("slice report"))?
+                    .try_into()
+                    .map_err(JournalDecodeError::InvalidDomain)?,
+                request_id: request_id(value.request_id, "report.request_id")
+                    .map_err(JournalDecodeError::InvalidDomain)?,
+                request_fingerprint: fingerprint(
+                    value.request_fingerprint,
+                    "report.request_fingerprint",
+                )
+                .map_err(JournalDecodeError::InvalidDomain)?,
+                publication_id: value
+                    .publication_id
+                    .map(|value| publication_id(Some(value), "report.publication_id"))
+                    .transpose()
+                    .map_err(JournalDecodeError::InvalidDomain)?,
+                publication_fingerprint: value
+                    .publication_fingerprint
+                    .map(|value| fingerprint(Some(value), "report.publication_fingerprint"))
+                    .transpose()
+                    .map_err(JournalDecodeError::InvalidDomain)?,
+            })
+        }
         oneof::graph_stream_record_v1::Event::GraphRetired(value) => domain::GraphEvent::Retired {
             graph_id: graph_id(value.graph_id, "retired.graph_id")
                 .map_err(JournalDecodeError::InvalidDomain)?,
