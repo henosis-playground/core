@@ -9,4 +9,7 @@ pub enum JournalError {
     /// Another writer advanced the stream before this append.
     #[error("journal compare-and-append failed; current tail is {current_tail}")]
     CasConflict { current_tail: u64 },
+    /// A component identity already names a different immutable specification.
+    #[error("component identity is already registered with another specification")]
+    ComponentConflict,
 }

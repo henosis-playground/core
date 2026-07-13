@@ -57,6 +57,7 @@ pub(crate) fn map_journal(
         Fault::Domain(JournalError::CasConflict { .. }) => {
             invariant("journal CAS conflict escaped its append boundary")
         }
+        Fault::Domain(JournalError::ComponentConflict) => already_exists("component.id.conflict"),
         Fault::Transient(error) => Fault::Transient(error),
         Fault::Invariant(error) => Fault::Invariant(error),
     }

@@ -63,6 +63,11 @@ impl Journal {
                         "registry append unexpectedly reported graph not found"
                     )));
                 }
+                Err(Fault::Domain(JournalError::ComponentConflict)) => {
+                    return Err(Fault::Invariant(anyhow::anyhow!(
+                        "registry append unexpectedly reported a component conflict"
+                    )));
+                }
                 Err(Fault::Transient(error)) => return Err(Fault::Transient(error)),
                 Err(Fault::Invariant(error)) => return Err(Fault::Invariant(error)),
             }

@@ -82,7 +82,7 @@ impl Orchestrator {
             .journal
             .component_register(command)
             .await
-            .map_err(|error| error.squash())?;
+            .map_err(map_journal)?;
         let catalog = self
             .journal
             .component_catalog()
@@ -406,6 +406,9 @@ impl Orchestrator {
                     current_generation,
                 }))
             }
+            Err(Fault::Domain(henosis_journal::JournalError::ComponentConflict)) => Err(invariant(
+                "graph append unexpectedly reported a component conflict",
+            )),
             Err(error) => Err(map_journal(error)),
         }
     }
