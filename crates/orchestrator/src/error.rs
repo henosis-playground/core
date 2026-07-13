@@ -54,10 +54,8 @@ pub(crate) fn map_journal(
 ) -> Fault<OrchestratorError, Error, Error> {
     match error {
         Fault::Domain(JournalError::NotFound) => not_found(),
-        Fault::Domain(JournalError::CasConflict { current_tail }) => {
-            Fault::Domain(OrchestratorError::Aborted {
-                current_generation: current_tail,
-            })
+        Fault::Domain(JournalError::CasConflict { .. }) => {
+            invariant("journal CAS conflict escaped its append boundary")
         }
         Fault::Transient(error) => Fault::Transient(error),
         Fault::Invariant(error) => Fault::Invariant(error),

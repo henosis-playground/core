@@ -99,10 +99,8 @@ impl Orchestrator {
             publication_hash: candidate_publication_hash,
         });
         let sequence = self
-            .journal
-            .graph_append(graph_id, history.next_sequence(), &event)
-            .await
-            .map_err(map_journal)?;
+            .append_graph_event(graph_id, history.next_sequence(), &event)
+            .await?;
         let history = self
             .journal
             .graph_load(graph_id)

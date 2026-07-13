@@ -130,10 +130,7 @@ impl Orchestrator {
             request_id,
             request_hash: hash,
         };
-        self.journal
-            .graph_append(graph_id, 0, &event)
-            .await
-            .map_err(map_journal)?;
+        self.append_graph_event(graph_id, 0, &event).await?;
         self.registry_ensure(graph_id, request_id, false).await?;
         let history = self
             .journal
@@ -294,10 +291,8 @@ impl Orchestrator {
             request_id,
             request_hash: hash,
         };
-        self.journal
-            .graph_append(graph_id, history.next_sequence(), &event)
-            .await
-            .map_err(map_journal)?;
+        self.append_graph_event(graph_id, history.next_sequence(), &event)
+            .await?;
         self.registry_ensure(graph_id, request_id, true).await?;
         let history = self
             .journal
@@ -347,10 +342,8 @@ impl Orchestrator {
             mutation_kind: kind,
             request_hash: hash,
         };
-        self.journal
-            .graph_append(graph_id, history.next_sequence(), &event)
-            .await
-            .map_err(map_journal)?;
+        self.append_graph_event(graph_id, history.next_sequence(), &event)
+            .await?;
         let history = self
             .journal
             .graph_load(graph_id)
@@ -388,6 +381,33 @@ impl Orchestrator {
             );
         }
         Ok(())
+    }
+
+    pub(crate) async fn append_graph_event(
+        &self,
+        graph_id: types::domain::GraphUuid,
+        expected_tail: u64,
+        event: &GraphEvent,
+    ) -> Result<u64, Fault<OrchestratorError, Error, Error>> {
+        match self
+            .journal
+            .graph_append(graph_id, expected_tail, event)
+            .await
+        {
+            Ok(sequence) => Ok(sequence),
+            Err(Fault::Domain(henosis_journal::JournalError::CasConflict { .. })) => {
+                let history = self
+                    .journal
+                    .graph_load(graph_id)
+                    .await
+                    .map_err(map_journal)?;
+                let current_generation = current_state(&history)?.graph().generation();
+                Err(Fault::Domain(OrchestratorError::Aborted {
+                    current_generation,
+                }))
+            }
+            Err(error) => Err(map_journal(error)),
+        }
     }
 
     async fn registry_ensure(
