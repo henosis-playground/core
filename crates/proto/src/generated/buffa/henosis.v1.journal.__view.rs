@@ -668,8 +668,8 @@ impl ::serde::Serialize for SpecStreamRecordV1OwnedView {
 }
 #[derive(Clone, Debug, Default)]
 pub struct ComponentSpecRegisteredV1View<'a> {
-    /// Field 1: `hash`
-    pub hash: ::core::option::Option<&'a [u8]>,
+    /// Field 1: `component_id`
+    pub component_id: ::core::option::Option<&'a [u8]>,
     /// Field 2: `spec`
     pub spec: ::buffa::MessageFieldView<
         super::super::__buffa::view::ComponentSpecRecordV1View<'a>,
@@ -708,7 +708,7 @@ impl<'a> ::buffa::MessageView<'a> for ComponentSpecRegisteredV1View<'a> {
                     tag,
                     ::buffa::encoding::WireType::LengthDelimited,
                 )?;
-                view.hash = Some(::buffa::types::borrow_bytes(&mut cur)?);
+                view.component_id = Some(::buffa::types::borrow_bytes(&mut cur)?);
             }
             2u32 => {
                 ::buffa::encoding::check_wire_type(
@@ -759,7 +759,7 @@ impl<'a> ::buffa::MessageView<'a> for ComponentSpecRegisteredV1View<'a> {
         use ::buffa::alloc::string::ToString as _;
         let _ = __buffa_src;
         ::core::result::Result::Ok(super::super::ComponentSpecRegisteredV1 {
-            hash: self.hash.map(|b| (b).to_vec()),
+            component_id: self.component_id.map(|b| (b).to_vec()),
             spec: match self.spec.as_option() {
                 Some(v) => {
                     ::buffa::MessageField::<
@@ -779,7 +779,7 @@ impl<'a> ::buffa::ViewEncode<'a> for ComponentSpecRegisteredV1View<'a> {
         #[allow(unused_imports)]
         use ::buffa::Enumeration as _;
         let mut size = 0u32;
-        if let Some(ref v) = self.hash {
+        if let Some(ref v) = self.component_id {
             size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
         }
         if self.spec.is_set() {
@@ -801,7 +801,7 @@ impl<'a> ::buffa::ViewEncode<'a> for ComponentSpecRegisteredV1View<'a> {
     ) {
         #[allow(unused_imports)]
         use ::buffa::Enumeration as _;
-        if let Some(ref v) = self.hash {
+        if let Some(ref v) = self.component_id {
             ::buffa::types::put_bytes_field(1u32, v, buf);
         }
         if self.spec.is_set() {
@@ -829,8 +829,9 @@ impl<'__a> ::serde::Serialize for ComponentSpecRegisteredV1View<'__a> {
     ) -> ::core::result::Result<__S::Ok, __S::Error> {
         use ::serde::ser::SerializeMap as _;
         let mut __map = __s.serialize_map(::core::option::Option::None)?;
-        if let ::core::option::Option::Some(__v) = self.hash {
-            __map.serialize_entry("hash", &::buffa::json_helpers::BytesJson(__v))?;
+        if let ::core::option::Option::Some(__v) = self.component_id {
+            __map
+                .serialize_entry("componentId", &::buffa::json_helpers::BytesJson(__v))?;
         }
         {
             if let ::core::option::Option::Some(__v) = self.spec.as_option() {
@@ -933,10 +934,10 @@ impl ComponentSpecRegisteredV1OwnedView {
     pub fn into_bytes(self) -> ::buffa::bytes::Bytes {
         self.0.into_bytes()
     }
-    /// Field 1: `hash`
+    /// Field 1: `component_id`
     #[must_use]
-    pub fn hash(&self) -> ::core::option::Option<&'_ [u8]> {
-        self.0.reborrow().hash
+    pub fn component_id(&self) -> ::core::option::Option<&'_ [u8]> {
+        self.0.reborrow().component_id
     }
     /// Field 2: `spec`
     #[must_use]
@@ -986,8 +987,8 @@ pub struct ComponentSpecRecordV1View<'a> {
     pub connector: ::core::option::Option<&'a str>,
     /// Field 3: `outputs_schema`
     pub outputs_schema: ::core::option::Option<&'a [u8]>,
-    /// Field 4: `depends_on`
-    pub depends_on: ::buffa::RepeatedView<'a, &'a [u8]>,
+    /// Field 4: `depends_on_component_ids`
+    pub depends_on_component_ids: ::buffa::RepeatedView<'a, &'a [u8]>,
     /// Field 5: `connector_context`
     pub connector_context: ::core::option::Option<&'a [u8]>,
     pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
@@ -1052,7 +1053,8 @@ impl<'a> ::buffa::MessageView<'a> for ComponentSpecRecordV1View<'a> {
                     tag,
                     ::buffa::encoding::WireType::LengthDelimited,
                 )?;
-                view.depends_on.push(::buffa::types::borrow_bytes(&mut cur)?);
+                view.depends_on_component_ids
+                    .push(::buffa::types::borrow_bytes(&mut cur)?);
             }
             _ => {
                 ::buffa::encoding::skip_field_depth(tag, &mut cur, ctx.depth())?;
@@ -1085,7 +1087,11 @@ impl<'a> ::buffa::MessageView<'a> for ComponentSpecRecordV1View<'a> {
             name: self.name.map(|s| s.to_string()),
             connector: self.connector.map(|s| s.to_string()),
             outputs_schema: self.outputs_schema.map(|b| (b).to_vec()),
-            depends_on: self.depends_on.iter().map(|b| (b).to_vec()).collect(),
+            depends_on_component_ids: self
+                .depends_on_component_ids
+                .iter()
+                .map(|b| (b).to_vec())
+                .collect(),
             connector_context: self.connector_context.map(|b| (b).to_vec()),
             __buffa_unknown_fields: self.__buffa_unknown_fields.to_owned()?.into(),
             ..::core::default::Default::default()
@@ -1107,7 +1113,7 @@ impl<'a> ::buffa::ViewEncode<'a> for ComponentSpecRecordV1View<'a> {
         if let Some(ref v) = self.outputs_schema {
             size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
         }
-        for v in &self.depends_on {
+        for v in &self.depends_on_component_ids {
             size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
         }
         if let Some(ref v) = self.connector_context {
@@ -1133,7 +1139,7 @@ impl<'a> ::buffa::ViewEncode<'a> for ComponentSpecRecordV1View<'a> {
         if let Some(ref v) = self.outputs_schema {
             ::buffa::types::put_bytes_field(3u32, v, buf);
         }
-        for v in &self.depends_on {
+        for v in &self.depends_on_component_ids {
             ::buffa::types::put_bytes_field(4u32, v, buf);
         }
         if let Some(ref v) = self.connector_context {
@@ -1173,11 +1179,11 @@ impl<'__a> ::serde::Serialize for ComponentSpecRecordV1View<'__a> {
                     &::buffa::json_helpers::BytesJson(__v),
                 )?;
         }
-        if !self.depends_on.is_empty() {
+        if !self.depends_on_component_ids.is_empty() {
             __map
                 .serialize_entry(
-                    "dependsOn",
-                    &::buffa::json_helpers::BytesSeqJson(&self.depends_on),
+                    "dependsOnComponentIds",
+                    &::buffa::json_helpers::BytesSeqJson(&self.depends_on_component_ids),
                 )?;
         }
         if let ::core::option::Option::Some(__v) = self.connector_context {
@@ -1298,10 +1304,10 @@ impl ComponentSpecRecordV1OwnedView {
     pub fn outputs_schema(&self) -> ::core::option::Option<&'_ [u8]> {
         self.0.reborrow().outputs_schema
     }
-    /// Field 4: `depends_on`
+    /// Field 4: `depends_on_component_ids`
     #[must_use]
-    pub fn depends_on(&self) -> &::buffa::RepeatedView<'_, &'_ [u8]> {
-        &self.0.reborrow().depends_on
+    pub fn depends_on_component_ids(&self) -> &::buffa::RepeatedView<'_, &'_ [u8]> {
+        &self.0.reborrow().depends_on_component_ids
     }
     /// Field 5: `connector_context`
     #[must_use]
@@ -2289,12 +2295,12 @@ pub struct SliceReportedV1View<'a> {
     >,
     /// Field 2: `request_id`
     pub request_id: ::core::option::Option<&'a [u8]>,
-    /// Field 3: `request_fingerprint`
-    pub request_fingerprint: ::core::option::Option<&'a [u8]>,
+    /// Field 3: `request_hash`
+    pub request_hash: ::core::option::Option<&'a [u8]>,
     /// Field 4: `publication_id`
     pub publication_id: ::core::option::Option<&'a [u8]>,
-    /// Field 5: `publication_fingerprint`
-    pub publication_fingerprint: ::core::option::Option<&'a [u8]>,
+    /// Field 5: `publication_hash`
+    pub publication_hash: ::core::option::Option<&'a [u8]>,
     pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
 }
 impl<'a> ::buffa::MessageView<'a> for SliceReportedV1View<'a> {
@@ -2357,7 +2363,7 @@ impl<'a> ::buffa::MessageView<'a> for SliceReportedV1View<'a> {
                     tag,
                     ::buffa::encoding::WireType::LengthDelimited,
                 )?;
-                view.request_fingerprint = Some(::buffa::types::borrow_bytes(&mut cur)?);
+                view.request_hash = Some(::buffa::types::borrow_bytes(&mut cur)?);
             }
             4u32 => {
                 ::buffa::encoding::check_wire_type(
@@ -2371,9 +2377,7 @@ impl<'a> ::buffa::MessageView<'a> for SliceReportedV1View<'a> {
                     tag,
                     ::buffa::encoding::WireType::LengthDelimited,
                 )?;
-                view.publication_fingerprint = Some(
-                    ::buffa::types::borrow_bytes(&mut cur)?,
-                );
+                view.publication_hash = Some(::buffa::types::borrow_bytes(&mut cur)?);
             }
             _ => {
                 ::buffa::encoding::skip_field_depth(tag, &mut cur, ctx.depth())?;
@@ -2406,9 +2410,9 @@ impl<'a> ::buffa::MessageView<'a> for SliceReportedV1View<'a> {
                 None => ::buffa::MessageField::none(),
             },
             request_id: self.request_id.map(|b| (b).to_vec()),
-            request_fingerprint: self.request_fingerprint.map(|b| (b).to_vec()),
+            request_hash: self.request_hash.map(|b| (b).to_vec()),
             publication_id: self.publication_id.map(|b| (b).to_vec()),
-            publication_fingerprint: self.publication_fingerprint.map(|b| (b).to_vec()),
+            publication_hash: self.publication_hash.map(|b| (b).to_vec()),
             __buffa_unknown_fields: self.__buffa_unknown_fields.to_owned()?.into(),
             ..::core::default::Default::default()
         })
@@ -2431,13 +2435,13 @@ impl<'a> ::buffa::ViewEncode<'a> for SliceReportedV1View<'a> {
         if let Some(ref v) = self.request_id {
             size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
         }
-        if let Some(ref v) = self.request_fingerprint {
+        if let Some(ref v) = self.request_hash {
             size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
         }
         if let Some(ref v) = self.publication_id {
             size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
         }
-        if let Some(ref v) = self.publication_fingerprint {
+        if let Some(ref v) = self.publication_hash {
             size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
         }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
@@ -2458,13 +2462,13 @@ impl<'a> ::buffa::ViewEncode<'a> for SliceReportedV1View<'a> {
         if let Some(ref v) = self.request_id {
             ::buffa::types::put_bytes_field(2u32, v, buf);
         }
-        if let Some(ref v) = self.request_fingerprint {
+        if let Some(ref v) = self.request_hash {
             ::buffa::types::put_bytes_field(3u32, v, buf);
         }
         if let Some(ref v) = self.publication_id {
             ::buffa::types::put_bytes_field(4u32, v, buf);
         }
-        if let Some(ref v) = self.publication_fingerprint {
+        if let Some(ref v) = self.publication_hash {
             ::buffa::types::put_bytes_field(5u32, v, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
@@ -2496,12 +2500,9 @@ impl<'__a> ::serde::Serialize for SliceReportedV1View<'__a> {
         if let ::core::option::Option::Some(__v) = self.request_id {
             __map.serialize_entry("requestId", &::buffa::json_helpers::BytesJson(__v))?;
         }
-        if let ::core::option::Option::Some(__v) = self.request_fingerprint {
+        if let ::core::option::Option::Some(__v) = self.request_hash {
             __map
-                .serialize_entry(
-                    "requestFingerprint",
-                    &::buffa::json_helpers::BytesJson(__v),
-                )?;
+                .serialize_entry("requestHash", &::buffa::json_helpers::BytesJson(__v))?;
         }
         if let ::core::option::Option::Some(__v) = self.publication_id {
             __map
@@ -2510,10 +2511,10 @@ impl<'__a> ::serde::Serialize for SliceReportedV1View<'__a> {
                     &::buffa::json_helpers::BytesJson(__v),
                 )?;
         }
-        if let ::core::option::Option::Some(__v) = self.publication_fingerprint {
+        if let ::core::option::Option::Some(__v) = self.publication_hash {
             __map
                 .serialize_entry(
-                    "publicationFingerprint",
+                    "publicationHash",
                     &::buffa::json_helpers::BytesJson(__v),
                 )?;
         }
@@ -2620,20 +2621,20 @@ impl SliceReportedV1OwnedView {
     pub fn request_id(&self) -> ::core::option::Option<&'_ [u8]> {
         self.0.reborrow().request_id
     }
-    /// Field 3: `request_fingerprint`
+    /// Field 3: `request_hash`
     #[must_use]
-    pub fn request_fingerprint(&self) -> ::core::option::Option<&'_ [u8]> {
-        self.0.reborrow().request_fingerprint
+    pub fn request_hash(&self) -> ::core::option::Option<&'_ [u8]> {
+        self.0.reborrow().request_hash
     }
     /// Field 4: `publication_id`
     #[must_use]
     pub fn publication_id(&self) -> ::core::option::Option<&'_ [u8]> {
         self.0.reborrow().publication_id
     }
-    /// Field 5: `publication_fingerprint`
+    /// Field 5: `publication_hash`
     #[must_use]
-    pub fn publication_fingerprint(&self) -> ::core::option::Option<&'_ [u8]> {
-        self.0.reborrow().publication_fingerprint
+    pub fn publication_hash(&self) -> ::core::option::Option<&'_ [u8]> {
+        self.0.reborrow().publication_hash
     }
 }
 impl ::core::convert::From<::buffa::OwnedView<SliceReportedV1View<'static>>>
@@ -2674,8 +2675,8 @@ pub struct GraphCreatedV1View<'a> {
     >,
     /// Field 2: `request_id`
     pub request_id: ::core::option::Option<&'a [u8]>,
-    /// Field 3: `request_fingerprint`
-    pub request_fingerprint: ::core::option::Option<&'a [u8]>,
+    /// Field 3: `request_hash`
+    pub request_hash: ::core::option::Option<&'a [u8]>,
     pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
 }
 impl<'a> ::buffa::MessageView<'a> for GraphCreatedV1View<'a> {
@@ -2738,7 +2739,7 @@ impl<'a> ::buffa::MessageView<'a> for GraphCreatedV1View<'a> {
                     tag,
                     ::buffa::encoding::WireType::LengthDelimited,
                 )?;
-                view.request_fingerprint = Some(::buffa::types::borrow_bytes(&mut cur)?);
+                view.request_hash = Some(::buffa::types::borrow_bytes(&mut cur)?);
             }
             _ => {
                 ::buffa::encoding::skip_field_depth(tag, &mut cur, ctx.depth())?;
@@ -2771,7 +2772,7 @@ impl<'a> ::buffa::MessageView<'a> for GraphCreatedV1View<'a> {
                 None => ::buffa::MessageField::none(),
             },
             request_id: self.request_id.map(|b| (b).to_vec()),
-            request_fingerprint: self.request_fingerprint.map(|b| (b).to_vec()),
+            request_hash: self.request_hash.map(|b| (b).to_vec()),
             __buffa_unknown_fields: self.__buffa_unknown_fields.to_owned()?.into(),
             ..::core::default::Default::default()
         })
@@ -2794,7 +2795,7 @@ impl<'a> ::buffa::ViewEncode<'a> for GraphCreatedV1View<'a> {
         if let Some(ref v) = self.request_id {
             size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
         }
-        if let Some(ref v) = self.request_fingerprint {
+        if let Some(ref v) = self.request_hash {
             size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
         }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
@@ -2815,7 +2816,7 @@ impl<'a> ::buffa::ViewEncode<'a> for GraphCreatedV1View<'a> {
         if let Some(ref v) = self.request_id {
             ::buffa::types::put_bytes_field(2u32, v, buf);
         }
-        if let Some(ref v) = self.request_fingerprint {
+        if let Some(ref v) = self.request_hash {
             ::buffa::types::put_bytes_field(3u32, v, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
@@ -2847,12 +2848,9 @@ impl<'__a> ::serde::Serialize for GraphCreatedV1View<'__a> {
         if let ::core::option::Option::Some(__v) = self.request_id {
             __map.serialize_entry("requestId", &::buffa::json_helpers::BytesJson(__v))?;
         }
-        if let ::core::option::Option::Some(__v) = self.request_fingerprint {
+        if let ::core::option::Option::Some(__v) = self.request_hash {
             __map
-                .serialize_entry(
-                    "requestFingerprint",
-                    &::buffa::json_helpers::BytesJson(__v),
-                )?;
+                .serialize_entry("requestHash", &::buffa::json_helpers::BytesJson(__v))?;
         }
         __map.end()
     }
@@ -2959,10 +2957,10 @@ impl GraphCreatedV1OwnedView {
     pub fn request_id(&self) -> ::core::option::Option<&'_ [u8]> {
         self.0.reborrow().request_id
     }
-    /// Field 3: `request_fingerprint`
+    /// Field 3: `request_hash`
     #[must_use]
-    pub fn request_fingerprint(&self) -> ::core::option::Option<&'_ [u8]> {
-        self.0.reborrow().request_fingerprint
+    pub fn request_hash(&self) -> ::core::option::Option<&'_ [u8]> {
+        self.0.reborrow().request_hash
     }
 }
 impl ::core::convert::From<::buffa::OwnedView<GraphCreatedV1View<'static>>>
@@ -3007,8 +3005,8 @@ pub struct GenerationAcceptedV1View<'a> {
     pub mutation_kind: ::core::option::Option<
         ::buffa::EnumValue<super::super::GraphMutationKindV1>,
     >,
-    /// Field 4: `request_fingerprint`
-    pub request_fingerprint: ::core::option::Option<&'a [u8]>,
+    /// Field 4: `request_hash`
+    pub request_hash: ::core::option::Option<&'a [u8]>,
     pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
 }
 impl<'a> ::buffa::MessageView<'a> for GenerationAcceptedV1View<'a> {
@@ -3080,7 +3078,7 @@ impl<'a> ::buffa::MessageView<'a> for GenerationAcceptedV1View<'a> {
                     tag,
                     ::buffa::encoding::WireType::LengthDelimited,
                 )?;
-                view.request_fingerprint = Some(::buffa::types::borrow_bytes(&mut cur)?);
+                view.request_hash = Some(::buffa::types::borrow_bytes(&mut cur)?);
             }
             _ => {
                 ::buffa::encoding::skip_field_depth(tag, &mut cur, ctx.depth())?;
@@ -3120,7 +3118,7 @@ impl<'a> ::buffa::MessageView<'a> for GenerationAcceptedV1View<'a> {
             },
             request_id: self.request_id.map(|b| (b).to_vec()),
             mutation_kind: self.mutation_kind,
-            request_fingerprint: self.request_fingerprint.map(|b| (b).to_vec()),
+            request_hash: self.request_hash.map(|b| (b).to_vec()),
             __buffa_unknown_fields: self.__buffa_unknown_fields.to_owned()?.into(),
             ..::core::default::Default::default()
         })
@@ -3146,7 +3144,7 @@ impl<'a> ::buffa::ViewEncode<'a> for GenerationAcceptedV1View<'a> {
         if let Some(ref v) = self.mutation_kind {
             size += 1u32 + ::buffa::types::int32_encoded_len(v.to_i32()) as u32;
         }
-        if let Some(ref v) = self.request_fingerprint {
+        if let Some(ref v) = self.request_hash {
             size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
         }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
@@ -3170,7 +3168,7 @@ impl<'a> ::buffa::ViewEncode<'a> for GenerationAcceptedV1View<'a> {
         if let Some(ref v) = self.mutation_kind {
             ::buffa::types::put_int32_field(3u32, v.to_i32(), buf);
         }
-        if let Some(ref v) = self.request_fingerprint {
+        if let Some(ref v) = self.request_hash {
             ::buffa::types::put_bytes_field(4u32, v, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
@@ -3205,12 +3203,9 @@ impl<'__a> ::serde::Serialize for GenerationAcceptedV1View<'__a> {
         if let ::core::option::Option::Some(ref __v) = self.mutation_kind {
             __map.serialize_entry("mutationKind", __v)?;
         }
-        if let ::core::option::Option::Some(__v) = self.request_fingerprint {
+        if let ::core::option::Option::Some(__v) = self.request_hash {
             __map
-                .serialize_entry(
-                    "requestFingerprint",
-                    &::buffa::json_helpers::BytesJson(__v),
-                )?;
+                .serialize_entry("requestHash", &::buffa::json_helpers::BytesJson(__v))?;
         }
         __map.end()
     }
@@ -3329,10 +3324,10 @@ impl GenerationAcceptedV1OwnedView {
     ) -> ::core::option::Option<::buffa::EnumValue<super::super::GraphMutationKindV1>> {
         self.0.reborrow().mutation_kind
     }
-    /// Field 4: `request_fingerprint`
+    /// Field 4: `request_hash`
     #[must_use]
-    pub fn request_fingerprint(&self) -> ::core::option::Option<&'_ [u8]> {
-        self.0.reborrow().request_fingerprint
+    pub fn request_hash(&self) -> ::core::option::Option<&'_ [u8]> {
+        self.0.reborrow().request_hash
     }
 }
 impl ::core::convert::From<::buffa::OwnedView<GenerationAcceptedV1View<'static>>>
@@ -3378,12 +3373,12 @@ pub struct OutputsPublishedV1View<'a> {
     >,
     /// Field 4: `request_id`
     pub request_id: ::core::option::Option<&'a [u8]>,
-    /// Field 5: `request_fingerprint`
-    pub request_fingerprint: ::core::option::Option<&'a [u8]>,
+    /// Field 5: `request_hash`
+    pub request_hash: ::core::option::Option<&'a [u8]>,
     /// Field 6: `publication_id`
     pub publication_id: ::core::option::Option<&'a [u8]>,
-    /// Field 7: `publication_fingerprint`
-    pub publication_fingerprint: ::core::option::Option<&'a [u8]>,
+    /// Field 7: `publication_hash`
+    pub publication_hash: ::core::option::Option<&'a [u8]>,
     /// Field 8: `input_sequence`
     pub input_sequence: ::core::option::Option<u64>,
     pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
@@ -3441,7 +3436,7 @@ impl<'a> ::buffa::MessageView<'a> for OutputsPublishedV1View<'a> {
                     tag,
                     ::buffa::encoding::WireType::LengthDelimited,
                 )?;
-                view.request_fingerprint = Some(::buffa::types::borrow_bytes(&mut cur)?);
+                view.request_hash = Some(::buffa::types::borrow_bytes(&mut cur)?);
             }
             6u32 => {
                 ::buffa::encoding::check_wire_type(
@@ -3455,9 +3450,7 @@ impl<'a> ::buffa::MessageView<'a> for OutputsPublishedV1View<'a> {
                     tag,
                     ::buffa::encoding::WireType::LengthDelimited,
                 )?;
-                view.publication_fingerprint = Some(
-                    ::buffa::types::borrow_bytes(&mut cur)?,
-                );
+                view.publication_hash = Some(::buffa::types::borrow_bytes(&mut cur)?);
             }
             8u32 => {
                 ::buffa::encoding::check_wire_type(
@@ -3511,9 +3504,9 @@ impl<'a> ::buffa::MessageView<'a> for OutputsPublishedV1View<'a> {
                 .map(|v| v.to_owned_from_source(__buffa_src))
                 .collect::<::core::result::Result<_, ::buffa::DecodeError>>()?,
             request_id: self.request_id.map(|b| (b).to_vec()),
-            request_fingerprint: self.request_fingerprint.map(|b| (b).to_vec()),
+            request_hash: self.request_hash.map(|b| (b).to_vec()),
             publication_id: self.publication_id.map(|b| (b).to_vec()),
-            publication_fingerprint: self.publication_fingerprint.map(|b| (b).to_vec()),
+            publication_hash: self.publication_hash.map(|b| (b).to_vec()),
             input_sequence: self.input_sequence,
             __buffa_unknown_fields: self.__buffa_unknown_fields.to_owned()?.into(),
             ..::core::default::Default::default()
@@ -3543,13 +3536,13 @@ impl<'a> ::buffa::ViewEncode<'a> for OutputsPublishedV1View<'a> {
         if let Some(ref v) = self.request_id {
             size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
         }
-        if let Some(ref v) = self.request_fingerprint {
+        if let Some(ref v) = self.request_hash {
             size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
         }
         if let Some(ref v) = self.publication_id {
             size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
         }
-        if let Some(ref v) = self.publication_fingerprint {
+        if let Some(ref v) = self.publication_hash {
             size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
         }
         if let Some(v) = self.input_sequence {
@@ -3579,13 +3572,13 @@ impl<'a> ::buffa::ViewEncode<'a> for OutputsPublishedV1View<'a> {
         if let Some(ref v) = self.request_id {
             ::buffa::types::put_bytes_field(4u32, v, buf);
         }
-        if let Some(ref v) = self.request_fingerprint {
+        if let Some(ref v) = self.request_hash {
             ::buffa::types::put_bytes_field(5u32, v, buf);
         }
         if let Some(ref v) = self.publication_id {
             ::buffa::types::put_bytes_field(6u32, v, buf);
         }
-        if let Some(ref v) = self.publication_fingerprint {
+        if let Some(ref v) = self.publication_hash {
             ::buffa::types::put_bytes_field(7u32, v, buf);
         }
         if let Some(v) = self.input_sequence {
@@ -3625,12 +3618,9 @@ impl<'__a> ::serde::Serialize for OutputsPublishedV1View<'__a> {
         if let ::core::option::Option::Some(__v) = self.request_id {
             __map.serialize_entry("requestId", &::buffa::json_helpers::BytesJson(__v))?;
         }
-        if let ::core::option::Option::Some(__v) = self.request_fingerprint {
+        if let ::core::option::Option::Some(__v) = self.request_hash {
             __map
-                .serialize_entry(
-                    "requestFingerprint",
-                    &::buffa::json_helpers::BytesJson(__v),
-                )?;
+                .serialize_entry("requestHash", &::buffa::json_helpers::BytesJson(__v))?;
         }
         if let ::core::option::Option::Some(__v) = self.publication_id {
             __map
@@ -3639,10 +3629,10 @@ impl<'__a> ::serde::Serialize for OutputsPublishedV1View<'__a> {
                     &::buffa::json_helpers::BytesJson(__v),
                 )?;
         }
-        if let ::core::option::Option::Some(__v) = self.publication_fingerprint {
+        if let ::core::option::Option::Some(__v) = self.publication_hash {
             __map
                 .serialize_entry(
-                    "publicationFingerprint",
+                    "publicationHash",
                     &::buffa::json_helpers::BytesJson(__v),
                 )?;
         }
@@ -3771,20 +3761,20 @@ impl OutputsPublishedV1OwnedView {
     pub fn request_id(&self) -> ::core::option::Option<&'_ [u8]> {
         self.0.reborrow().request_id
     }
-    /// Field 5: `request_fingerprint`
+    /// Field 5: `request_hash`
     #[must_use]
-    pub fn request_fingerprint(&self) -> ::core::option::Option<&'_ [u8]> {
-        self.0.reborrow().request_fingerprint
+    pub fn request_hash(&self) -> ::core::option::Option<&'_ [u8]> {
+        self.0.reborrow().request_hash
     }
     /// Field 6: `publication_id`
     #[must_use]
     pub fn publication_id(&self) -> ::core::option::Option<&'_ [u8]> {
         self.0.reborrow().publication_id
     }
-    /// Field 7: `publication_fingerprint`
+    /// Field 7: `publication_hash`
     #[must_use]
-    pub fn publication_fingerprint(&self) -> ::core::option::Option<&'_ [u8]> {
-        self.0.reborrow().publication_fingerprint
+    pub fn publication_hash(&self) -> ::core::option::Option<&'_ [u8]> {
+        self.0.reborrow().publication_hash
     }
     /// Field 8: `input_sequence`
     #[must_use]
@@ -3830,8 +3820,8 @@ pub struct GraphRetiredV1View<'a> {
     pub last_generation: ::core::option::Option<u64>,
     /// Field 3: `request_id`
     pub request_id: ::core::option::Option<&'a [u8]>,
-    /// Field 4: `request_fingerprint`
-    pub request_fingerprint: ::core::option::Option<&'a [u8]>,
+    /// Field 4: `request_hash`
+    pub request_hash: ::core::option::Option<&'a [u8]>,
     pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
 }
 impl<'a> ::buffa::MessageView<'a> for GraphRetiredV1View<'a> {
@@ -3887,7 +3877,7 @@ impl<'a> ::buffa::MessageView<'a> for GraphRetiredV1View<'a> {
                     tag,
                     ::buffa::encoding::WireType::LengthDelimited,
                 )?;
-                view.request_fingerprint = Some(::buffa::types::borrow_bytes(&mut cur)?);
+                view.request_hash = Some(::buffa::types::borrow_bytes(&mut cur)?);
             }
             _ => {
                 ::buffa::encoding::skip_field_depth(tag, &mut cur, ctx.depth())?;
@@ -3914,7 +3904,7 @@ impl<'a> ::buffa::MessageView<'a> for GraphRetiredV1View<'a> {
             graph_id: self.graph_id.map(|b| (b).to_vec()),
             last_generation: self.last_generation,
             request_id: self.request_id.map(|b| (b).to_vec()),
-            request_fingerprint: self.request_fingerprint.map(|b| (b).to_vec()),
+            request_hash: self.request_hash.map(|b| (b).to_vec()),
             __buffa_unknown_fields: self.__buffa_unknown_fields.to_owned()?.into(),
             ..::core::default::Default::default()
         })
@@ -3935,7 +3925,7 @@ impl<'a> ::buffa::ViewEncode<'a> for GraphRetiredV1View<'a> {
         if let Some(ref v) = self.request_id {
             size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
         }
-        if let Some(ref v) = self.request_fingerprint {
+        if let Some(ref v) = self.request_hash {
             size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
         }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
@@ -3958,7 +3948,7 @@ impl<'a> ::buffa::ViewEncode<'a> for GraphRetiredV1View<'a> {
         if let Some(ref v) = self.request_id {
             ::buffa::types::put_bytes_field(3u32, v, buf);
         }
-        if let Some(ref v) = self.request_fingerprint {
+        if let Some(ref v) = self.request_hash {
             ::buffa::types::put_bytes_field(4u32, v, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
@@ -3995,12 +3985,9 @@ impl<'__a> ::serde::Serialize for GraphRetiredV1View<'__a> {
         if let ::core::option::Option::Some(__v) = self.request_id {
             __map.serialize_entry("requestId", &::buffa::json_helpers::BytesJson(__v))?;
         }
-        if let ::core::option::Option::Some(__v) = self.request_fingerprint {
+        if let ::core::option::Option::Some(__v) = self.request_hash {
             __map
-                .serialize_entry(
-                    "requestFingerprint",
-                    &::buffa::json_helpers::BytesJson(__v),
-                )?;
+                .serialize_entry("requestHash", &::buffa::json_helpers::BytesJson(__v))?;
         }
         __map.end()
     }
@@ -4108,10 +4095,10 @@ impl GraphRetiredV1OwnedView {
     pub fn request_id(&self) -> ::core::option::Option<&'_ [u8]> {
         self.0.reborrow().request_id
     }
-    /// Field 4: `request_fingerprint`
+    /// Field 4: `request_hash`
     #[must_use]
-    pub fn request_fingerprint(&self) -> ::core::option::Option<&'_ [u8]> {
-        self.0.reborrow().request_fingerprint
+    pub fn request_hash(&self) -> ::core::option::Option<&'_ [u8]> {
+        self.0.reborrow().request_hash
     }
 }
 impl ::core::convert::From<::buffa::OwnedView<GraphRetiredV1View<'static>>>
@@ -4150,8 +4137,8 @@ pub struct GraphSnapshotV1View<'a> {
     pub id: ::core::option::Option<&'a [u8]>,
     /// Field 2: `generation`
     pub generation: ::core::option::Option<u64>,
-    /// Field 3: `component_spec_hashes`
-    pub component_spec_hashes: ::buffa::RepeatedView<'a, &'a [u8]>,
+    /// Field 3: `component_ids`
+    pub component_ids: ::buffa::RepeatedView<'a, &'a [u8]>,
     pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
 }
 impl<'a> ::buffa::MessageView<'a> for GraphSnapshotV1View<'a> {
@@ -4200,7 +4187,7 @@ impl<'a> ::buffa::MessageView<'a> for GraphSnapshotV1View<'a> {
                     tag,
                     ::buffa::encoding::WireType::LengthDelimited,
                 )?;
-                view.component_spec_hashes.push(::buffa::types::borrow_bytes(&mut cur)?);
+                view.component_ids.push(::buffa::types::borrow_bytes(&mut cur)?);
             }
             _ => {
                 ::buffa::encoding::skip_field_depth(tag, &mut cur, ctx.depth())?;
@@ -4226,11 +4213,7 @@ impl<'a> ::buffa::MessageView<'a> for GraphSnapshotV1View<'a> {
         ::core::result::Result::Ok(super::super::GraphSnapshotV1 {
             id: self.id.map(|b| (b).to_vec()),
             generation: self.generation,
-            component_spec_hashes: self
-                .component_spec_hashes
-                .iter()
-                .map(|b| (b).to_vec())
-                .collect(),
+            component_ids: self.component_ids.iter().map(|b| (b).to_vec()).collect(),
             __buffa_unknown_fields: self.__buffa_unknown_fields.to_owned()?.into(),
             ..::core::default::Default::default()
         })
@@ -4248,7 +4231,7 @@ impl<'a> ::buffa::ViewEncode<'a> for GraphSnapshotV1View<'a> {
         if let Some(v) = self.generation {
             size += 1u32 + ::buffa::types::uint64_encoded_len(v) as u32;
         }
-        for v in &self.component_spec_hashes {
+        for v in &self.component_ids {
             size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
         }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
@@ -4268,7 +4251,7 @@ impl<'a> ::buffa::ViewEncode<'a> for GraphSnapshotV1View<'a> {
         if let Some(v) = self.generation {
             ::buffa::types::put_uint64_field(2u32, v, buf);
         }
-        for v in &self.component_spec_hashes {
+        for v in &self.component_ids {
             ::buffa::types::put_bytes_field(3u32, v, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
@@ -4299,11 +4282,11 @@ impl<'__a> ::serde::Serialize for GraphSnapshotV1View<'__a> {
             __map
                 .serialize_entry("generation", &::buffa::json_helpers::ProtoJson(&__v))?;
         }
-        if !self.component_spec_hashes.is_empty() {
+        if !self.component_ids.is_empty() {
             __map
                 .serialize_entry(
-                    "componentSpecHashes",
-                    &::buffa::json_helpers::BytesSeqJson(&self.component_spec_hashes),
+                    "componentIds",
+                    &::buffa::json_helpers::BytesSeqJson(&self.component_ids),
                 )?;
         }
         __map.end()
@@ -4407,10 +4390,10 @@ impl GraphSnapshotV1OwnedView {
     pub fn generation(&self) -> ::core::option::Option<u64> {
         self.0.reborrow().generation
     }
-    /// Field 3: `component_spec_hashes`
+    /// Field 3: `component_ids`
     #[must_use]
-    pub fn component_spec_hashes(&self) -> &::buffa::RepeatedView<'_, &'_ [u8]> {
-        &self.0.reborrow().component_spec_hashes
+    pub fn component_ids(&self) -> &::buffa::RepeatedView<'_, &'_ [u8]> {
+        &self.0.reborrow().component_ids
     }
 }
 impl ::core::convert::From<::buffa::OwnedView<GraphSnapshotV1View<'static>>>
@@ -4445,8 +4428,8 @@ impl ::serde::Serialize for GraphSnapshotV1OwnedView {
 }
 #[derive(Clone, Debug, Default)]
 pub struct ComponentOutputsRecordV1View<'a> {
-    /// Field 1: `component_spec_hash`
-    pub component_spec_hash: ::core::option::Option<&'a [u8]>,
+    /// Field 1: `component_id`
+    pub component_id: ::core::option::Option<&'a [u8]>,
     /// Field 2: `values_json`
     pub values_json: ::core::option::Option<&'a [u8]>,
     pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
@@ -4483,7 +4466,7 @@ impl<'a> ::buffa::MessageView<'a> for ComponentOutputsRecordV1View<'a> {
                     tag,
                     ::buffa::encoding::WireType::LengthDelimited,
                 )?;
-                view.component_spec_hash = Some(::buffa::types::borrow_bytes(&mut cur)?);
+                view.component_id = Some(::buffa::types::borrow_bytes(&mut cur)?);
             }
             2u32 => {
                 ::buffa::encoding::check_wire_type(
@@ -4520,7 +4503,7 @@ impl<'a> ::buffa::MessageView<'a> for ComponentOutputsRecordV1View<'a> {
         use ::buffa::alloc::string::ToString as _;
         let _ = __buffa_src;
         ::core::result::Result::Ok(super::super::ComponentOutputsRecordV1 {
-            component_spec_hash: self.component_spec_hash.map(|b| (b).to_vec()),
+            component_id: self.component_id.map(|b| (b).to_vec()),
             values_json: self.values_json.map(|b| (b).to_vec()),
             __buffa_unknown_fields: self.__buffa_unknown_fields.to_owned()?.into(),
             ..::core::default::Default::default()
@@ -4533,7 +4516,7 @@ impl<'a> ::buffa::ViewEncode<'a> for ComponentOutputsRecordV1View<'a> {
         #[allow(unused_imports)]
         use ::buffa::Enumeration as _;
         let mut size = 0u32;
-        if let Some(ref v) = self.component_spec_hash {
+        if let Some(ref v) = self.component_id {
             size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
         }
         if let Some(ref v) = self.values_json {
@@ -4550,7 +4533,7 @@ impl<'a> ::buffa::ViewEncode<'a> for ComponentOutputsRecordV1View<'a> {
     ) {
         #[allow(unused_imports)]
         use ::buffa::Enumeration as _;
-        if let Some(ref v) = self.component_spec_hash {
+        if let Some(ref v) = self.component_id {
             ::buffa::types::put_bytes_field(1u32, v, buf);
         }
         if let Some(ref v) = self.values_json {
@@ -4577,12 +4560,9 @@ impl<'__a> ::serde::Serialize for ComponentOutputsRecordV1View<'__a> {
     ) -> ::core::result::Result<__S::Ok, __S::Error> {
         use ::serde::ser::SerializeMap as _;
         let mut __map = __s.serialize_map(::core::option::Option::None)?;
-        if let ::core::option::Option::Some(__v) = self.component_spec_hash {
+        if let ::core::option::Option::Some(__v) = self.component_id {
             __map
-                .serialize_entry(
-                    "componentSpecHash",
-                    &::buffa::json_helpers::BytesJson(__v),
-                )?;
+                .serialize_entry("componentId", &::buffa::json_helpers::BytesJson(__v))?;
         }
         if let ::core::option::Option::Some(__v) = self.values_json {
             __map.serialize_entry("valuesJson", &::buffa::json_helpers::BytesJson(__v))?;
@@ -4683,10 +4663,10 @@ impl ComponentOutputsRecordV1OwnedView {
     pub fn into_bytes(self) -> ::buffa::bytes::Bytes {
         self.0.into_bytes()
     }
-    /// Field 1: `component_spec_hash`
+    /// Field 1: `component_id`
     #[must_use]
-    pub fn component_spec_hash(&self) -> ::core::option::Option<&'_ [u8]> {
-        self.0.reborrow().component_spec_hash
+    pub fn component_id(&self) -> ::core::option::Option<&'_ [u8]> {
+        self.0.reborrow().component_id
     }
     /// Field 2: `values_json`
     #[must_use]

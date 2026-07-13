@@ -1,17 +1,18 @@
+use std::time::Duration;
+use std::time::UNIX_EPOCH;
+
 use buffa::EnumValue;
 use buffa::MessageView;
 use futures::Stream;
 use futures::StreamExt;
-use henosis_types as domain;
 use thiserror::Error;
+use types::domain;
 
 use super::WireRecord;
-use crate::ConversionError;
-use crate::convert::register_component_spec;
-use crate::convert::wire_field;
-use crate::proto::henosis::v1 as pb;
-use crate::proto::henosis::v1::__buffa::view;
-use crate::proto::henosis::v1::__buffa::view::oneof;
+use crate::oneof;
+use crate::parsing::ConversionError;
+use crate::parsing::field;
+use crate::protobuf;
 
 const FORMAT_VERSION: u32 = 1;
 
@@ -25,8 +26,8 @@ pub enum JournalDecodeError {
     Missing(&'static str),
     #[error("invalid durable domain value: {0}")]
     InvalidDomain(ConversionError),
-    #[error("component spec hash does not match its canonical content")]
-    SpecHashMismatch,
+    #[error("durable timestamp is outside the supported system-time range")]
+    InvalidTimestamp,
 }
 
 impl From<ConversionError> for JournalDecodeError {
@@ -64,7 +65,7 @@ where
 
 pub fn decode_spec_stream<S, E>(
     stream: S,
-) -> impl Stream<Item = Result<domain::SequencedSpecEvent, DecodeStreamError<E>>>
+) -> impl Stream<Item = Result<domain::ComponentSpecEvent, DecodeStreamError<E>>>
 where
     S: Stream<Item = Result<WireRecord, E>>,
 {
@@ -87,7 +88,7 @@ fn parse_stream_item<T, E>(
 pub fn decode_graph_record(
     record: &WireRecord,
 ) -> Result<domain::SequencedGraphEvent, JournalDecodeError> {
-    let envelope = view::GraphStreamEnvelopeView::decode_view(record.body())
+    let envelope = protobuf::v1::GraphStreamEnvelopeView::decode_view(record.body())
         .map_err(|error| JournalDecodeError::InvalidProtobuf(error.to_string()))?;
     require_version(envelope.format_version)?;
     let version = match envelope.version.as_ref() {
@@ -100,87 +101,75 @@ pub fn decode_graph_record(
         .ok_or(JournalDecodeError::Missing("graph event"))?
     {
         oneof::graph_stream_record_v1::Event::GraphCreated(value) => domain::GraphEvent::Created {
-            graph: wire_field!(value.graph).required()?.convert()?,
-            request_id: wire_field!(value.request_id).required()?.uuid()?,
-            request_fingerprint: wire_field!(value.request_fingerprint)
-                .required()?
-                .fingerprint()?,
+            graph: field!(value.graph).required()?.convert()?,
+            request_id: field!(value.request_id).required()?.uuid()?,
+            request_hash: field!(value.request_hash).required()?.hash()?,
         },
         oneof::graph_stream_record_v1::Event::GenerationAccepted(value) => {
-            let mutation_kind = match wire_field!(value.mutation_kind).required()?.into_inner() {
-                EnumValue::Known(pb::GraphMutationKindV1::AddComponents) => {
+            let mutation_kind = match field!(value.mutation_kind).required()?.into_inner() {
+                EnumValue::Known(protobuf::v1::GraphMutationKindV1::AddComponents) => {
                     domain::MutationKind::AddComponents
                 }
-                EnumValue::Known(pb::GraphMutationKindV1::UpdateComponents) => {
+                EnumValue::Known(protobuf::v1::GraphMutationKindV1::UpdateComponents) => {
                     domain::MutationKind::UpdateComponents
                 }
-                EnumValue::Known(pb::GraphMutationKindV1::RemoveComponents) => {
+                EnumValue::Known(protobuf::v1::GraphMutationKindV1::RemoveComponents) => {
                     domain::MutationKind::RemoveComponents
                 }
                 _ => {
-                    return Err(wire_field!(value.mutation_kind)
+                    return Err(field!(value.mutation_kind)
                         .invalid("must be specified")
                         .into());
                 }
             };
             domain::GraphEvent::GenerationAccepted {
-                graph: wire_field!(value.graph).required()?.convert()?,
-                request_id: wire_field!(value.request_id).required()?.uuid()?,
+                graph: field!(value.graph).required()?.convert()?,
+                request_id: field!(value.request_id).required()?.uuid()?,
                 mutation_kind,
-                request_fingerprint: wire_field!(value.request_fingerprint)
-                    .required()?
-                    .fingerprint()?,
+                request_hash: field!(value.request_hash).required()?.hash()?,
             }
         }
         oneof::graph_stream_record_v1::Event::OutputsPublished(value) => {
             domain::GraphEvent::OutputsPublished(domain::OutputPublication {
-                generation: wire_field!(value.generation)
+                generation: field!(value.generation)
                     .required()?
                     .validate(|generation| *generation > 0, "must be greater than zero")?,
-                input_sequence: wire_field!(value.input_sequence).required()?.into_inner(),
-                connector: wire_field!(value.connector).required()?.parse()?,
-                outputs: wire_field!(value.outputs)
+                input_sequence: field!(value.input_sequence).required()?.into_inner(),
+                connector: field!(value.connector).required()?.parse()?,
+                outputs: field!(value.outputs)
                     .iter()
                     .map(|item| item.convert())
                     .collect::<Result<Vec<_>, _>>()?,
-                request_id: wire_field!(value.request_id).required()?.uuid()?,
-                request_fingerprint: wire_field!(value.request_fingerprint)
-                    .required()?
-                    .fingerprint()?,
-                publication_id: wire_field!(value.publication_id).required()?.uuid()?,
-                publication_fingerprint: wire_field!(value.publication_fingerprint)
-                    .required()?
-                    .fingerprint()?,
+                request_id: field!(value.request_id).required()?.uuid()?,
+                request_hash: field!(value.request_hash).required()?.hash()?,
+                publication_id: field!(value.publication_id).required()?.uuid()?,
+                publication_hash: field!(value.publication_hash).required()?.hash()?,
             })
         }
         oneof::graph_stream_record_v1::Event::SliceReported(value) => {
             domain::GraphEvent::SliceReported(domain::RecordedSliceReport {
-                report: wire_field!(value.report).required()?.convert()?,
-                request_id: wire_field!(value.request_id).required()?.uuid()?,
-                request_fingerprint: wire_field!(value.request_fingerprint)
-                    .required()?
-                    .fingerprint()?,
-                publication_id: wire_field!(value.publication_id)
+                report: field!(value.report).required()?.convert()?,
+                request_id: field!(value.request_id).required()?.uuid()?,
+                request_hash: field!(value.request_hash).required()?.hash()?,
+                publication_id: field!(value.publication_id)
                     .optional()
                     .map(|value| value.uuid())
                     .transpose()
                     .map_err(JournalDecodeError::InvalidDomain)?,
-                publication_fingerprint: wire_field!(value.publication_fingerprint)
+                publication_hash: field!(value.publication_hash)
                     .optional()
-                    .map(|value| value.fingerprint())
+                    .map(|value| value.hash())
                     .transpose()
                     .map_err(JournalDecodeError::InvalidDomain)?,
             })
         }
         oneof::graph_stream_record_v1::Event::GraphRetired(value) => domain::GraphEvent::Retired {
-            graph_id: wire_field!(value.graph_id).required()?.uuid()?,
-            last_generation: wire_field!(value.last_generation)
+            graph_id: field!(value.graph_id).required()?.uuid()?,
+            last_generation: field!(value.last_generation)
                 .required()?
                 .validate(|generation| *generation > 0, "must be greater than zero")?,
-            request_id: wire_field!(value.request_id).required()?.uuid()?,
-            request_fingerprint: wire_field!(value.request_fingerprint)
-                .required()?
-                .fingerprint()?,
+            request_id: field!(value.request_id).required()?.uuid()?,
+            request_hash: field!(value.request_hash).required()?.hash()?,
         },
     };
     Ok(domain::SequencedGraphEvent::new(record.sequence(), event))
@@ -189,7 +178,7 @@ pub fn decode_graph_record(
 pub fn decode_registry_record(
     record: &WireRecord,
 ) -> Result<domain::SequencedRegistryEvent, JournalDecodeError> {
-    let envelope = view::RegistryStreamEnvelopeView::decode_view(record.body())
+    let envelope = protobuf::v1::RegistryStreamEnvelopeView::decode_view(record.body())
         .map_err(|error| JournalDecodeError::InvalidProtobuf(error.to_string()))?;
     require_version(envelope.format_version)?;
     let version = match envelope.version.as_ref() {
@@ -203,14 +192,14 @@ pub fn decode_registry_record(
     {
         oneof::registry_stream_record_v1::Event::GraphCreated(value) => {
             domain::RegistryEvent::Created {
-                graph_id: wire_field!(value.graph_id).required()?.uuid()?,
-                request_id: wire_field!(value.request_id).required()?.uuid()?,
+                graph_id: field!(value.graph_id).required()?.uuid()?,
+                request_id: field!(value.request_id).required()?.uuid()?,
             }
         }
         oneof::registry_stream_record_v1::Event::GraphRetired(value) => {
             domain::RegistryEvent::Retired {
-                graph_id: wire_field!(value.graph_id).required()?.uuid()?,
-                request_id: wire_field!(value.request_id).required()?.uuid()?,
+                graph_id: field!(value.graph_id).required()?.uuid()?,
+                request_id: field!(value.request_id).required()?.uuid()?,
             }
         }
     };
@@ -222,8 +211,8 @@ pub fn decode_registry_record(
 
 pub fn decode_spec_record(
     record: &WireRecord,
-) -> Result<domain::SequencedSpecEvent, JournalDecodeError> {
-    let envelope = view::SpecStreamEnvelopeView::decode_view(record.body())
+) -> Result<domain::ComponentSpecEvent, JournalDecodeError> {
+    let envelope = protobuf::v1::SpecStreamEnvelopeView::decode_view(record.body())
         .map_err(|error| JournalDecodeError::InvalidProtobuf(error.to_string()))?;
     require_version(envelope.format_version)?;
     let version = match envelope.version.as_ref() {
@@ -234,15 +223,27 @@ pub fn decode_spec_record(
         .event
         .as_ref()
         .ok_or(JournalDecodeError::Missing("spec event"))?;
-    let expected = wire_field!(value.hash).required()?.spec_hash()?;
-    let spec = wire_field!(value.spec).required()?.convert()?;
-    let registered = register_component_spec(spec);
-    if registered.hash() != expected {
-        return Err(JournalDecodeError::SpecHashMismatch);
-    }
-    Ok(domain::SequencedSpecEvent::new(
+    let component_id = field!(value.component_id).required()?.uuid()?;
+    let value = field!(value.spec).required()?.into_inner();
+    let spec = domain::NewComponentSpec::new(
+        field!(value.name).required()?.into_inner(),
+        field!(value.connector).required()?.parse()?,
+        field!(value.outputs_schema).or_default().into_inner(),
+        field!(value.depends_on_component_ids)
+            .iter()
+            .map(|item| item.component_id())
+            .collect::<Result<Vec<_>, _>>()?,
+        field!(value.connector_context).or_default().into_inner(),
+    )
+    .map_err(ConversionError::from)?;
+    let time_recorded = UNIX_EPOCH
+        .checked_add(Duration::from_millis(record.timestamp()))
+        .ok_or(JournalDecodeError::InvalidTimestamp)?;
+    Ok(domain::ComponentSpecEvent::new(
+        component_id,
         record.sequence(),
-        registered,
+        time_recorded,
+        spec,
     ))
 }
 
@@ -262,12 +263,12 @@ mod tests {
 
     #[test]
     fn unknown_version_fails_closed() {
-        let body = pb::GraphStreamEnvelope {
+        let body = protobuf::v1::GraphStreamEnvelope {
             format_version: Some(99),
             ..Default::default()
         }
         .encode_to_vec();
-        let result = decode_graph_record(&WireRecord::new(0, body));
+        let result = decode_graph_record(&WireRecord::new(0, 0, body));
         assert!(matches!(
             result,
             Err(JournalDecodeError::UnsupportedVersion(99))

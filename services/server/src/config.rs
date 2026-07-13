@@ -7,8 +7,8 @@ use std::path::PathBuf;
 
 use anyhow::Context;
 use henosis_orchestrator::ConnectorConfig;
-use henosis_types::ConnectorKey;
 use serde::Deserialize;
+use types::domain::ConnectorKey;
 
 #[derive(Debug)]
 pub(crate) struct Config {

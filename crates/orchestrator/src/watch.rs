@@ -1,11 +1,11 @@
 use anyhow::Error;
 use faultline::Error as Fault;
-use henosis_types::DurableGraphState;
-use henosis_types::FetchSlice;
-use henosis_types::GraphSlice;
-use henosis_types::SliceReport;
-use henosis_types::WatchGraph;
 use tokio::sync::broadcast;
+use types::domain::DurableGraphState;
+use types::domain::FetchSlice;
+use types::domain::GraphSlice;
+use types::domain::SliceReport;
+use types::domain::WatchGraph;
 
 use crate::Orchestrator;
 use crate::OrchestratorError;
@@ -70,7 +70,7 @@ impl Orchestrator {
         let earliest = history
             .states()
             .next()
-            .map(henosis_types::SequencedGraphState::sequence)
+            .map(types::domain::SequencedGraphState::sequence)
             .unwrap_or(0);
         let snapshot = history.state_at(selected).cloned().ok_or_else(|| {
             Fault::<OrchestratorError, Error, Error>::Domain(OrchestratorError::OutOfRange {

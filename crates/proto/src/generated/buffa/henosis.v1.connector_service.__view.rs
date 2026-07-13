@@ -14,7 +14,7 @@ pub struct GraphSliceView<'a> {
     /// Field 4: `components`
     pub components: ::buffa::RepeatedView<
         'a,
-        super::super::__buffa::view::RegisteredComponentSpecView<'a>,
+        super::super::__buffa::view::ComponentView<'a>,
     >,
     /// Field 5: `upstream_outputs`
     pub upstream_outputs: ::buffa::RepeatedView<
@@ -89,7 +89,7 @@ impl<'a> ::buffa::MessageView<'a> for GraphSliceView<'a> {
                 let sub = ::buffa::types::borrow_bytes(&mut cur)?;
                 view.components
                     .push(
-                        <super::super::__buffa::view::RegisteredComponentSpecView as ::buffa::MessageView>::decode_view_ctx(
+                        <super::super::__buffa::view::ComponentView as ::buffa::MessageView>::decode_view_ctx(
                             sub,
                             __sub_ctx,
                         )?,
@@ -364,10 +364,7 @@ impl GraphSliceOwnedView {
     #[must_use]
     pub fn components(
         &self,
-    ) -> &::buffa::RepeatedView<
-        '_,
-        super::super::__buffa::view::RegisteredComponentSpecView<'_>,
-    > {
+    ) -> &::buffa::RepeatedView<'_, super::super::__buffa::view::ComponentView<'_>> {
         &self.0.reborrow().components
     }
     /// Field 5: `upstream_outputs`
@@ -427,7 +424,7 @@ pub struct ReconcileSliceRequestView<'a> {
     /// Field 2: `superseded_components`
     pub superseded_components: ::buffa::RepeatedView<
         'a,
-        super::super::__buffa::view::RegisteredComponentSpecView<'a>,
+        super::super::__buffa::view::ComponentView<'a>,
     >,
     pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
 }
@@ -488,7 +485,7 @@ impl<'a> ::buffa::MessageView<'a> for ReconcileSliceRequestView<'a> {
                 let sub = ::buffa::types::borrow_bytes(&mut cur)?;
                 view.superseded_components
                     .push(
-                        <super::super::__buffa::view::RegisteredComponentSpecView as ::buffa::MessageView>::decode_view_ctx(
+                        <super::super::__buffa::view::ComponentView as ::buffa::MessageView>::decode_view_ctx(
                             sub,
                             __sub_ctx,
                         )?,
@@ -719,10 +716,7 @@ impl ReconcileSliceRequestOwnedView {
     #[must_use]
     pub fn superseded_components(
         &self,
-    ) -> &::buffa::RepeatedView<
-        '_,
-        super::super::__buffa::view::RegisteredComponentSpecView<'_>,
-    > {
+    ) -> &::buffa::RepeatedView<'_, super::super::__buffa::view::ComponentView<'_>> {
         &self.0.reborrow().superseded_components
     }
 }

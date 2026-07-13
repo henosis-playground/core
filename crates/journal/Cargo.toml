@@ -13,7 +13,7 @@ buffa.workspace = true
 faultline.workspace = true
 futures.workspace = true
 henosis-proto.workspace = true
-henosis-types.workspace = true
+types.workspace = true
 s2-sdk.workspace = true
 thiserror.workspace = true
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }

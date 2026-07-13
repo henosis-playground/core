@@ -1,8 +1,8 @@
 use diesel::HasQuery;
 use diesel::Insertable;
 use henosis_db_schema::connector_checkpoints;
-use henosis_types as domain;
 use thiserror::Error;
+use types::domain;
 use uuid::Uuid;
 
 /// Stored connector delivery checkpoint.

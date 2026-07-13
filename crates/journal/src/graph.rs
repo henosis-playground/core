@@ -4,9 +4,9 @@ use faultline::Error as Fault;
 use futures::StreamExt;
 use henosis_proto::journal::decode_graph_stream;
 use henosis_proto::journal::encode_graph_event;
-use henosis_types::GraphEvent;
-use henosis_types::GraphHistory;
-use henosis_types::GraphUuid;
+use types::domain::GraphEvent;
+use types::domain::GraphHistory;
+use types::domain::GraphUuid;
 
 use crate::Journal;
 use crate::JournalError;
@@ -59,5 +59,6 @@ impl Journal {
             encode_graph_event(event),
         )
         .await
+        .map(|position| position.seq_num)
     }
 }

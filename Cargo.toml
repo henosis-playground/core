@@ -56,7 +56,7 @@ henosis-db-schema = { path = "crates/db-schema" }
 henosis-journal = { path = "crates/journal" }
 henosis-orchestrator = { path = "crates/orchestrator" }
 henosis-proto = { path = "crates/proto" }
-henosis-types = { path = "crates/types" }
+types = { path = "crates/types" }
 
 [workspace.lints.rust]
 rust_2018_idioms = { level = "warn", priority = -1 }

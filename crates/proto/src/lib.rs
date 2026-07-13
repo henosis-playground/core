@@ -1,9 +1,8 @@
 //! Committed Henosis protocol bindings.
 
-mod convert;
+pub mod api;
 pub mod journal;
-
-pub use convert::*;
+mod parsing;
 
 #[allow(
     clippy::doc_markdown,
@@ -13,6 +12,12 @@ pub use convert::*;
 )]
 #[path = "generated/buffa/mod.rs"]
 pub mod proto;
+
+pub use proto::henosis as protobuf;
+
+pub(crate) mod oneof {
+    pub(crate) use crate::protobuf::v1::__buffa::view::oneof::*;
+}
 
 #[allow(clippy::doc_markdown)]
 #[path = "generated/connect/mod.rs"]

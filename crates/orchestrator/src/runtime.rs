@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
-use henosis_types::GraphHistory;
-use henosis_types::GraphUuid;
-use henosis_types::SliceReport;
 use iddqd::IdHashItem;
 use iddqd::IdOrdMap;
 use iddqd::id_upcast;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio::sync::broadcast;
+use types::domain::GraphHistory;
+use types::domain::GraphUuid;
+use types::domain::SliceReport;
 
 use crate::Orchestrator;
 use crate::WatchEvent;

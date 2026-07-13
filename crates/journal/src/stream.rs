@@ -15,6 +15,7 @@ use s2_sdk::types::ReadLimits;
 use s2_sdk::types::ReadStart;
 use s2_sdk::types::ReadStop;
 use s2_sdk::types::S2Error;
+use s2_sdk::types::StreamPosition;
 
 use crate::JournalError;
 
@@ -40,8 +41,15 @@ pub(super) async fn read_records(
             )));
         }
         for record in batch.records {
+            if record.seq_num >= tail {
+                break;
+            }
             next = record.seq_num.saturating_add(1);
-            records.push(WireRecord::new(record.seq_num, record.body.to_vec()));
+            records.push(WireRecord::new(
+                record.seq_num,
+                record.timestamp,
+                record.body.to_vec(),
+            ));
         }
     }
     Ok(records)
@@ -51,14 +59,14 @@ pub(super) async fn append_record(
     stream: &S2Stream,
     expected_tail: u64,
     body: Vec<u8>,
-) -> Result<u64, Fault<JournalError, anyhow::Error, anyhow::Error>> {
+) -> Result<StreamPosition, Fault<JournalError, anyhow::Error, anyhow::Error>> {
     let record = AppendRecord::new(body).map_err(journal_invariant)?;
     let batch = AppendRecordBatch::try_from_iter([record]).map_err(journal_invariant)?;
     match stream
         .append(AppendInput::new(batch).with_match_seq_num(expected_tail))
         .await
     {
-        Ok(ack) => Ok(ack.start.seq_num),
+        Ok(ack) => Ok(ack.start),
         Err(S2Error::AppendConditionFailed(AppendConditionFailed::SeqNumMismatch(
             current_tail,
         ))) => Err(Fault::Domain(JournalError::CasConflict { current_tail })),

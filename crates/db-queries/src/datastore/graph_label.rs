@@ -8,8 +8,8 @@ use faultline::Error as Fault;
 use faultline::Never;
 use henosis_db_model::DbGraphLabel;
 use henosis_db_schema::graph_labels;
-use henosis_types::GraphLabel;
-use henosis_types::NewGraphLabel;
+use types::domain::GraphLabel;
+use types::domain::NewGraphLabel;
 
 use crate::error::diesel_fault;
 

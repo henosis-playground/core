@@ -2,15 +2,17 @@
 // source: henosis/v1/graph_service.proto
 
 #[derive(Clone, Debug, Default)]
-pub struct RegisterComponentSpecRequestView<'a> {
-    /// Field 1: `spec`
+pub struct CreateComponentRequestView<'a> {
+    /// Field 1: `component_id`
+    pub component_id: ::core::option::Option<&'a [u8]>,
+    /// Field 2: `spec`
     pub spec: ::buffa::MessageFieldView<
-        super::super::__buffa::view::ComponentSpecView<'a>,
+        super::super::__buffa::view::NewComponentSpecView<'a>,
     >,
     pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
 }
-impl<'a> ::buffa::MessageView<'a> for RegisterComponentSpecRequestView<'a> {
-    type Owned = super::super::RegisterComponentSpecRequest;
+impl<'a> ::buffa::MessageView<'a> for CreateComponentRequestView<'a> {
+    type Owned = super::super::CreateComponentRequest;
     fn decode_view(buf: &'a [u8]) -> ::core::result::Result<Self, ::buffa::DecodeError> {
         let __limit = ::core::cell::Cell::new(::buffa::DEFAULT_UNKNOWN_FIELD_LIMIT);
         <Self as ::buffa::MessageView>::decode_view_ctx(
@@ -41,6 +43,13 @@ impl<'a> ::buffa::MessageView<'a> for RegisterComponentSpecRequestView<'a> {
                     tag,
                     ::buffa::encoding::WireType::LengthDelimited,
                 )?;
+                view.component_id = Some(::buffa::types::borrow_bytes(&mut cur)?);
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
                 let __sub_ctx = ctx.descend()?;
                 let sub = ::buffa::types::borrow_bytes(&mut cur)?;
                 match view.spec.as_mut() {
@@ -49,7 +58,7 @@ impl<'a> ::buffa::MessageView<'a> for RegisterComponentSpecRequestView<'a> {
                     }
                     None => {
                         view.spec = ::buffa::MessageFieldView::set(
-                            <super::super::__buffa::view::ComponentSpecView as ::buffa::MessageView>::decode_view_ctx(
+                            <super::super::__buffa::view::NewComponentSpecView as ::buffa::MessageView>::decode_view_ctx(
                                 sub,
                                 __sub_ctx,
                             )?,
@@ -68,7 +77,7 @@ impl<'a> ::buffa::MessageView<'a> for RegisterComponentSpecRequestView<'a> {
     fn to_owned_message(
         &self,
     ) -> ::core::result::Result<
-        super::super::RegisterComponentSpecRequest,
+        super::super::CreateComponentRequest,
         ::buffa::DecodeError,
     > {
         self.to_owned_from_source(None)
@@ -78,17 +87,18 @@ impl<'a> ::buffa::MessageView<'a> for RegisterComponentSpecRequestView<'a> {
         &self,
         __buffa_src: ::core::option::Option<&::buffa::bytes::Bytes>,
     ) -> ::core::result::Result<
-        super::super::RegisterComponentSpecRequest,
+        super::super::CreateComponentRequest,
         ::buffa::DecodeError,
     > {
         #[allow(unused_imports)]
         use ::buffa::alloc::string::ToString as _;
         let _ = __buffa_src;
-        ::core::result::Result::Ok(super::super::RegisterComponentSpecRequest {
+        ::core::result::Result::Ok(super::super::CreateComponentRequest {
+            component_id: self.component_id.map(|b| (b).to_vec()),
             spec: match self.spec.as_option() {
                 Some(v) => {
                     ::buffa::MessageField::<
-                        super::super::ComponentSpec,
+                        super::super::NewComponentSpec,
                     >::some(v.to_owned_from_source(__buffa_src)?)
                 }
                 None => ::buffa::MessageField::none(),
@@ -98,12 +108,15 @@ impl<'a> ::buffa::MessageView<'a> for RegisterComponentSpecRequestView<'a> {
         })
     }
 }
-impl<'a> ::buffa::ViewEncode<'a> for RegisterComponentSpecRequestView<'a> {
+impl<'a> ::buffa::ViewEncode<'a> for CreateComponentRequestView<'a> {
     #[allow(clippy::needless_borrow, clippy::let_and_return)]
     fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
         #[allow(unused_imports)]
         use ::buffa::Enumeration as _;
         let mut size = 0u32;
+        if let Some(ref v) = self.component_id {
+            size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
+        }
         if self.spec.is_set() {
             let __slot = __cache.reserve();
             let inner_size = self.spec.compute_size(__cache);
@@ -123,8 +136,11 @@ impl<'a> ::buffa::ViewEncode<'a> for RegisterComponentSpecRequestView<'a> {
     ) {
         #[allow(unused_imports)]
         use ::buffa::Enumeration as _;
+        if let Some(ref v) = self.component_id {
+            ::buffa::types::put_bytes_field(1u32, v, buf);
+        }
         if self.spec.is_set() {
-            ::buffa::types::put_len_delimited_header(1u32, __cache.consume_next(), buf);
+            ::buffa::types::put_len_delimited_header(2u32, __cache.consume_next(), buf);
             self.spec.write_to(__cache, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
@@ -141,13 +157,17 @@ impl<'a> ::buffa::ViewEncode<'a> for RegisterComponentSpecRequestView<'a> {
 /// fields depends on default-omission rules; serializers that require
 /// known map lengths (e.g. `bincode`) will return a runtime error.
 /// Use the owned message type for those formats.
-impl<'__a> ::serde::Serialize for RegisterComponentSpecRequestView<'__a> {
+impl<'__a> ::serde::Serialize for CreateComponentRequestView<'__a> {
     fn serialize<__S: ::serde::Serializer>(
         &self,
         __s: __S,
     ) -> ::core::result::Result<__S::Ok, __S::Error> {
         use ::serde::ser::SerializeMap as _;
         let mut __map = __s.serialize_map(::core::option::Option::None)?;
+        if let ::core::option::Option::Some(__v) = self.component_id {
+            __map
+                .serialize_entry("componentId", &::buffa::json_helpers::BytesJson(__v))?;
+        }
         {
             if let ::core::option::Option::Some(__v) = self.spec.as_option() {
                 __map.serialize_entry("spec", __v)?;
@@ -156,24 +176,24 @@ impl<'__a> ::serde::Serialize for RegisterComponentSpecRequestView<'__a> {
         __map.end()
     }
 }
-impl<'a> ::buffa::MessageName for RegisterComponentSpecRequestView<'a> {
+impl<'a> ::buffa::MessageName for CreateComponentRequestView<'a> {
     const PACKAGE: &'static str = "henosis.v1";
-    const NAME: &'static str = "RegisterComponentSpecRequest";
-    const FULL_NAME: &'static str = "henosis.v1.RegisterComponentSpecRequest";
-    const TYPE_URL: &'static str = "type.googleapis.com/henosis.v1.RegisterComponentSpecRequest";
+    const NAME: &'static str = "CreateComponentRequest";
+    const FULL_NAME: &'static str = "henosis.v1.CreateComponentRequest";
+    const TYPE_URL: &'static str = "type.googleapis.com/henosis.v1.CreateComponentRequest";
 }
-::buffa::impl_default_view_instance!(RegisterComponentSpecRequestView);
-::buffa::impl_view_reborrow!(RegisterComponentSpecRequestView);
-/** Self-contained, `'static` owned view of a `RegisterComponentSpecRequest` message.
+::buffa::impl_default_view_instance!(CreateComponentRequestView);
+::buffa::impl_view_reborrow!(CreateComponentRequestView);
+/** Self-contained, `'static` owned view of a `CreateComponentRequest` message.
 
- Wraps [`::buffa::OwnedView`]`<`[`RegisterComponentSpecRequestView`]`<'static>>`: the decoded view and the [`::buffa::bytes::Bytes`] buffer it borrows from travel together, so the handle is `'static` and `Send + Sync` — suitable for async handlers, spawned tasks, and anywhere a `'static` bound is required.
+ Wraps [`::buffa::OwnedView`]`<`[`CreateComponentRequestView`]`<'static>>`: the decoded view and the [`::buffa::bytes::Bytes`] buffer it borrows from travel together, so the handle is `'static` and `Send + Sync` — suitable for async handlers, spawned tasks, and anywhere a `'static` bound is required.
 
- Field accessors return borrows tied to `&self`. Use [`Self::view`] to get the full [`RegisterComponentSpecRequestView`] when you need struct patterns, iteration helpers, or to pass the view to lifetime-parameterised code.*/
+ Field accessors return borrows tied to `&self`. Use [`Self::view`] to get the full [`CreateComponentRequestView`] when you need struct patterns, iteration helpers, or to pass the view to lifetime-parameterised code.*/
 #[derive(Clone, Debug)]
-pub struct RegisterComponentSpecRequestOwnedView(
-    ::buffa::OwnedView<RegisterComponentSpecRequestView<'static>>,
+pub struct CreateComponentRequestOwnedView(
+    ::buffa::OwnedView<CreateComponentRequestView<'static>>,
 );
-impl RegisterComponentSpecRequestOwnedView {
+impl CreateComponentRequestOwnedView {
     /// Decode an owned view from a [`::buffa::bytes::Bytes`] buffer.
     ///
     /// The view borrows directly from the buffer's data; the buffer is
@@ -187,7 +207,7 @@ impl RegisterComponentSpecRequestOwnedView {
         bytes: ::buffa::bytes::Bytes,
     ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
         ::core::result::Result::Ok(
-            RegisterComponentSpecRequestOwnedView(::buffa::OwnedView::decode(bytes)?),
+            CreateComponentRequestOwnedView(::buffa::OwnedView::decode(bytes)?),
         )
     }
     /// Decode with custom [`::buffa::DecodeOptions`] (recursion limit,
@@ -202,7 +222,7 @@ impl RegisterComponentSpecRequestOwnedView {
         opts: &::buffa::DecodeOptions,
     ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
         ::core::result::Result::Ok(
-            RegisterComponentSpecRequestOwnedView(
+            CreateComponentRequestOwnedView(
                 ::buffa::OwnedView::decode_with_options(bytes, opts)?,
             ),
         )
@@ -214,15 +234,15 @@ impl RegisterComponentSpecRequestOwnedView {
     /// Returns [`::buffa::DecodeError`] if the re-encoded bytes are
     /// somehow invalid (should not happen for well-formed messages).
     pub fn from_owned(
-        msg: &super::super::RegisterComponentSpecRequest,
+        msg: &super::super::CreateComponentRequest,
     ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
         ::core::result::Result::Ok(
-            RegisterComponentSpecRequestOwnedView(::buffa::OwnedView::from_owned(msg)?),
+            CreateComponentRequestOwnedView(::buffa::OwnedView::from_owned(msg)?),
         )
     }
-    /// Borrow the full [`RegisterComponentSpecRequestView`] with its lifetime tied to `&self`.
+    /// Borrow the full [`CreateComponentRequestView`] with its lifetime tied to `&self`.
     #[must_use]
-    pub fn view(&self) -> &RegisterComponentSpecRequestView<'_> {
+    pub fn view(&self) -> &CreateComponentRequestView<'_> {
         self.0.reborrow()
     }
     /// Convert to the owned message type.
@@ -234,7 +254,7 @@ impl RegisterComponentSpecRequestOwnedView {
     pub fn to_owned_message(
         &self,
     ) -> ::core::result::Result<
-        super::super::RegisterComponentSpecRequest,
+        super::super::CreateComponentRequest,
         ::buffa::DecodeError,
     > {
         self.0.to_owned_message()
@@ -249,40 +269,44 @@ impl RegisterComponentSpecRequestOwnedView {
     pub fn into_bytes(self) -> ::buffa::bytes::Bytes {
         self.0.into_bytes()
     }
-    /// Field 1: `spec`
+    /// Field 1: `component_id`
+    #[must_use]
+    pub fn component_id(&self) -> ::core::option::Option<&'_ [u8]> {
+        self.0.reborrow().component_id
+    }
+    /// Field 2: `spec`
     #[must_use]
     pub fn spec(
         &self,
-    ) -> &::buffa::MessageFieldView<super::super::__buffa::view::ComponentSpecView<'_>> {
+    ) -> &::buffa::MessageFieldView<
+        super::super::__buffa::view::NewComponentSpecView<'_>,
+    > {
         &self.0.reborrow().spec
     }
 }
-impl ::core::convert::From<::buffa::OwnedView<RegisterComponentSpecRequestView<'static>>>
-for RegisterComponentSpecRequestOwnedView {
-    fn from(
-        inner: ::buffa::OwnedView<RegisterComponentSpecRequestView<'static>>,
-    ) -> Self {
-        RegisterComponentSpecRequestOwnedView(inner)
+impl ::core::convert::From<::buffa::OwnedView<CreateComponentRequestView<'static>>>
+for CreateComponentRequestOwnedView {
+    fn from(inner: ::buffa::OwnedView<CreateComponentRequestView<'static>>) -> Self {
+        CreateComponentRequestOwnedView(inner)
     }
 }
-impl ::core::convert::From<RegisterComponentSpecRequestOwnedView>
-for ::buffa::OwnedView<RegisterComponentSpecRequestView<'static>> {
-    fn from(wrapper: RegisterComponentSpecRequestOwnedView) -> Self {
+impl ::core::convert::From<CreateComponentRequestOwnedView>
+for ::buffa::OwnedView<CreateComponentRequestView<'static>> {
+    fn from(wrapper: CreateComponentRequestOwnedView) -> Self {
         wrapper.0
     }
 }
-impl ::core::convert::AsRef<
-    ::buffa::OwnedView<RegisterComponentSpecRequestView<'static>>,
-> for RegisterComponentSpecRequestOwnedView {
-    fn as_ref(&self) -> &::buffa::OwnedView<RegisterComponentSpecRequestView<'static>> {
+impl ::core::convert::AsRef<::buffa::OwnedView<CreateComponentRequestView<'static>>>
+for CreateComponentRequestOwnedView {
+    fn as_ref(&self) -> &::buffa::OwnedView<CreateComponentRequestView<'static>> {
         &self.0
     }
 }
-impl ::buffa::HasMessageView for super::super::RegisterComponentSpecRequest {
-    type View<'a> = RegisterComponentSpecRequestView<'a>;
-    type ViewHandle = RegisterComponentSpecRequestOwnedView;
+impl ::buffa::HasMessageView for super::super::CreateComponentRequest {
+    type View<'a> = CreateComponentRequestView<'a>;
+    type ViewHandle = CreateComponentRequestOwnedView;
 }
-impl ::serde::Serialize for RegisterComponentSpecRequestOwnedView {
+impl ::serde::Serialize for CreateComponentRequestOwnedView {
     fn serialize<__S: ::serde::Serializer>(
         &self,
         __s: __S,
@@ -291,15 +315,15 @@ impl ::serde::Serialize for RegisterComponentSpecRequestOwnedView {
     }
 }
 #[derive(Clone, Debug, Default)]
-pub struct RegisterComponentSpecResponseView<'a> {
+pub struct CreateComponentResponseView<'a> {
     /// Field 1: `component`
     pub component: ::buffa::MessageFieldView<
-        super::super::__buffa::view::RegisteredComponentSpecView<'a>,
+        super::super::__buffa::view::ComponentView<'a>,
     >,
     pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
 }
-impl<'a> ::buffa::MessageView<'a> for RegisterComponentSpecResponseView<'a> {
-    type Owned = super::super::RegisterComponentSpecResponse;
+impl<'a> ::buffa::MessageView<'a> for CreateComponentResponseView<'a> {
+    type Owned = super::super::CreateComponentResponse;
     fn decode_view(buf: &'a [u8]) -> ::core::result::Result<Self, ::buffa::DecodeError> {
         let __limit = ::core::cell::Cell::new(::buffa::DEFAULT_UNKNOWN_FIELD_LIMIT);
         <Self as ::buffa::MessageView>::decode_view_ctx(
@@ -338,7 +362,7 @@ impl<'a> ::buffa::MessageView<'a> for RegisterComponentSpecResponseView<'a> {
                     }
                     None => {
                         view.component = ::buffa::MessageFieldView::set(
-                            <super::super::__buffa::view::RegisteredComponentSpecView as ::buffa::MessageView>::decode_view_ctx(
+                            <super::super::__buffa::view::ComponentView as ::buffa::MessageView>::decode_view_ctx(
                                 sub,
                                 __sub_ctx,
                             )?,
@@ -357,7 +381,7 @@ impl<'a> ::buffa::MessageView<'a> for RegisterComponentSpecResponseView<'a> {
     fn to_owned_message(
         &self,
     ) -> ::core::result::Result<
-        super::super::RegisterComponentSpecResponse,
+        super::super::CreateComponentResponse,
         ::buffa::DecodeError,
     > {
         self.to_owned_from_source(None)
@@ -367,17 +391,17 @@ impl<'a> ::buffa::MessageView<'a> for RegisterComponentSpecResponseView<'a> {
         &self,
         __buffa_src: ::core::option::Option<&::buffa::bytes::Bytes>,
     ) -> ::core::result::Result<
-        super::super::RegisterComponentSpecResponse,
+        super::super::CreateComponentResponse,
         ::buffa::DecodeError,
     > {
         #[allow(unused_imports)]
         use ::buffa::alloc::string::ToString as _;
         let _ = __buffa_src;
-        ::core::result::Result::Ok(super::super::RegisterComponentSpecResponse {
+        ::core::result::Result::Ok(super::super::CreateComponentResponse {
             component: match self.component.as_option() {
                 Some(v) => {
                     ::buffa::MessageField::<
-                        super::super::RegisteredComponentSpec,
+                        super::super::Component,
                     >::some(v.to_owned_from_source(__buffa_src)?)
                 }
                 None => ::buffa::MessageField::none(),
@@ -387,7 +411,7 @@ impl<'a> ::buffa::MessageView<'a> for RegisterComponentSpecResponseView<'a> {
         })
     }
 }
-impl<'a> ::buffa::ViewEncode<'a> for RegisterComponentSpecResponseView<'a> {
+impl<'a> ::buffa::ViewEncode<'a> for CreateComponentResponseView<'a> {
     #[allow(clippy::needless_borrow, clippy::let_and_return)]
     fn compute_size(&self, __cache: &mut ::buffa::SizeCache) -> u32 {
         #[allow(unused_imports)]
@@ -430,7 +454,7 @@ impl<'a> ::buffa::ViewEncode<'a> for RegisterComponentSpecResponseView<'a> {
 /// fields depends on default-omission rules; serializers that require
 /// known map lengths (e.g. `bincode`) will return a runtime error.
 /// Use the owned message type for those formats.
-impl<'__a> ::serde::Serialize for RegisterComponentSpecResponseView<'__a> {
+impl<'__a> ::serde::Serialize for CreateComponentResponseView<'__a> {
     fn serialize<__S: ::serde::Serializer>(
         &self,
         __s: __S,
@@ -445,24 +469,24 @@ impl<'__a> ::serde::Serialize for RegisterComponentSpecResponseView<'__a> {
         __map.end()
     }
 }
-impl<'a> ::buffa::MessageName for RegisterComponentSpecResponseView<'a> {
+impl<'a> ::buffa::MessageName for CreateComponentResponseView<'a> {
     const PACKAGE: &'static str = "henosis.v1";
-    const NAME: &'static str = "RegisterComponentSpecResponse";
-    const FULL_NAME: &'static str = "henosis.v1.RegisterComponentSpecResponse";
-    const TYPE_URL: &'static str = "type.googleapis.com/henosis.v1.RegisterComponentSpecResponse";
+    const NAME: &'static str = "CreateComponentResponse";
+    const FULL_NAME: &'static str = "henosis.v1.CreateComponentResponse";
+    const TYPE_URL: &'static str = "type.googleapis.com/henosis.v1.CreateComponentResponse";
 }
-::buffa::impl_default_view_instance!(RegisterComponentSpecResponseView);
-::buffa::impl_view_reborrow!(RegisterComponentSpecResponseView);
-/** Self-contained, `'static` owned view of a `RegisterComponentSpecResponse` message.
+::buffa::impl_default_view_instance!(CreateComponentResponseView);
+::buffa::impl_view_reborrow!(CreateComponentResponseView);
+/** Self-contained, `'static` owned view of a `CreateComponentResponse` message.
 
- Wraps [`::buffa::OwnedView`]`<`[`RegisterComponentSpecResponseView`]`<'static>>`: the decoded view and the [`::buffa::bytes::Bytes`] buffer it borrows from travel together, so the handle is `'static` and `Send + Sync` — suitable for async handlers, spawned tasks, and anywhere a `'static` bound is required.
+ Wraps [`::buffa::OwnedView`]`<`[`CreateComponentResponseView`]`<'static>>`: the decoded view and the [`::buffa::bytes::Bytes`] buffer it borrows from travel together, so the handle is `'static` and `Send + Sync` — suitable for async handlers, spawned tasks, and anywhere a `'static` bound is required.
 
- Field accessors return borrows tied to `&self`. Use [`Self::view`] to get the full [`RegisterComponentSpecResponseView`] when you need struct patterns, iteration helpers, or to pass the view to lifetime-parameterised code.*/
+ Field accessors return borrows tied to `&self`. Use [`Self::view`] to get the full [`CreateComponentResponseView`] when you need struct patterns, iteration helpers, or to pass the view to lifetime-parameterised code.*/
 #[derive(Clone, Debug)]
-pub struct RegisterComponentSpecResponseOwnedView(
-    ::buffa::OwnedView<RegisterComponentSpecResponseView<'static>>,
+pub struct CreateComponentResponseOwnedView(
+    ::buffa::OwnedView<CreateComponentResponseView<'static>>,
 );
-impl RegisterComponentSpecResponseOwnedView {
+impl CreateComponentResponseOwnedView {
     /// Decode an owned view from a [`::buffa::bytes::Bytes`] buffer.
     ///
     /// The view borrows directly from the buffer's data; the buffer is
@@ -476,7 +500,7 @@ impl RegisterComponentSpecResponseOwnedView {
         bytes: ::buffa::bytes::Bytes,
     ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
         ::core::result::Result::Ok(
-            RegisterComponentSpecResponseOwnedView(::buffa::OwnedView::decode(bytes)?),
+            CreateComponentResponseOwnedView(::buffa::OwnedView::decode(bytes)?),
         )
     }
     /// Decode with custom [`::buffa::DecodeOptions`] (recursion limit,
@@ -491,7 +515,7 @@ impl RegisterComponentSpecResponseOwnedView {
         opts: &::buffa::DecodeOptions,
     ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
         ::core::result::Result::Ok(
-            RegisterComponentSpecResponseOwnedView(
+            CreateComponentResponseOwnedView(
                 ::buffa::OwnedView::decode_with_options(bytes, opts)?,
             ),
         )
@@ -503,15 +527,15 @@ impl RegisterComponentSpecResponseOwnedView {
     /// Returns [`::buffa::DecodeError`] if the re-encoded bytes are
     /// somehow invalid (should not happen for well-formed messages).
     pub fn from_owned(
-        msg: &super::super::RegisterComponentSpecResponse,
+        msg: &super::super::CreateComponentResponse,
     ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
         ::core::result::Result::Ok(
-            RegisterComponentSpecResponseOwnedView(::buffa::OwnedView::from_owned(msg)?),
+            CreateComponentResponseOwnedView(::buffa::OwnedView::from_owned(msg)?),
         )
     }
-    /// Borrow the full [`RegisterComponentSpecResponseView`] with its lifetime tied to `&self`.
+    /// Borrow the full [`CreateComponentResponseView`] with its lifetime tied to `&self`.
     #[must_use]
-    pub fn view(&self) -> &RegisterComponentSpecResponseView<'_> {
+    pub fn view(&self) -> &CreateComponentResponseView<'_> {
         self.0.reborrow()
     }
     /// Convert to the owned message type.
@@ -523,7 +547,7 @@ impl RegisterComponentSpecResponseOwnedView {
     pub fn to_owned_message(
         &self,
     ) -> ::core::result::Result<
-        super::super::RegisterComponentSpecResponse,
+        super::super::CreateComponentResponse,
         ::buffa::DecodeError,
     > {
         self.0.to_owned_message()
@@ -542,39 +566,33 @@ impl RegisterComponentSpecResponseOwnedView {
     #[must_use]
     pub fn component(
         &self,
-    ) -> &::buffa::MessageFieldView<
-        super::super::__buffa::view::RegisteredComponentSpecView<'_>,
-    > {
+    ) -> &::buffa::MessageFieldView<super::super::__buffa::view::ComponentView<'_>> {
         &self.0.reborrow().component
     }
 }
-impl ::core::convert::From<
-    ::buffa::OwnedView<RegisterComponentSpecResponseView<'static>>,
-> for RegisterComponentSpecResponseOwnedView {
-    fn from(
-        inner: ::buffa::OwnedView<RegisterComponentSpecResponseView<'static>>,
-    ) -> Self {
-        RegisterComponentSpecResponseOwnedView(inner)
+impl ::core::convert::From<::buffa::OwnedView<CreateComponentResponseView<'static>>>
+for CreateComponentResponseOwnedView {
+    fn from(inner: ::buffa::OwnedView<CreateComponentResponseView<'static>>) -> Self {
+        CreateComponentResponseOwnedView(inner)
     }
 }
-impl ::core::convert::From<RegisterComponentSpecResponseOwnedView>
-for ::buffa::OwnedView<RegisterComponentSpecResponseView<'static>> {
-    fn from(wrapper: RegisterComponentSpecResponseOwnedView) -> Self {
+impl ::core::convert::From<CreateComponentResponseOwnedView>
+for ::buffa::OwnedView<CreateComponentResponseView<'static>> {
+    fn from(wrapper: CreateComponentResponseOwnedView) -> Self {
         wrapper.0
     }
 }
-impl ::core::convert::AsRef<
-    ::buffa::OwnedView<RegisterComponentSpecResponseView<'static>>,
-> for RegisterComponentSpecResponseOwnedView {
-    fn as_ref(&self) -> &::buffa::OwnedView<RegisterComponentSpecResponseView<'static>> {
+impl ::core::convert::AsRef<::buffa::OwnedView<CreateComponentResponseView<'static>>>
+for CreateComponentResponseOwnedView {
+    fn as_ref(&self) -> &::buffa::OwnedView<CreateComponentResponseView<'static>> {
         &self.0
     }
 }
-impl ::buffa::HasMessageView for super::super::RegisterComponentSpecResponse {
-    type View<'a> = RegisterComponentSpecResponseView<'a>;
-    type ViewHandle = RegisterComponentSpecResponseOwnedView;
+impl ::buffa::HasMessageView for super::super::CreateComponentResponse {
+    type View<'a> = CreateComponentResponseView<'a>;
+    type ViewHandle = CreateComponentResponseOwnedView;
 }
-impl ::serde::Serialize for RegisterComponentSpecResponseOwnedView {
+impl ::serde::Serialize for CreateComponentResponseOwnedView {
     fn serialize<__S: ::serde::Serializer>(
         &self,
         __s: __S,
@@ -586,8 +604,8 @@ impl ::serde::Serialize for RegisterComponentSpecResponseOwnedView {
 pub struct CreateGraphRequestView<'a> {
     /// Field 1: `graph_id`
     pub graph_id: ::core::option::Option<&'a [u8]>,
-    /// Field 2: `component_spec_hashes`
-    pub component_spec_hashes: ::buffa::RepeatedView<'a, &'a [u8]>,
+    /// Field 2: `component_ids`
+    pub component_ids: ::buffa::RepeatedView<'a, &'a [u8]>,
     /// Field 3: `request_id`
     pub request_id: ::core::option::Option<&'a [u8]>,
     pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
@@ -638,7 +656,7 @@ impl<'a> ::buffa::MessageView<'a> for CreateGraphRequestView<'a> {
                     tag,
                     ::buffa::encoding::WireType::LengthDelimited,
                 )?;
-                view.component_spec_hashes.push(::buffa::types::borrow_bytes(&mut cur)?);
+                view.component_ids.push(::buffa::types::borrow_bytes(&mut cur)?);
             }
             _ => {
                 ::buffa::encoding::skip_field_depth(tag, &mut cur, ctx.depth())?;
@@ -663,11 +681,7 @@ impl<'a> ::buffa::MessageView<'a> for CreateGraphRequestView<'a> {
         let _ = __buffa_src;
         ::core::result::Result::Ok(super::super::CreateGraphRequest {
             graph_id: self.graph_id.map(|b| (b).to_vec()),
-            component_spec_hashes: self
-                .component_spec_hashes
-                .iter()
-                .map(|b| (b).to_vec())
-                .collect(),
+            component_ids: self.component_ids.iter().map(|b| (b).to_vec()).collect(),
             request_id: self.request_id.map(|b| (b).to_vec()),
             __buffa_unknown_fields: self.__buffa_unknown_fields.to_owned()?.into(),
             ..::core::default::Default::default()
@@ -683,7 +697,7 @@ impl<'a> ::buffa::ViewEncode<'a> for CreateGraphRequestView<'a> {
         if let Some(ref v) = self.graph_id {
             size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
         }
-        for v in &self.component_spec_hashes {
+        for v in &self.component_ids {
             size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
         }
         if let Some(ref v) = self.request_id {
@@ -703,7 +717,7 @@ impl<'a> ::buffa::ViewEncode<'a> for CreateGraphRequestView<'a> {
         if let Some(ref v) = self.graph_id {
             ::buffa::types::put_bytes_field(1u32, v, buf);
         }
-        for v in &self.component_spec_hashes {
+        for v in &self.component_ids {
             ::buffa::types::put_bytes_field(2u32, v, buf);
         }
         if let Some(ref v) = self.request_id {
@@ -733,11 +747,11 @@ impl<'__a> ::serde::Serialize for CreateGraphRequestView<'__a> {
         if let ::core::option::Option::Some(__v) = self.graph_id {
             __map.serialize_entry("graphId", &::buffa::json_helpers::BytesJson(__v))?;
         }
-        if !self.component_spec_hashes.is_empty() {
+        if !self.component_ids.is_empty() {
             __map
                 .serialize_entry(
-                    "componentSpecHashes",
-                    &::buffa::json_helpers::BytesSeqJson(&self.component_spec_hashes),
+                    "componentIds",
+                    &::buffa::json_helpers::BytesSeqJson(&self.component_ids),
                 )?;
         }
         if let ::core::option::Option::Some(__v) = self.request_id {
@@ -841,10 +855,10 @@ impl CreateGraphRequestOwnedView {
     pub fn graph_id(&self) -> ::core::option::Option<&'_ [u8]> {
         self.0.reborrow().graph_id
     }
-    /// Field 2: `component_spec_hashes`
+    /// Field 2: `component_ids`
     #[must_use]
-    pub fn component_spec_hashes(&self) -> &::buffa::RepeatedView<'_, &'_ [u8]> {
-        &self.0.reborrow().component_spec_hashes
+    pub fn component_ids(&self) -> &::buffa::RepeatedView<'_, &'_ [u8]> {
+        &self.0.reborrow().component_ids
     }
     /// Field 3: `request_id`
     #[must_use]
@@ -1172,8 +1186,8 @@ pub struct AddComponentsRequestView<'a> {
     pub graph_id: ::core::option::Option<&'a [u8]>,
     /// Field 2: `expected_generation`
     pub expected_generation: ::core::option::Option<u64>,
-    /// Field 3: `component_spec_hashes`
-    pub component_spec_hashes: ::buffa::RepeatedView<'a, &'a [u8]>,
+    /// Field 3: `component_ids`
+    pub component_ids: ::buffa::RepeatedView<'a, &'a [u8]>,
     /// Field 4: `request_id`
     pub request_id: ::core::option::Option<&'a [u8]>,
     pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
@@ -1233,7 +1247,7 @@ impl<'a> ::buffa::MessageView<'a> for AddComponentsRequestView<'a> {
                     tag,
                     ::buffa::encoding::WireType::LengthDelimited,
                 )?;
-                view.component_spec_hashes.push(::buffa::types::borrow_bytes(&mut cur)?);
+                view.component_ids.push(::buffa::types::borrow_bytes(&mut cur)?);
             }
             _ => {
                 ::buffa::encoding::skip_field_depth(tag, &mut cur, ctx.depth())?;
@@ -1265,11 +1279,7 @@ impl<'a> ::buffa::MessageView<'a> for AddComponentsRequestView<'a> {
         ::core::result::Result::Ok(super::super::AddComponentsRequest {
             graph_id: self.graph_id.map(|b| (b).to_vec()),
             expected_generation: self.expected_generation,
-            component_spec_hashes: self
-                .component_spec_hashes
-                .iter()
-                .map(|b| (b).to_vec())
-                .collect(),
+            component_ids: self.component_ids.iter().map(|b| (b).to_vec()).collect(),
             request_id: self.request_id.map(|b| (b).to_vec()),
             __buffa_unknown_fields: self.__buffa_unknown_fields.to_owned()?.into(),
             ..::core::default::Default::default()
@@ -1288,7 +1298,7 @@ impl<'a> ::buffa::ViewEncode<'a> for AddComponentsRequestView<'a> {
         if let Some(v) = self.expected_generation {
             size += 1u32 + ::buffa::types::uint64_encoded_len(v) as u32;
         }
-        for v in &self.component_spec_hashes {
+        for v in &self.component_ids {
             size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
         }
         if let Some(ref v) = self.request_id {
@@ -1311,7 +1321,7 @@ impl<'a> ::buffa::ViewEncode<'a> for AddComponentsRequestView<'a> {
         if let Some(v) = self.expected_generation {
             ::buffa::types::put_uint64_field(2u32, v, buf);
         }
-        for v in &self.component_spec_hashes {
+        for v in &self.component_ids {
             ::buffa::types::put_bytes_field(3u32, v, buf);
         }
         if let Some(ref v) = self.request_id {
@@ -1348,11 +1358,11 @@ impl<'__a> ::serde::Serialize for AddComponentsRequestView<'__a> {
                     &::buffa::json_helpers::ProtoJson(&__v),
                 )?;
         }
-        if !self.component_spec_hashes.is_empty() {
+        if !self.component_ids.is_empty() {
             __map
                 .serialize_entry(
-                    "componentSpecHashes",
-                    &::buffa::json_helpers::BytesSeqJson(&self.component_spec_hashes),
+                    "componentIds",
+                    &::buffa::json_helpers::BytesSeqJson(&self.component_ids),
                 )?;
         }
         if let ::core::option::Option::Some(__v) = self.request_id {
@@ -1464,10 +1474,10 @@ impl AddComponentsRequestOwnedView {
     pub fn expected_generation(&self) -> ::core::option::Option<u64> {
         self.0.reborrow().expected_generation
     }
-    /// Field 3: `component_spec_hashes`
+    /// Field 3: `component_ids`
     #[must_use]
-    pub fn component_spec_hashes(&self) -> &::buffa::RepeatedView<'_, &'_ [u8]> {
-        &self.0.reborrow().component_spec_hashes
+    pub fn component_ids(&self) -> &::buffa::RepeatedView<'_, &'_ [u8]> {
+        &self.0.reborrow().component_ids
     }
     /// Field 4: `request_id`
     #[must_use]
@@ -1791,10 +1801,10 @@ impl ::serde::Serialize for AddComponentsResponseOwnedView {
 }
 #[derive(Clone, Debug, Default)]
 pub struct ComponentReplacementView<'a> {
-    /// Field 1: `current_spec_hash`
-    pub current_spec_hash: ::core::option::Option<&'a [u8]>,
-    /// Field 2: `replacement_spec_hash`
-    pub replacement_spec_hash: ::core::option::Option<&'a [u8]>,
+    /// Field 1: `current_component_id`
+    pub current_component_id: ::core::option::Option<&'a [u8]>,
+    /// Field 2: `replacement_component_id`
+    pub replacement_component_id: ::core::option::Option<&'a [u8]>,
     pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
 }
 impl<'a> ::buffa::MessageView<'a> for ComponentReplacementView<'a> {
@@ -1829,14 +1839,16 @@ impl<'a> ::buffa::MessageView<'a> for ComponentReplacementView<'a> {
                     tag,
                     ::buffa::encoding::WireType::LengthDelimited,
                 )?;
-                view.current_spec_hash = Some(::buffa::types::borrow_bytes(&mut cur)?);
+                view.current_component_id = Some(
+                    ::buffa::types::borrow_bytes(&mut cur)?,
+                );
             }
             2u32 => {
                 ::buffa::encoding::check_wire_type(
                     tag,
                     ::buffa::encoding::WireType::LengthDelimited,
                 )?;
-                view.replacement_spec_hash = Some(
+                view.replacement_component_id = Some(
                     ::buffa::types::borrow_bytes(&mut cur)?,
                 );
             }
@@ -1868,8 +1880,10 @@ impl<'a> ::buffa::MessageView<'a> for ComponentReplacementView<'a> {
         use ::buffa::alloc::string::ToString as _;
         let _ = __buffa_src;
         ::core::result::Result::Ok(super::super::ComponentReplacement {
-            current_spec_hash: self.current_spec_hash.map(|b| (b).to_vec()),
-            replacement_spec_hash: self.replacement_spec_hash.map(|b| (b).to_vec()),
+            current_component_id: self.current_component_id.map(|b| (b).to_vec()),
+            replacement_component_id: self
+                .replacement_component_id
+                .map(|b| (b).to_vec()),
             __buffa_unknown_fields: self.__buffa_unknown_fields.to_owned()?.into(),
             ..::core::default::Default::default()
         })
@@ -1881,10 +1895,10 @@ impl<'a> ::buffa::ViewEncode<'a> for ComponentReplacementView<'a> {
         #[allow(unused_imports)]
         use ::buffa::Enumeration as _;
         let mut size = 0u32;
-        if let Some(ref v) = self.current_spec_hash {
+        if let Some(ref v) = self.current_component_id {
             size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
         }
-        if let Some(ref v) = self.replacement_spec_hash {
+        if let Some(ref v) = self.replacement_component_id {
             size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
         }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
@@ -1898,10 +1912,10 @@ impl<'a> ::buffa::ViewEncode<'a> for ComponentReplacementView<'a> {
     ) {
         #[allow(unused_imports)]
         use ::buffa::Enumeration as _;
-        if let Some(ref v) = self.current_spec_hash {
+        if let Some(ref v) = self.current_component_id {
             ::buffa::types::put_bytes_field(1u32, v, buf);
         }
-        if let Some(ref v) = self.replacement_spec_hash {
+        if let Some(ref v) = self.replacement_component_id {
             ::buffa::types::put_bytes_field(2u32, v, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
@@ -1925,17 +1939,17 @@ impl<'__a> ::serde::Serialize for ComponentReplacementView<'__a> {
     ) -> ::core::result::Result<__S::Ok, __S::Error> {
         use ::serde::ser::SerializeMap as _;
         let mut __map = __s.serialize_map(::core::option::Option::None)?;
-        if let ::core::option::Option::Some(__v) = self.current_spec_hash {
+        if let ::core::option::Option::Some(__v) = self.current_component_id {
             __map
                 .serialize_entry(
-                    "currentSpecHash",
+                    "currentComponentId",
                     &::buffa::json_helpers::BytesJson(__v),
                 )?;
         }
-        if let ::core::option::Option::Some(__v) = self.replacement_spec_hash {
+        if let ::core::option::Option::Some(__v) = self.replacement_component_id {
             __map
                 .serialize_entry(
-                    "replacementSpecHash",
+                    "replacementComponentId",
                     &::buffa::json_helpers::BytesJson(__v),
                 )?;
         }
@@ -2035,15 +2049,15 @@ impl ComponentReplacementOwnedView {
     pub fn into_bytes(self) -> ::buffa::bytes::Bytes {
         self.0.into_bytes()
     }
-    /// Field 1: `current_spec_hash`
+    /// Field 1: `current_component_id`
     #[must_use]
-    pub fn current_spec_hash(&self) -> ::core::option::Option<&'_ [u8]> {
-        self.0.reborrow().current_spec_hash
+    pub fn current_component_id(&self) -> ::core::option::Option<&'_ [u8]> {
+        self.0.reborrow().current_component_id
     }
-    /// Field 2: `replacement_spec_hash`
+    /// Field 2: `replacement_component_id`
     #[must_use]
-    pub fn replacement_spec_hash(&self) -> ::core::option::Option<&'_ [u8]> {
-        self.0.reborrow().replacement_spec_hash
+    pub fn replacement_component_id(&self) -> ::core::option::Option<&'_ [u8]> {
+        self.0.reborrow().replacement_component_id
     }
 }
 impl ::core::convert::From<::buffa::OwnedView<ComponentReplacementView<'static>>>
@@ -2723,8 +2737,8 @@ pub struct RemoveComponentsRequestView<'a> {
     pub graph_id: ::core::option::Option<&'a [u8]>,
     /// Field 2: `expected_generation`
     pub expected_generation: ::core::option::Option<u64>,
-    /// Field 3: `component_spec_hashes`
-    pub component_spec_hashes: ::buffa::RepeatedView<'a, &'a [u8]>,
+    /// Field 3: `component_ids`
+    pub component_ids: ::buffa::RepeatedView<'a, &'a [u8]>,
     /// Field 4: `request_id`
     pub request_id: ::core::option::Option<&'a [u8]>,
     pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
@@ -2784,7 +2798,7 @@ impl<'a> ::buffa::MessageView<'a> for RemoveComponentsRequestView<'a> {
                     tag,
                     ::buffa::encoding::WireType::LengthDelimited,
                 )?;
-                view.component_spec_hashes.push(::buffa::types::borrow_bytes(&mut cur)?);
+                view.component_ids.push(::buffa::types::borrow_bytes(&mut cur)?);
             }
             _ => {
                 ::buffa::encoding::skip_field_depth(tag, &mut cur, ctx.depth())?;
@@ -2816,11 +2830,7 @@ impl<'a> ::buffa::MessageView<'a> for RemoveComponentsRequestView<'a> {
         ::core::result::Result::Ok(super::super::RemoveComponentsRequest {
             graph_id: self.graph_id.map(|b| (b).to_vec()),
             expected_generation: self.expected_generation,
-            component_spec_hashes: self
-                .component_spec_hashes
-                .iter()
-                .map(|b| (b).to_vec())
-                .collect(),
+            component_ids: self.component_ids.iter().map(|b| (b).to_vec()).collect(),
             request_id: self.request_id.map(|b| (b).to_vec()),
             __buffa_unknown_fields: self.__buffa_unknown_fields.to_owned()?.into(),
             ..::core::default::Default::default()
@@ -2839,7 +2849,7 @@ impl<'a> ::buffa::ViewEncode<'a> for RemoveComponentsRequestView<'a> {
         if let Some(v) = self.expected_generation {
             size += 1u32 + ::buffa::types::uint64_encoded_len(v) as u32;
         }
-        for v in &self.component_spec_hashes {
+        for v in &self.component_ids {
             size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
         }
         if let Some(ref v) = self.request_id {
@@ -2862,7 +2872,7 @@ impl<'a> ::buffa::ViewEncode<'a> for RemoveComponentsRequestView<'a> {
         if let Some(v) = self.expected_generation {
             ::buffa::types::put_uint64_field(2u32, v, buf);
         }
-        for v in &self.component_spec_hashes {
+        for v in &self.component_ids {
             ::buffa::types::put_bytes_field(3u32, v, buf);
         }
         if let Some(ref v) = self.request_id {
@@ -2899,11 +2909,11 @@ impl<'__a> ::serde::Serialize for RemoveComponentsRequestView<'__a> {
                     &::buffa::json_helpers::ProtoJson(&__v),
                 )?;
         }
-        if !self.component_spec_hashes.is_empty() {
+        if !self.component_ids.is_empty() {
             __map
                 .serialize_entry(
-                    "componentSpecHashes",
-                    &::buffa::json_helpers::BytesSeqJson(&self.component_spec_hashes),
+                    "componentIds",
+                    &::buffa::json_helpers::BytesSeqJson(&self.component_ids),
                 )?;
         }
         if let ::core::option::Option::Some(__v) = self.request_id {
@@ -3015,10 +3025,10 @@ impl RemoveComponentsRequestOwnedView {
     pub fn expected_generation(&self) -> ::core::option::Option<u64> {
         self.0.reborrow().expected_generation
     }
-    /// Field 3: `component_spec_hashes`
+    /// Field 3: `component_ids`
     #[must_use]
-    pub fn component_spec_hashes(&self) -> &::buffa::RepeatedView<'_, &'_ [u8]> {
-        &self.0.reborrow().component_spec_hashes
+    pub fn component_ids(&self) -> &::buffa::RepeatedView<'_, &'_ [u8]> {
+        &self.0.reborrow().component_ids
     }
     /// Field 4: `request_id`
     #[must_use]
@@ -4448,7 +4458,7 @@ pub struct GetGraphGenerationResponseView<'a> {
     /// Field 2: `components`
     pub components: ::buffa::RepeatedView<
         'a,
-        super::super::__buffa::view::RegisteredComponentSpecView<'a>,
+        super::super::__buffa::view::ComponentView<'a>,
     >,
     /// Field 3: `current_lifecycle`
     pub current_lifecycle: ::core::option::Option<
@@ -4533,7 +4543,7 @@ impl<'a> ::buffa::MessageView<'a> for GetGraphGenerationResponseView<'a> {
                 let sub = ::buffa::types::borrow_bytes(&mut cur)?;
                 view.components
                     .push(
-                        <super::super::__buffa::view::RegisteredComponentSpecView as ::buffa::MessageView>::decode_view_ctx(
+                        <super::super::__buffa::view::ComponentView as ::buffa::MessageView>::decode_view_ctx(
                             sub,
                             __sub_ctx,
                         )?,
@@ -4786,10 +4796,7 @@ impl GetGraphGenerationResponseOwnedView {
     #[must_use]
     pub fn components(
         &self,
-    ) -> &::buffa::RepeatedView<
-        '_,
-        super::super::__buffa::view::RegisteredComponentSpecView<'_>,
-    > {
+    ) -> &::buffa::RepeatedView<'_, super::super::__buffa::view::ComponentView<'_>> {
         &self.0.reborrow().components
     }
     /// Field 3: `current_lifecycle`

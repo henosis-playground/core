@@ -1,5 +1,5 @@
 [package]
-name = "henosis-types"
+name = "types"
 version = "0.0.0"
 description = "Domain types for the Henosis graph orchestrator"
 repository.workspace = true
@@ -11,6 +11,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+blake3.workspace = true
 iddqd.workspace = true
 newtype-uuid.workspace = true
 newtype-uuid-macros.workspace = true

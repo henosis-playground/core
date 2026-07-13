@@ -1,6 +1,6 @@
 use diesel::HasQuery;
 use henosis_db_schema::auth_material;
-use henosis_types as domain;
+use types::domain;
 
 /// Stored administrative authentication material.
 #[derive(Clone, Debug, HasQuery, Eq, PartialEq)]

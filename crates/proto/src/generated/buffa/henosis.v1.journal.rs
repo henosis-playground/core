@@ -685,13 +685,14 @@ pub mod spec_stream_record_v1 {
 #[derive(::serde::Serialize, ::serde::Deserialize)]
 #[serde(default)]
 pub struct ComponentSpecRegisteredV1 {
-    /// Field 1: `hash`
+    /// Field 1: `component_id`
     #[serde(
-        rename = "hash",
+        rename = "componentId",
+        alias = "component_id",
         with = "::buffa::json_helpers::opt_bytes",
         skip_serializing_if = "::core::option::Option::is_none"
     )]
-    pub hash: ::core::option::Option<::buffa::alloc::vec::Vec<u8>>,
+    pub component_id: ::core::option::Option<::buffa::alloc::vec::Vec<u8>>,
     /// Field 2: `spec`
     #[serde(
         rename = "spec",
@@ -705,7 +706,7 @@ pub struct ComponentSpecRegisteredV1 {
 impl ::core::fmt::Debug for ComponentSpecRegisteredV1 {
     fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         f.debug_struct("ComponentSpecRegisteredV1")
-            .field("hash", &self.hash)
+            .field("component_id", &self.component_id)
             .field("spec", &self.spec)
             .finish()
     }
@@ -720,9 +721,12 @@ impl ComponentSpecRegisteredV1 {
 impl ComponentSpecRegisteredV1 {
     #[must_use = "with_* setters return `self` by value; assign or chain the result"]
     #[inline]
-    ///Sets [`Self::hash`] to `Some(value)`, consuming and returning `self`.
-    pub fn with_hash(mut self, value: impl Into<::buffa::alloc::vec::Vec<u8>>) -> Self {
-        self.hash = Some(value.into());
+    ///Sets [`Self::component_id`] to `Some(value)`, consuming and returning `self`.
+    pub fn with_component_id(
+        mut self,
+        value: impl Into<::buffa::alloc::vec::Vec<u8>>,
+    ) -> Self {
+        self.component_id = Some(value.into());
         self
     }
 }
@@ -744,7 +748,7 @@ impl ::buffa::Message for ComponentSpecRegisteredV1 {
         #[allow(unused_imports)]
         use ::buffa::Enumeration as _;
         let mut size = 0u32;
-        if let Some(ref v) = self.hash {
+        if let Some(ref v) = self.component_id {
             size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
         }
         if self.spec.is_set() {
@@ -765,7 +769,7 @@ impl ::buffa::Message for ComponentSpecRegisteredV1 {
     ) {
         #[allow(unused_imports)]
         use ::buffa::Enumeration as _;
-        if let Some(ref v) = self.hash {
+        if let Some(ref v) = self.component_id {
             ::buffa::types::put_bytes_field(1u32, v, buf);
         }
         if self.spec.is_set() {
@@ -791,7 +795,7 @@ impl ::buffa::Message for ComponentSpecRegisteredV1 {
                     ::buffa::encoding::WireType::LengthDelimited,
                 )?;
                 ::buffa::types::merge_bytes(
-                    self.hash.get_or_insert_with(::buffa::alloc::vec::Vec::new),
+                    self.component_id.get_or_insert_with(::buffa::alloc::vec::Vec::new),
                     buf,
                 )?;
             }
@@ -814,7 +818,7 @@ impl ::buffa::Message for ComponentSpecRegisteredV1 {
         ::core::result::Result::Ok(())
     }
     fn clear(&mut self) {
-        self.hash = ::core::option::Option::None;
+        self.component_id = ::core::option::Option::None;
         self.spec = ::buffa::MessageField::none();
         self.__buffa_unknown_fields.clear();
     }
@@ -869,14 +873,14 @@ pub struct ComponentSpecRecordV1 {
         skip_serializing_if = "::core::option::Option::is_none"
     )]
     pub outputs_schema: ::core::option::Option<::buffa::alloc::vec::Vec<u8>>,
-    /// Field 4: `depends_on`
+    /// Field 4: `depends_on_component_ids`
     #[serde(
-        rename = "dependsOn",
-        alias = "depends_on",
+        rename = "dependsOnComponentIds",
+        alias = "depends_on_component_ids",
         with = "::buffa::json_helpers::proto_seq",
         skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec"
     )]
-    pub depends_on: ::buffa::alloc::vec::Vec<::buffa::alloc::vec::Vec<u8>>,
+    pub depends_on_component_ids: ::buffa::alloc::vec::Vec<::buffa::alloc::vec::Vec<u8>>,
     /// Field 5: `connector_context`
     #[serde(
         rename = "connectorContext",
@@ -895,7 +899,7 @@ impl ::core::fmt::Debug for ComponentSpecRecordV1 {
             .field("name", &self.name)
             .field("connector", &self.connector)
             .field("outputs_schema", &self.outputs_schema)
-            .field("depends_on", &self.depends_on)
+            .field("depends_on_component_ids", &self.depends_on_component_ids)
             .field("connector_context", &self.connector_context)
             .finish()
     }
@@ -976,7 +980,7 @@ impl ::buffa::Message for ComponentSpecRecordV1 {
         if let Some(ref v) = self.outputs_schema {
             size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
         }
-        for v in &self.depends_on {
+        for v in &self.depends_on_component_ids {
             size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
         }
         if let Some(ref v) = self.connector_context {
@@ -1001,7 +1005,7 @@ impl ::buffa::Message for ComponentSpecRecordV1 {
         if let Some(ref v) = self.outputs_schema {
             ::buffa::types::put_bytes_field(3u32, v, buf);
         }
-        for v in &self.depends_on {
+        for v in &self.depends_on_component_ids {
             ::buffa::types::put_bytes_field(4u32, v, buf);
         }
         if let Some(ref v) = self.connector_context {
@@ -1059,7 +1063,7 @@ impl ::buffa::Message for ComponentSpecRecordV1 {
                     tag,
                     ::buffa::encoding::WireType::LengthDelimited,
                 )?;
-                self.depends_on.push(::buffa::types::decode_bytes(buf)?);
+                self.depends_on_component_ids.push(::buffa::types::decode_bytes(buf)?);
             }
             5u32 => {
                 ::buffa::encoding::check_wire_type(
@@ -1084,7 +1088,7 @@ impl ::buffa::Message for ComponentSpecRecordV1 {
         self.name = ::core::option::Option::None;
         self.connector = ::core::option::Option::None;
         self.outputs_schema = ::core::option::Option::None;
-        self.depends_on.clear();
+        self.depends_on_component_ids.clear();
         self.connector_context = ::core::option::Option::None;
         self.__buffa_unknown_fields.clear();
     }
@@ -1872,14 +1876,14 @@ pub struct SliceReportedV1 {
         skip_serializing_if = "::core::option::Option::is_none"
     )]
     pub request_id: ::core::option::Option<::buffa::alloc::vec::Vec<u8>>,
-    /// Field 3: `request_fingerprint`
+    /// Field 3: `request_hash`
     #[serde(
-        rename = "requestFingerprint",
-        alias = "request_fingerprint",
+        rename = "requestHash",
+        alias = "request_hash",
         with = "::buffa::json_helpers::opt_bytes",
         skip_serializing_if = "::core::option::Option::is_none"
     )]
-    pub request_fingerprint: ::core::option::Option<::buffa::alloc::vec::Vec<u8>>,
+    pub request_hash: ::core::option::Option<::buffa::alloc::vec::Vec<u8>>,
     /// Field 4: `publication_id`
     #[serde(
         rename = "publicationId",
@@ -1888,14 +1892,14 @@ pub struct SliceReportedV1 {
         skip_serializing_if = "::core::option::Option::is_none"
     )]
     pub publication_id: ::core::option::Option<::buffa::alloc::vec::Vec<u8>>,
-    /// Field 5: `publication_fingerprint`
+    /// Field 5: `publication_hash`
     #[serde(
-        rename = "publicationFingerprint",
-        alias = "publication_fingerprint",
+        rename = "publicationHash",
+        alias = "publication_hash",
         with = "::buffa::json_helpers::opt_bytes",
         skip_serializing_if = "::core::option::Option::is_none"
     )]
-    pub publication_fingerprint: ::core::option::Option<::buffa::alloc::vec::Vec<u8>>,
+    pub publication_hash: ::core::option::Option<::buffa::alloc::vec::Vec<u8>>,
     #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
@@ -1905,9 +1909,9 @@ impl ::core::fmt::Debug for SliceReportedV1 {
         f.debug_struct("SliceReportedV1")
             .field("report", &self.report)
             .field("request_id", &self.request_id)
-            .field("request_fingerprint", &self.request_fingerprint)
+            .field("request_hash", &self.request_hash)
             .field("publication_id", &self.publication_id)
-            .field("publication_fingerprint", &self.publication_fingerprint)
+            .field("publication_hash", &self.publication_hash)
             .finish()
     }
 }
@@ -1931,12 +1935,12 @@ impl SliceReportedV1 {
     }
     #[must_use = "with_* setters return `self` by value; assign or chain the result"]
     #[inline]
-    ///Sets [`Self::request_fingerprint`] to `Some(value)`, consuming and returning `self`.
-    pub fn with_request_fingerprint(
+    ///Sets [`Self::request_hash`] to `Some(value)`, consuming and returning `self`.
+    pub fn with_request_hash(
         mut self,
         value: impl Into<::buffa::alloc::vec::Vec<u8>>,
     ) -> Self {
-        self.request_fingerprint = Some(value.into());
+        self.request_hash = Some(value.into());
         self
     }
     #[must_use = "with_* setters return `self` by value; assign or chain the result"]
@@ -1951,12 +1955,12 @@ impl SliceReportedV1 {
     }
     #[must_use = "with_* setters return `self` by value; assign or chain the result"]
     #[inline]
-    ///Sets [`Self::publication_fingerprint`] to `Some(value)`, consuming and returning `self`.
-    pub fn with_publication_fingerprint(
+    ///Sets [`Self::publication_hash`] to `Some(value)`, consuming and returning `self`.
+    pub fn with_publication_hash(
         mut self,
         value: impl Into<::buffa::alloc::vec::Vec<u8>>,
     ) -> Self {
-        self.publication_fingerprint = Some(value.into());
+        self.publication_hash = Some(value.into());
         self
     }
 }
@@ -1989,13 +1993,13 @@ impl ::buffa::Message for SliceReportedV1 {
         if let Some(ref v) = self.request_id {
             size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
         }
-        if let Some(ref v) = self.request_fingerprint {
+        if let Some(ref v) = self.request_hash {
             size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
         }
         if let Some(ref v) = self.publication_id {
             size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
         }
-        if let Some(ref v) = self.publication_fingerprint {
+        if let Some(ref v) = self.publication_hash {
             size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
         }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
@@ -2015,13 +2019,13 @@ impl ::buffa::Message for SliceReportedV1 {
         if let Some(ref v) = self.request_id {
             ::buffa::types::put_bytes_field(2u32, v, buf);
         }
-        if let Some(ref v) = self.request_fingerprint {
+        if let Some(ref v) = self.request_hash {
             ::buffa::types::put_bytes_field(3u32, v, buf);
         }
         if let Some(ref v) = self.publication_id {
             ::buffa::types::put_bytes_field(4u32, v, buf);
         }
-        if let Some(ref v) = self.publication_fingerprint {
+        if let Some(ref v) = self.publication_hash {
             ::buffa::types::put_bytes_field(5u32, v, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
@@ -2064,9 +2068,7 @@ impl ::buffa::Message for SliceReportedV1 {
                     ::buffa::encoding::WireType::LengthDelimited,
                 )?;
                 ::buffa::types::merge_bytes(
-                    self
-                        .request_fingerprint
-                        .get_or_insert_with(::buffa::alloc::vec::Vec::new),
+                    self.request_hash.get_or_insert_with(::buffa::alloc::vec::Vec::new),
                     buf,
                 )?;
             }
@@ -2089,7 +2091,7 @@ impl ::buffa::Message for SliceReportedV1 {
                 )?;
                 ::buffa::types::merge_bytes(
                     self
-                        .publication_fingerprint
+                        .publication_hash
                         .get_or_insert_with(::buffa::alloc::vec::Vec::new),
                     buf,
                 )?;
@@ -2104,9 +2106,9 @@ impl ::buffa::Message for SliceReportedV1 {
     fn clear(&mut self) {
         self.report = ::buffa::MessageField::none();
         self.request_id = ::core::option::Option::None;
-        self.request_fingerprint = ::core::option::Option::None;
+        self.request_hash = ::core::option::Option::None;
         self.publication_id = ::core::option::Option::None;
-        self.publication_fingerprint = ::core::option::Option::None;
+        self.publication_hash = ::core::option::Option::None;
         self.__buffa_unknown_fields.clear();
     }
 }
@@ -2157,14 +2159,14 @@ pub struct GraphCreatedV1 {
         skip_serializing_if = "::core::option::Option::is_none"
     )]
     pub request_id: ::core::option::Option<::buffa::alloc::vec::Vec<u8>>,
-    /// Field 3: `request_fingerprint`
+    /// Field 3: `request_hash`
     #[serde(
-        rename = "requestFingerprint",
-        alias = "request_fingerprint",
+        rename = "requestHash",
+        alias = "request_hash",
         with = "::buffa::json_helpers::opt_bytes",
         skip_serializing_if = "::core::option::Option::is_none"
     )]
-    pub request_fingerprint: ::core::option::Option<::buffa::alloc::vec::Vec<u8>>,
+    pub request_hash: ::core::option::Option<::buffa::alloc::vec::Vec<u8>>,
     #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
@@ -2174,7 +2176,7 @@ impl ::core::fmt::Debug for GraphCreatedV1 {
         f.debug_struct("GraphCreatedV1")
             .field("graph", &self.graph)
             .field("request_id", &self.request_id)
-            .field("request_fingerprint", &self.request_fingerprint)
+            .field("request_hash", &self.request_hash)
             .finish()
     }
 }
@@ -2198,12 +2200,12 @@ impl GraphCreatedV1 {
     }
     #[must_use = "with_* setters return `self` by value; assign or chain the result"]
     #[inline]
-    ///Sets [`Self::request_fingerprint`] to `Some(value)`, consuming and returning `self`.
-    pub fn with_request_fingerprint(
+    ///Sets [`Self::request_hash`] to `Some(value)`, consuming and returning `self`.
+    pub fn with_request_hash(
         mut self,
         value: impl Into<::buffa::alloc::vec::Vec<u8>>,
     ) -> Self {
-        self.request_fingerprint = Some(value.into());
+        self.request_hash = Some(value.into());
         self
     }
 }
@@ -2236,7 +2238,7 @@ impl ::buffa::Message for GraphCreatedV1 {
         if let Some(ref v) = self.request_id {
             size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
         }
-        if let Some(ref v) = self.request_fingerprint {
+        if let Some(ref v) = self.request_hash {
             size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
         }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
@@ -2256,7 +2258,7 @@ impl ::buffa::Message for GraphCreatedV1 {
         if let Some(ref v) = self.request_id {
             ::buffa::types::put_bytes_field(2u32, v, buf);
         }
-        if let Some(ref v) = self.request_fingerprint {
+        if let Some(ref v) = self.request_hash {
             ::buffa::types::put_bytes_field(3u32, v, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
@@ -2299,9 +2301,7 @@ impl ::buffa::Message for GraphCreatedV1 {
                     ::buffa::encoding::WireType::LengthDelimited,
                 )?;
                 ::buffa::types::merge_bytes(
-                    self
-                        .request_fingerprint
-                        .get_or_insert_with(::buffa::alloc::vec::Vec::new),
+                    self.request_hash.get_or_insert_with(::buffa::alloc::vec::Vec::new),
                     buf,
                 )?;
             }
@@ -2315,7 +2315,7 @@ impl ::buffa::Message for GraphCreatedV1 {
     fn clear(&mut self) {
         self.graph = ::buffa::MessageField::none();
         self.request_id = ::core::option::Option::None;
-        self.request_fingerprint = ::core::option::Option::None;
+        self.request_hash = ::core::option::Option::None;
         self.__buffa_unknown_fields.clear();
     }
 }
@@ -2374,14 +2374,14 @@ pub struct GenerationAcceptedV1 {
         skip_serializing_if = "::core::option::Option::is_none"
     )]
     pub mutation_kind: ::core::option::Option<::buffa::EnumValue<GraphMutationKindV1>>,
-    /// Field 4: `request_fingerprint`
+    /// Field 4: `request_hash`
     #[serde(
-        rename = "requestFingerprint",
-        alias = "request_fingerprint",
+        rename = "requestHash",
+        alias = "request_hash",
         with = "::buffa::json_helpers::opt_bytes",
         skip_serializing_if = "::core::option::Option::is_none"
     )]
-    pub request_fingerprint: ::core::option::Option<::buffa::alloc::vec::Vec<u8>>,
+    pub request_hash: ::core::option::Option<::buffa::alloc::vec::Vec<u8>>,
     #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
@@ -2392,7 +2392,7 @@ impl ::core::fmt::Debug for GenerationAcceptedV1 {
             .field("graph", &self.graph)
             .field("request_id", &self.request_id)
             .field("mutation_kind", &self.mutation_kind)
-            .field("request_fingerprint", &self.request_fingerprint)
+            .field("request_hash", &self.request_hash)
             .finish()
     }
 }
@@ -2426,12 +2426,12 @@ impl GenerationAcceptedV1 {
     }
     #[must_use = "with_* setters return `self` by value; assign or chain the result"]
     #[inline]
-    ///Sets [`Self::request_fingerprint`] to `Some(value)`, consuming and returning `self`.
-    pub fn with_request_fingerprint(
+    ///Sets [`Self::request_hash`] to `Some(value)`, consuming and returning `self`.
+    pub fn with_request_hash(
         mut self,
         value: impl Into<::buffa::alloc::vec::Vec<u8>>,
     ) -> Self {
-        self.request_fingerprint = Some(value.into());
+        self.request_hash = Some(value.into());
         self
     }
 }
@@ -2467,7 +2467,7 @@ impl ::buffa::Message for GenerationAcceptedV1 {
         if let Some(ref v) = self.mutation_kind {
             size += 1u32 + ::buffa::types::int32_encoded_len(v.to_i32()) as u32;
         }
-        if let Some(ref v) = self.request_fingerprint {
+        if let Some(ref v) = self.request_hash {
             size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
         }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
@@ -2490,7 +2490,7 @@ impl ::buffa::Message for GenerationAcceptedV1 {
         if let Some(ref v) = self.mutation_kind {
             ::buffa::types::put_int32_field(3u32, v.to_i32(), buf);
         }
-        if let Some(ref v) = self.request_fingerprint {
+        if let Some(ref v) = self.request_hash {
             ::buffa::types::put_bytes_field(4u32, v, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
@@ -2542,9 +2542,7 @@ impl ::buffa::Message for GenerationAcceptedV1 {
                     ::buffa::encoding::WireType::LengthDelimited,
                 )?;
                 ::buffa::types::merge_bytes(
-                    self
-                        .request_fingerprint
-                        .get_or_insert_with(::buffa::alloc::vec::Vec::new),
+                    self.request_hash.get_or_insert_with(::buffa::alloc::vec::Vec::new),
                     buf,
                 )?;
             }
@@ -2559,7 +2557,7 @@ impl ::buffa::Message for GenerationAcceptedV1 {
         self.graph = ::buffa::MessageField::none();
         self.request_id = ::core::option::Option::None;
         self.mutation_kind = ::core::option::Option::None;
-        self.request_fingerprint = ::core::option::Option::None;
+        self.request_hash = ::core::option::Option::None;
         self.__buffa_unknown_fields.clear();
     }
 }
@@ -2624,14 +2622,14 @@ pub struct OutputsPublishedV1 {
         skip_serializing_if = "::core::option::Option::is_none"
     )]
     pub request_id: ::core::option::Option<::buffa::alloc::vec::Vec<u8>>,
-    /// Field 5: `request_fingerprint`
+    /// Field 5: `request_hash`
     #[serde(
-        rename = "requestFingerprint",
-        alias = "request_fingerprint",
+        rename = "requestHash",
+        alias = "request_hash",
         with = "::buffa::json_helpers::opt_bytes",
         skip_serializing_if = "::core::option::Option::is_none"
     )]
-    pub request_fingerprint: ::core::option::Option<::buffa::alloc::vec::Vec<u8>>,
+    pub request_hash: ::core::option::Option<::buffa::alloc::vec::Vec<u8>>,
     /// Field 6: `publication_id`
     #[serde(
         rename = "publicationId",
@@ -2640,14 +2638,14 @@ pub struct OutputsPublishedV1 {
         skip_serializing_if = "::core::option::Option::is_none"
     )]
     pub publication_id: ::core::option::Option<::buffa::alloc::vec::Vec<u8>>,
-    /// Field 7: `publication_fingerprint`
+    /// Field 7: `publication_hash`
     #[serde(
-        rename = "publicationFingerprint",
-        alias = "publication_fingerprint",
+        rename = "publicationHash",
+        alias = "publication_hash",
         with = "::buffa::json_helpers::opt_bytes",
         skip_serializing_if = "::core::option::Option::is_none"
     )]
-    pub publication_fingerprint: ::core::option::Option<::buffa::alloc::vec::Vec<u8>>,
+    pub publication_hash: ::core::option::Option<::buffa::alloc::vec::Vec<u8>>,
     /// Field 8: `input_sequence`
     #[serde(
         rename = "inputSequence",
@@ -2667,9 +2665,9 @@ impl ::core::fmt::Debug for OutputsPublishedV1 {
             .field("connector", &self.connector)
             .field("outputs", &self.outputs)
             .field("request_id", &self.request_id)
-            .field("request_fingerprint", &self.request_fingerprint)
+            .field("request_hash", &self.request_hash)
             .field("publication_id", &self.publication_id)
-            .field("publication_fingerprint", &self.publication_fingerprint)
+            .field("publication_hash", &self.publication_hash)
             .field("input_sequence", &self.input_sequence)
             .finish()
     }
@@ -2711,12 +2709,12 @@ impl OutputsPublishedV1 {
     }
     #[must_use = "with_* setters return `self` by value; assign or chain the result"]
     #[inline]
-    ///Sets [`Self::request_fingerprint`] to `Some(value)`, consuming and returning `self`.
-    pub fn with_request_fingerprint(
+    ///Sets [`Self::request_hash`] to `Some(value)`, consuming and returning `self`.
+    pub fn with_request_hash(
         mut self,
         value: impl Into<::buffa::alloc::vec::Vec<u8>>,
     ) -> Self {
-        self.request_fingerprint = Some(value.into());
+        self.request_hash = Some(value.into());
         self
     }
     #[must_use = "with_* setters return `self` by value; assign or chain the result"]
@@ -2731,12 +2729,12 @@ impl OutputsPublishedV1 {
     }
     #[must_use = "with_* setters return `self` by value; assign or chain the result"]
     #[inline]
-    ///Sets [`Self::publication_fingerprint`] to `Some(value)`, consuming and returning `self`.
-    pub fn with_publication_fingerprint(
+    ///Sets [`Self::publication_hash`] to `Some(value)`, consuming and returning `self`.
+    pub fn with_publication_hash(
         mut self,
         value: impl Into<::buffa::alloc::vec::Vec<u8>>,
     ) -> Self {
-        self.publication_fingerprint = Some(value.into());
+        self.publication_hash = Some(value.into());
         self
     }
     #[must_use = "with_* setters return `self` by value; assign or chain the result"]
@@ -2782,13 +2780,13 @@ impl ::buffa::Message for OutputsPublishedV1 {
         if let Some(ref v) = self.request_id {
             size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
         }
-        if let Some(ref v) = self.request_fingerprint {
+        if let Some(ref v) = self.request_hash {
             size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
         }
         if let Some(ref v) = self.publication_id {
             size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
         }
-        if let Some(ref v) = self.publication_fingerprint {
+        if let Some(ref v) = self.publication_hash {
             size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
         }
         if let Some(v) = self.input_sequence {
@@ -2817,13 +2815,13 @@ impl ::buffa::Message for OutputsPublishedV1 {
         if let Some(ref v) = self.request_id {
             ::buffa::types::put_bytes_field(4u32, v, buf);
         }
-        if let Some(ref v) = self.request_fingerprint {
+        if let Some(ref v) = self.request_hash {
             ::buffa::types::put_bytes_field(5u32, v, buf);
         }
         if let Some(ref v) = self.publication_id {
             ::buffa::types::put_bytes_field(6u32, v, buf);
         }
-        if let Some(ref v) = self.publication_fingerprint {
+        if let Some(ref v) = self.publication_hash {
             ::buffa::types::put_bytes_field(7u32, v, buf);
         }
         if let Some(v) = self.input_sequence {
@@ -2888,9 +2886,7 @@ impl ::buffa::Message for OutputsPublishedV1 {
                     ::buffa::encoding::WireType::LengthDelimited,
                 )?;
                 ::buffa::types::merge_bytes(
-                    self
-                        .request_fingerprint
-                        .get_or_insert_with(::buffa::alloc::vec::Vec::new),
+                    self.request_hash.get_or_insert_with(::buffa::alloc::vec::Vec::new),
                     buf,
                 )?;
             }
@@ -2913,7 +2909,7 @@ impl ::buffa::Message for OutputsPublishedV1 {
                 )?;
                 ::buffa::types::merge_bytes(
                     self
-                        .publication_fingerprint
+                        .publication_hash
                         .get_or_insert_with(::buffa::alloc::vec::Vec::new),
                     buf,
                 )?;
@@ -2939,9 +2935,9 @@ impl ::buffa::Message for OutputsPublishedV1 {
         self.connector = ::core::option::Option::None;
         self.outputs.clear();
         self.request_id = ::core::option::Option::None;
-        self.request_fingerprint = ::core::option::Option::None;
+        self.request_hash = ::core::option::Option::None;
         self.publication_id = ::core::option::Option::None;
-        self.publication_fingerprint = ::core::option::Option::None;
+        self.publication_hash = ::core::option::Option::None;
         self.input_sequence = ::core::option::Option::None;
         self.__buffa_unknown_fields.clear();
     }
@@ -3003,14 +2999,14 @@ pub struct GraphRetiredV1 {
         skip_serializing_if = "::core::option::Option::is_none"
     )]
     pub request_id: ::core::option::Option<::buffa::alloc::vec::Vec<u8>>,
-    /// Field 4: `request_fingerprint`
+    /// Field 4: `request_hash`
     #[serde(
-        rename = "requestFingerprint",
-        alias = "request_fingerprint",
+        rename = "requestHash",
+        alias = "request_hash",
         with = "::buffa::json_helpers::opt_bytes",
         skip_serializing_if = "::core::option::Option::is_none"
     )]
-    pub request_fingerprint: ::core::option::Option<::buffa::alloc::vec::Vec<u8>>,
+    pub request_hash: ::core::option::Option<::buffa::alloc::vec::Vec<u8>>,
     #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
@@ -3021,7 +3017,7 @@ impl ::core::fmt::Debug for GraphRetiredV1 {
             .field("graph_id", &self.graph_id)
             .field("last_generation", &self.last_generation)
             .field("request_id", &self.request_id)
-            .field("request_fingerprint", &self.request_fingerprint)
+            .field("request_hash", &self.request_hash)
             .finish()
     }
 }
@@ -3062,12 +3058,12 @@ impl GraphRetiredV1 {
     }
     #[must_use = "with_* setters return `self` by value; assign or chain the result"]
     #[inline]
-    ///Sets [`Self::request_fingerprint`] to `Some(value)`, consuming and returning `self`.
-    pub fn with_request_fingerprint(
+    ///Sets [`Self::request_hash`] to `Some(value)`, consuming and returning `self`.
+    pub fn with_request_hash(
         mut self,
         value: impl Into<::buffa::alloc::vec::Vec<u8>>,
     ) -> Self {
-        self.request_fingerprint = Some(value.into());
+        self.request_hash = Some(value.into());
         self
     }
 }
@@ -3098,7 +3094,7 @@ impl ::buffa::Message for GraphRetiredV1 {
         if let Some(ref v) = self.request_id {
             size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
         }
-        if let Some(ref v) = self.request_fingerprint {
+        if let Some(ref v) = self.request_hash {
             size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
         }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
@@ -3120,7 +3116,7 @@ impl ::buffa::Message for GraphRetiredV1 {
         if let Some(ref v) = self.request_id {
             ::buffa::types::put_bytes_field(3u32, v, buf);
         }
-        if let Some(ref v) = self.request_fingerprint {
+        if let Some(ref v) = self.request_hash {
             ::buffa::types::put_bytes_field(4u32, v, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
@@ -3171,9 +3167,7 @@ impl ::buffa::Message for GraphRetiredV1 {
                     ::buffa::encoding::WireType::LengthDelimited,
                 )?;
                 ::buffa::types::merge_bytes(
-                    self
-                        .request_fingerprint
-                        .get_or_insert_with(::buffa::alloc::vec::Vec::new),
+                    self.request_hash.get_or_insert_with(::buffa::alloc::vec::Vec::new),
                     buf,
                 )?;
             }
@@ -3188,7 +3182,7 @@ impl ::buffa::Message for GraphRetiredV1 {
         self.graph_id = ::core::option::Option::None;
         self.last_generation = ::core::option::Option::None;
         self.request_id = ::core::option::Option::None;
-        self.request_fingerprint = ::core::option::Option::None;
+        self.request_hash = ::core::option::Option::None;
         self.__buffa_unknown_fields.clear();
     }
 }
@@ -3239,14 +3233,14 @@ pub struct GraphSnapshotV1 {
         skip_serializing_if = "::core::option::Option::is_none"
     )]
     pub generation: ::core::option::Option<u64>,
-    /// Field 3: `component_spec_hashes`
+    /// Field 3: `component_ids`
     #[serde(
-        rename = "componentSpecHashes",
-        alias = "component_spec_hashes",
+        rename = "componentIds",
+        alias = "component_ids",
         with = "::buffa::json_helpers::proto_seq",
         skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec"
     )]
-    pub component_spec_hashes: ::buffa::alloc::vec::Vec<::buffa::alloc::vec::Vec<u8>>,
+    pub component_ids: ::buffa::alloc::vec::Vec<::buffa::alloc::vec::Vec<u8>>,
     #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
@@ -3256,7 +3250,7 @@ impl ::core::fmt::Debug for GraphSnapshotV1 {
         f.debug_struct("GraphSnapshotV1")
             .field("id", &self.id)
             .field("generation", &self.generation)
-            .field("component_spec_hashes", &self.component_spec_hashes)
+            .field("component_ids", &self.component_ids)
             .finish()
     }
 }
@@ -3307,7 +3301,7 @@ impl ::buffa::Message for GraphSnapshotV1 {
         if let Some(v) = self.generation {
             size += 1u32 + ::buffa::types::uint64_encoded_len(v) as u32;
         }
-        for v in &self.component_spec_hashes {
+        for v in &self.component_ids {
             size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
         }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
@@ -3326,7 +3320,7 @@ impl ::buffa::Message for GraphSnapshotV1 {
         if let Some(v) = self.generation {
             ::buffa::types::put_uint64_field(2u32, v, buf);
         }
-        for v in &self.component_spec_hashes {
+        for v in &self.component_ids {
             ::buffa::types::put_bytes_field(3u32, v, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
@@ -3366,7 +3360,7 @@ impl ::buffa::Message for GraphSnapshotV1 {
                     tag,
                     ::buffa::encoding::WireType::LengthDelimited,
                 )?;
-                self.component_spec_hashes.push(::buffa::types::decode_bytes(buf)?);
+                self.component_ids.push(::buffa::types::decode_bytes(buf)?);
             }
             _ => {
                 self.__buffa_unknown_fields
@@ -3378,7 +3372,7 @@ impl ::buffa::Message for GraphSnapshotV1 {
     fn clear(&mut self) {
         self.id = ::core::option::Option::None;
         self.generation = ::core::option::Option::None;
-        self.component_spec_hashes.clear();
+        self.component_ids.clear();
         self.__buffa_unknown_fields.clear();
     }
 }
@@ -3415,14 +3409,14 @@ pub const __GRAPH_SNAPSHOT_V1_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = :
 #[derive(::serde::Serialize, ::serde::Deserialize)]
 #[serde(default)]
 pub struct ComponentOutputsRecordV1 {
-    /// Field 1: `component_spec_hash`
+    /// Field 1: `component_id`
     #[serde(
-        rename = "componentSpecHash",
-        alias = "component_spec_hash",
+        rename = "componentId",
+        alias = "component_id",
         with = "::buffa::json_helpers::opt_bytes",
         skip_serializing_if = "::core::option::Option::is_none"
     )]
-    pub component_spec_hash: ::core::option::Option<::buffa::alloc::vec::Vec<u8>>,
+    pub component_id: ::core::option::Option<::buffa::alloc::vec::Vec<u8>>,
     /// Field 2: `values_json`
     #[serde(
         rename = "valuesJson",
@@ -3438,7 +3432,7 @@ pub struct ComponentOutputsRecordV1 {
 impl ::core::fmt::Debug for ComponentOutputsRecordV1 {
     fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         f.debug_struct("ComponentOutputsRecordV1")
-            .field("component_spec_hash", &self.component_spec_hash)
+            .field("component_id", &self.component_id)
             .field("values_json", &self.values_json)
             .finish()
     }
@@ -3453,12 +3447,12 @@ impl ComponentOutputsRecordV1 {
 impl ComponentOutputsRecordV1 {
     #[must_use = "with_* setters return `self` by value; assign or chain the result"]
     #[inline]
-    ///Sets [`Self::component_spec_hash`] to `Some(value)`, consuming and returning `self`.
-    pub fn with_component_spec_hash(
+    ///Sets [`Self::component_id`] to `Some(value)`, consuming and returning `self`.
+    pub fn with_component_id(
         mut self,
         value: impl Into<::buffa::alloc::vec::Vec<u8>>,
     ) -> Self {
-        self.component_spec_hash = Some(value.into());
+        self.component_id = Some(value.into());
         self
     }
     #[must_use = "with_* setters return `self` by value; assign or chain the result"]
@@ -3490,7 +3484,7 @@ impl ::buffa::Message for ComponentOutputsRecordV1 {
         #[allow(unused_imports)]
         use ::buffa::Enumeration as _;
         let mut size = 0u32;
-        if let Some(ref v) = self.component_spec_hash {
+        if let Some(ref v) = self.component_id {
             size += 1u32 + ::buffa::types::bytes_encoded_len(v) as u32;
         }
         if let Some(ref v) = self.values_json {
@@ -3506,7 +3500,7 @@ impl ::buffa::Message for ComponentOutputsRecordV1 {
     ) {
         #[allow(unused_imports)]
         use ::buffa::Enumeration as _;
-        if let Some(ref v) = self.component_spec_hash {
+        if let Some(ref v) = self.component_id {
             ::buffa::types::put_bytes_field(1u32, v, buf);
         }
         if let Some(ref v) = self.values_json {
@@ -3531,9 +3525,7 @@ impl ::buffa::Message for ComponentOutputsRecordV1 {
                     ::buffa::encoding::WireType::LengthDelimited,
                 )?;
                 ::buffa::types::merge_bytes(
-                    self
-                        .component_spec_hash
-                        .get_or_insert_with(::buffa::alloc::vec::Vec::new),
+                    self.component_id.get_or_insert_with(::buffa::alloc::vec::Vec::new),
                     buf,
                 )?;
             }
@@ -3555,7 +3547,7 @@ impl ::buffa::Message for ComponentOutputsRecordV1 {
         ::core::result::Result::Ok(())
     }
     fn clear(&mut self) {
-        self.component_spec_hash = ::core::option::Option::None;
+        self.component_id = ::core::option::Option::None;
         self.values_json = ::core::option::Option::None;
         self.__buffa_unknown_fields.clear();
     }

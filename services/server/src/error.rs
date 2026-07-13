@@ -4,8 +4,8 @@ use connectrpc::ErrorCode;
 use connectrpc::ErrorDetail;
 use faultline::Error as Fault;
 use henosis_orchestrator::OrchestratorError;
-use henosis_proto::ConversionError;
-use henosis_proto::proto::henosis::v1 as pb;
+use henosis_proto::api::ConversionError;
+use henosis_proto::protobuf;
 
 #[derive(Clone, Copy)]
 pub(crate) enum ErrorSurface {
@@ -75,7 +75,7 @@ fn domain_error(error: OrchestratorError, surface: ErrorSurface) -> ConnectError
             "watch cursor is outside retained history",
             0,
             Vec::new(),
-            Some(pb::WatchCursorErrorDetails {
+            Some(protobuf::v1::WatchCursorErrorDetails {
                 requested_sequence: Some(requested),
                 earliest_available_sequence: Some(earliest),
                 current_sequence: Some(current),
@@ -89,7 +89,7 @@ fn domain_error(error: OrchestratorError, surface: ErrorSurface) -> ConnectError
         ErrorSurface::Edit => {
             error = error.with_detail(ErrorDetail::from_message(
                 "henosis.v1.EditRejectionDetails",
-                &pb::EditRejectionDetails {
+                &protobuf::v1::EditRejectionDetails {
                     current_generation: (generation > 0).then_some(generation),
                     diagnostics,
                     ..Default::default()
@@ -99,7 +99,7 @@ fn domain_error(error: OrchestratorError, surface: ErrorSurface) -> ConnectError
         ErrorSurface::Report => {
             error = error.with_detail(ErrorDetail::from_message(
                 "henosis.v1.ReportRejectionDetails",
-                &pb::ReportRejectionDetails {
+                &protobuf::v1::ReportRejectionDetails {
                     diagnostics,
                     ..Default::default()
                 },

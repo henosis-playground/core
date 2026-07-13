@@ -1,10 +1,10 @@
-///Shorthand for `OwnedView<RegisterComponentSpecRequestView<'static>>`.
-pub type OwnedRegisterComponentSpecRequestView = ::buffa::view::OwnedView<
-    crate::proto::henosis::v1::__buffa::view::RegisterComponentSpecRequestView<'static>,
+///Shorthand for `OwnedView<CreateComponentRequestView<'static>>`.
+pub type OwnedCreateComponentRequestView = ::buffa::view::OwnedView<
+    crate::proto::henosis::v1::__buffa::view::CreateComponentRequestView<'static>,
 >;
-///Shorthand for `OwnedView<RegisterComponentSpecResponseView<'static>>`.
-pub type OwnedRegisterComponentSpecResponseView = ::buffa::view::OwnedView<
-    crate::proto::henosis::v1::__buffa::view::RegisterComponentSpecResponseView<'static>,
+///Shorthand for `OwnedView<CreateComponentResponseView<'static>>`.
+pub type OwnedCreateComponentResponseView = ::buffa::view::OwnedView<
+    crate::proto::henosis::v1::__buffa::view::CreateComponentResponseView<'static>,
 >;
 ///Shorthand for `OwnedView<CreateGraphRequestView<'static>>`.
 pub type OwnedCreateGraphRequestView = ::buffa::view::OwnedView<
@@ -70,8 +70,8 @@ pub type OwnedWatchGraphRequestView = ::buffa::view::OwnedView<
 pub type OwnedWatchGraphResponseView = ::buffa::view::OwnedView<
     crate::proto::henosis::v1::__buffa::view::WatchGraphResponseView<'static>,
 >;
-impl ::connectrpc::Encodable<crate::proto::henosis::v1::RegisterComponentSpecResponse>
-for crate::proto::henosis::v1::__buffa::view::RegisterComponentSpecResponseView<'_> {
+impl ::connectrpc::Encodable<crate::proto::henosis::v1::CreateComponentResponse>
+for crate::proto::henosis::v1::__buffa::view::CreateComponentResponseView<'_> {
     fn encode(
         &self,
         codec: ::connectrpc::CodecFormat,
@@ -79,9 +79,9 @@ for crate::proto::henosis::v1::__buffa::view::RegisterComponentSpecResponseView<
         ::connectrpc::__codegen::encode_view_body(self, codec)
     }
 }
-impl ::connectrpc::Encodable<crate::proto::henosis::v1::RegisterComponentSpecResponse>
+impl ::connectrpc::Encodable<crate::proto::henosis::v1::CreateComponentResponse>
 for ::buffa::view::OwnedView<
-    crate::proto::henosis::v1::__buffa::view::RegisterComponentSpecResponseView<'static>,
+    crate::proto::henosis::v1::__buffa::view::CreateComponentResponseView<'static>,
 > {
     fn encode(
         &self,
@@ -252,12 +252,12 @@ for ::buffa::view::OwnedView<
 }
 /// Full service name for this service.
 pub const GRAPH_SERVICE_SERVICE_NAME: &str = "henosis.v1.GraphService";
-/// Static [`Spec`](::connectrpc::Spec) for the server-side `RegisterComponentSpec` RPC.
+/// Static [`Spec`](::connectrpc::Spec) for the server-side `CreateComponent` RPC.
 ///
 /// The dispatcher surfaces this on
 /// [`RequestContext::spec`](::connectrpc::RequestContext::spec).
-pub const GRAPH_SERVICE_REGISTER_COMPONENT_SPEC_SPEC: ::connectrpc::Spec = ::connectrpc::Spec::server(
-        "/henosis.v1.GraphService/RegisterComponentSpec",
+pub const GRAPH_SERVICE_CREATE_COMPONENT_SPEC: ::connectrpc::Spec = ::connectrpc::Spec::server(
+        "/henosis.v1.GraphService/CreateComponent",
         ::connectrpc::StreamType::Unary,
     )
     .with_idempotency_level(::connectrpc::IdempotencyLevel::Idempotent);
@@ -384,8 +384,7 @@ pub const GRAPH_SERVICE_WATCH_GRAPH_SPEC: ::connectrpc::Spec = ::connectrpc::Spe
 /// example` doc.
 #[allow(clippy::type_complexity)]
 pub trait GraphService: Send + Sync + 'static {
-    /// RegisterComponentSpec durably appends an immutable spec before any graph may reference it.
-    /// Resending identical content is idempotent by content hash and does not append again.
+    /// CreateComponent durably creates a component and its initial specification.
     ///
     /// `'a` lets the response body borrow from `&self` (e.g. server-resident state).
     ///
@@ -394,17 +393,17 @@ pub trait GraphService: Send + Sync + 'static {
     /// (zero-copy). The response cannot borrow from `request` — use
     /// `.to_owned_message()` (or copy the specific fields) for anything
     /// returned, stored, or moved into `tokio::spawn`.
-    fn register_component_spec<'a>(
+    fn create_component<'a>(
         &'a self,
         ctx: ::connectrpc::RequestContext,
         request: ::connectrpc::ServiceRequest<
             '_,
-            crate::proto::henosis::v1::RegisterComponentSpecRequest,
+            crate::proto::henosis::v1::CreateComponentRequest,
         >,
     ) -> impl ::std::future::Future<
         Output = ::connectrpc::ServiceResult<
             impl ::connectrpc::Encodable<
-                crate::proto::henosis::v1::RegisterComponentSpecResponse,
+                crate::proto::henosis::v1::CreateComponentResponse,
             > + Send + use<'a, Self>,
         >,
     > + Send;
@@ -626,13 +625,13 @@ impl<S: GraphService> GraphServiceExt for S {
         router
             .route_view(
                 GRAPH_SERVICE_SERVICE_NAME,
-                "RegisterComponentSpec",
+                "CreateComponent",
                 {
                     let svc = ::std::sync::Arc::clone(&self);
                     ::connectrpc::view_handler_fn(move |
                         ctx,
                         req: ::buffa::view::OwnedView<
-                            crate::proto::henosis::v1::__buffa::view::RegisterComponentSpecRequestView<
+                            crate::proto::henosis::v1::__buffa::view::CreateComponentRequestView<
                                 'static,
                             >,
                         >,
@@ -641,18 +640,18 @@ impl<S: GraphService> GraphServiceExt for S {
                         let svc = ::std::sync::Arc::clone(&svc);
                         async move {
                             let sreq = ::connectrpc::ServiceRequest::<
-                                crate::proto::henosis::v1::RegisterComponentSpecRequest,
+                                crate::proto::henosis::v1::CreateComponentRequest,
                             >::from_parts(req.reborrow(), req.bytes());
-                            svc.register_component_spec(ctx, sreq)
+                            svc.create_component(ctx, sreq)
                                 .await?
                                 .encode::<
-                                    crate::proto::henosis::v1::RegisterComponentSpecResponse,
+                                    crate::proto::henosis::v1::CreateComponentResponse,
                                 >(format)
                         }
                     })
                 },
             )
-            .with_spec(GRAPH_SERVICE_REGISTER_COMPONENT_SPEC_SPEC)
+            .with_spec(GRAPH_SERVICE_CREATE_COMPONENT_SPEC)
             .route_view(
                 GRAPH_SERVICE_SERVICE_NAME,
                 "CreateGraph",
@@ -938,10 +937,10 @@ impl<T: GraphService> ::connectrpc::Dispatcher for GraphServiceServer<T> {
     ) -> Option<::connectrpc::dispatcher::codegen::MethodDescriptor> {
         let method = path.strip_prefix("henosis.v1.GraphService/")?;
         match method {
-            "RegisterComponentSpec" => {
+            "CreateComponent" => {
                 Some(
                     ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(false)
-                        .with_spec(GRAPH_SERVICE_REGISTER_COMPONENT_SPEC_SPEC),
+                        .with_spec(GRAPH_SERVICE_CREATE_COMPONENT_SPEC),
                 )
             }
             "CreateGraph" => {
@@ -1007,24 +1006,24 @@ impl<T: GraphService> ::connectrpc::Dispatcher for GraphServiceServer<T> {
         };
         let _ = (&ctx, &request, &format);
         match method {
-            "RegisterComponentSpec" => {
+            "CreateComponent" => {
                 let svc = ::std::sync::Arc::clone(&self.inner);
                 Box::pin(async move {
                     let body = ::connectrpc::dispatcher::codegen::request_proto_bytes::<
-                        crate::proto::henosis::v1::RegisterComponentSpecRequest,
+                        crate::proto::henosis::v1::CreateComponentRequest,
                     >(request.encoded()?, format)?;
-                    let req: crate::proto::henosis::v1::__buffa::view::RegisterComponentSpecRequestView<
+                    let req: crate::proto::henosis::v1::__buffa::view::CreateComponentRequestView<
                         '_,
                     > = ::connectrpc::dispatcher::codegen::decode_borrowed_request_view(
                         &body,
                     )?;
                     let req = ::connectrpc::ServiceRequest::<
-                        crate::proto::henosis::v1::RegisterComponentSpecRequest,
+                        crate::proto::henosis::v1::CreateComponentRequest,
                     >::from_parts(&req, &body);
-                    svc.register_component_spec(ctx, req)
+                    svc.create_component(ctx, req)
                         .await?
                         .encode::<
-                            crate::proto::henosis::v1::RegisterComponentSpecResponse,
+                            crate::proto::henosis::v1::CreateComponentResponse,
                         >(format)
                 })
             }
@@ -1261,7 +1260,7 @@ impl<T: GraphService> ::connectrpc::Dispatcher for GraphServiceServer<T> {
 /// let config = ClientConfig::new(uri).with_protocol(Protocol::Grpc);
 ///
 /// let client = GraphServiceClient::new(conn, config);
-/// let response = client.register_component_spec(request).await?;
+/// let response = client.create_component(request).await?;
 /// ```
 ///
 /// # Example (Connect / HTTP/1.1 or ALPN)
@@ -1273,7 +1272,7 @@ impl<T: GraphService> ::connectrpc::Dispatcher for GraphServiceServer<T> {
 /// let config = ClientConfig::new("http://localhost:8080".parse()?);
 ///
 /// let client = GraphServiceClient::new(http, config);
-/// let response = client.register_component_spec(request).await?;
+/// let response = client.create_component(request).await?;
 /// ```
 ///
 /// # Working with the response
@@ -1283,7 +1282,7 @@ impl<T: GraphService> ::connectrpc::Dispatcher for GraphServiceServer<T> {
 /// message, so field access is zero-copy:
 ///
 /// ```rust,ignore
-/// let resp = client.register_component_spec(request).await?;
+/// let resp = client.create_component(request).await?;
 /// let name: &str = resp.view().name;  // borrow into the response buffer
 /// ```
 ///
@@ -1291,7 +1290,7 @@ impl<T: GraphService> ::connectrpc::Dispatcher for GraphServiceServer<T> {
 /// [`into_owned()`](::connectrpc::client::UnaryResponse::into_owned):
 ///
 /// ```rust,ignore
-/// let owned = client.register_component_spec(request).await?.into_owned();
+/// let owned = client.create_component(request).await?.into_owned();
 /// ```
 ///
 /// [`into_view()`](::connectrpc::client::UnaryResponse::into_view) keeps the
@@ -1322,35 +1321,35 @@ where
     pub fn config_mut(&mut self) -> &mut ::connectrpc::client::ClientConfig {
         &mut self.config
     }
-    /// Call the RegisterComponentSpec RPC. Sends a request to /henosis.v1.GraphService/RegisterComponentSpec.
-    pub async fn register_component_spec(
+    /// Call the CreateComponent RPC. Sends a request to /henosis.v1.GraphService/CreateComponent.
+    pub async fn create_component(
         &self,
-        request: crate::proto::henosis::v1::RegisterComponentSpecRequest,
+        request: crate::proto::henosis::v1::CreateComponentRequest,
     ) -> Result<
         ::connectrpc::client::UnaryResponse<
             ::buffa::view::OwnedView<
-                crate::proto::henosis::v1::__buffa::view::RegisterComponentSpecResponseView<
+                crate::proto::henosis::v1::__buffa::view::CreateComponentResponseView<
                     'static,
                 >,
             >,
         >,
         ::connectrpc::ConnectError,
     > {
-        self.register_component_spec_with_options(
+        self.create_component_with_options(
                 request,
                 ::connectrpc::client::CallOptions::default(),
             )
             .await
     }
-    /// Call the RegisterComponentSpec RPC with explicit per-call options. Options override [`ClientConfig`](::connectrpc::client::ClientConfig) defaults.
-    pub async fn register_component_spec_with_options(
+    /// Call the CreateComponent RPC with explicit per-call options. Options override [`ClientConfig`](::connectrpc::client::ClientConfig) defaults.
+    pub async fn create_component_with_options(
         &self,
-        request: crate::proto::henosis::v1::RegisterComponentSpecRequest,
+        request: crate::proto::henosis::v1::CreateComponentRequest,
         options: ::connectrpc::client::CallOptions,
     ) -> Result<
         ::connectrpc::client::UnaryResponse<
             ::buffa::view::OwnedView<
-                crate::proto::henosis::v1::__buffa::view::RegisterComponentSpecResponseView<
+                crate::proto::henosis::v1::__buffa::view::CreateComponentResponseView<
                     'static,
                 >,
             >,
@@ -1361,7 +1360,7 @@ where
                 &self.transport,
                 &self.config,
                 GRAPH_SERVICE_SERVICE_NAME,
-                "RegisterComponentSpec",
+                "CreateComponent",
                 request,
                 options,
             )

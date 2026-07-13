@@ -8,11 +8,11 @@ use faultline::Error as Fault;
 use faultline::Never;
 use henosis_db_model::DbConnectorCheckpoint;
 use henosis_db_schema::connector_checkpoints;
-use henosis_types::ConnectorCheckpoint;
-use henosis_types::ConnectorKey;
-use henosis_types::GraphUuid;
-use henosis_types::NewConnectorCheckpoint;
 use thiserror::Error;
+use types::domain::ConnectorCheckpoint;
+use types::domain::ConnectorKey;
+use types::domain::GraphUuid;
+use types::domain::NewConnectorCheckpoint;
 use uuid::Uuid;
 
 use crate::error::diesel_fault;

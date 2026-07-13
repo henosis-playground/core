@@ -1,10 +1,9 @@
 use anyhow::Error;
 use faultline::Error as Fault;
 use henosis_journal::JournalError;
-use henosis_types::Diagnostic;
-use thiserror::Error as ThisError;
+use types::domain::Diagnostic;
 
-#[derive(Clone, Debug, ThisError, Eq, PartialEq)]
+#[derive(Clone, Debug, thiserror::Error, Eq, PartialEq)]
 pub enum OrchestratorError {
     #[error("request is invalid")]
     InvalidArgument { diagnostics: Vec<Diagnostic> },

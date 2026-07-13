@@ -42,8 +42,9 @@ pub mod __buffa {
     pub fn register_types(reg: &mut ::buffa::type_registry::TypeRegistry) {
         reg.register_json_any(super::__DIAGNOSTIC_JSON_ANY);
         reg.register_json_any(super::__CONTRACT_FAILURE_DETAIL_JSON_ANY);
+        reg.register_json_any(super::__NEW_COMPONENT_SPEC_JSON_ANY);
         reg.register_json_any(super::__COMPONENT_SPEC_JSON_ANY);
-        reg.register_json_any(super::__REGISTERED_COMPONENT_SPEC_JSON_ANY);
+        reg.register_json_any(super::__COMPONENT_JSON_ANY);
         reg.register_json_any(super::__GRAPH_JSON_ANY);
         reg.register_json_any(super::__COMPONENT_OUTPUTS_JSON_ANY);
         reg.register_json_any(super::__PUBLISHED_SLICE_OUTPUTS_JSON_ANY);
@@ -62,8 +63,8 @@ pub mod __buffa {
         reg.register_json_any(super::__REPORT_REJECTION_DETAILS_JSON_ANY);
         reg.register_json_any(super::__FETCH_SLICE_REQUEST_JSON_ANY);
         reg.register_json_any(super::__FETCH_SLICE_RESPONSE_JSON_ANY);
-        reg.register_json_any(super::__REGISTER_COMPONENT_SPEC_REQUEST_JSON_ANY);
-        reg.register_json_any(super::__REGISTER_COMPONENT_SPEC_RESPONSE_JSON_ANY);
+        reg.register_json_any(super::__CREATE_COMPONENT_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__CREATE_COMPONENT_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__CREATE_GRAPH_REQUEST_JSON_ANY);
         reg.register_json_any(super::__CREATE_GRAPH_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__ADD_COMPONENTS_REQUEST_JSON_ANY);
@@ -115,13 +116,17 @@ pub use self::__buffa::view::ContractFailureDetailView;
 #[doc(inline)]
 pub use self::__buffa::view::ContractFailureDetailOwnedView;
 #[doc(inline)]
+pub use self::__buffa::view::NewComponentSpecView;
+#[doc(inline)]
+pub use self::__buffa::view::NewComponentSpecOwnedView;
+#[doc(inline)]
 pub use self::__buffa::view::ComponentSpecView;
 #[doc(inline)]
 pub use self::__buffa::view::ComponentSpecOwnedView;
 #[doc(inline)]
-pub use self::__buffa::view::RegisteredComponentSpecView;
+pub use self::__buffa::view::ComponentView;
 #[doc(inline)]
-pub use self::__buffa::view::RegisteredComponentSpecOwnedView;
+pub use self::__buffa::view::ComponentOwnedView;
 #[doc(inline)]
 pub use self::__buffa::view::GraphView;
 #[doc(inline)]
@@ -195,13 +200,13 @@ pub use self::__buffa::view::FetchSliceResponseView;
 #[doc(inline)]
 pub use self::__buffa::view::FetchSliceResponseOwnedView;
 #[doc(inline)]
-pub use self::__buffa::view::RegisterComponentSpecRequestView;
+pub use self::__buffa::view::CreateComponentRequestView;
 #[doc(inline)]
-pub use self::__buffa::view::RegisterComponentSpecRequestOwnedView;
+pub use self::__buffa::view::CreateComponentRequestOwnedView;
 #[doc(inline)]
-pub use self::__buffa::view::RegisterComponentSpecResponseView;
+pub use self::__buffa::view::CreateComponentResponseView;
 #[doc(inline)]
-pub use self::__buffa::view::RegisterComponentSpecResponseOwnedView;
+pub use self::__buffa::view::CreateComponentResponseOwnedView;
 #[doc(inline)]
 pub use self::__buffa::view::CreateGraphRequestView;
 #[doc(inline)]

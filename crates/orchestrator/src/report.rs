@@ -2,12 +2,12 @@ use std::sync::Arc;
 
 use anyhow::Error;
 use faultline::Error as Fault;
-use henosis_proto::publication_fingerprint;
-use henosis_proto::report_fingerprint;
-use henosis_types::GraphEvent;
-use henosis_types::GraphHistory;
-use henosis_types::RecordedSliceReport;
-use henosis_types::ReportSlice;
+use henosis_proto::api::publication_hash;
+use henosis_proto::api::report_request_hash;
+use types::domain::GraphEvent;
+use types::domain::GraphHistory;
+use types::domain::RecordedSliceReport;
+use types::domain::ReportSlice;
 
 use crate::Orchestrator;
 use crate::OrchestratorError;
@@ -29,7 +29,7 @@ impl Orchestrator {
         self: &Arc<Self>,
         command: ReportSlice,
     ) -> Result<Option<u64>, Fault<OrchestratorError, Error, Error>> {
-        let request_fingerprint = report_fingerprint(&command);
+        let request_hash = report_request_hash(&command);
         let report = command.report();
         let graph_id = report.graph_id();
         let connector = report.connector().clone();
@@ -39,20 +39,18 @@ impl Orchestrator {
         let history = cached.as_ref().expect("history was loaded");
 
         if let Some(receipt) = history.output_request(&connector, command.request_id()) {
-            if receipt.fingerprint() != request_fingerprint {
+            if receipt.hash() != request_hash {
                 return Err(already_exists("request_id.reused"));
             }
             return Ok(receipt.publication_sequence());
         }
 
-        let candidate_publication_fingerprint = command
-            .publication_id()
-            .map(|_| publication_fingerprint(report));
-        if let (Some(publication_id), Some(fingerprint)) =
-            (command.publication_id(), candidate_publication_fingerprint)
+        let candidate_publication_hash = command.publication_id().map(|_| publication_hash(report));
+        if let (Some(publication_id), Some(hash)) =
+            (command.publication_id(), candidate_publication_hash)
             && let Some(receipt) = history.publication(&connector, publication_id)
         {
-            if receipt.fingerprint() != fingerprint {
+            if receipt.hash() != hash {
                 return Err(already_exists("publication_id.reused"));
             }
             return Ok(Some(receipt.publication_sequence()));
@@ -84,10 +82,10 @@ impl Orchestrator {
             _ => {}
         }
         let publication_id = command.publication_id();
-        if let Some(publication_fingerprint) = candidate_publication_fingerprint
+        if let Some(publication_hash) = candidate_publication_hash
             && history
                 .latest_publication(&connector)
-                .is_some_and(|receipt| receipt.fingerprint() == publication_fingerprint)
+                .is_some_and(|receipt| receipt.hash() == publication_hash)
         {
             return Err(failed_precondition(
                 "publication_id.changed_for_unchanged_level",
@@ -96,9 +94,9 @@ impl Orchestrator {
         let event = GraphEvent::SliceReported(RecordedSliceReport {
             report: report.clone(),
             request_id: command.request_id(),
-            request_fingerprint,
+            request_hash,
             publication_id,
-            publication_fingerprint: candidate_publication_fingerprint,
+            publication_hash: candidate_publication_hash,
         });
         let sequence = self
             .journal
@@ -129,7 +127,7 @@ impl Orchestrator {
 
 fn current_state(
     history: &GraphHistory,
-) -> Result<&henosis_types::DurableGraphState, Fault<OrchestratorError, Error, Error>> {
+) -> Result<&types::domain::DurableGraphState, Fault<OrchestratorError, Error, Error>> {
     history
         .desired_state()
         .ok_or_else(|| invariant("loaded graph has no state"))

@@ -1,12 +1,15 @@
 use buffa::MessageField;
-use henosis_proto::proto::henosis::v1 as pb;
-use henosis_types::DurableGraphState;
-use henosis_types::GraphLifecycle;
-use henosis_types::SliceReport;
+use henosis_proto::protobuf;
+use types::domain::DurableGraphState;
+use types::domain::GraphLifecycle;
+use types::domain::SliceReport;
 
-pub(crate) fn snapshot(sequence: u64, state: &DurableGraphState) -> pb::WatchGraphResponse {
-    pb::WatchGraphResponse {
-        item: pb::WatchGraphSnapshot {
+pub(crate) fn snapshot(
+    sequence: u64,
+    state: &DurableGraphState,
+) -> protobuf::v1::WatchGraphResponse {
+    protobuf::v1::WatchGraphResponse {
+        item: protobuf::v1::WatchGraphSnapshot {
             sequence: Some(sequence),
             state: MessageField::some(state.into()),
             ..Default::default()
@@ -16,9 +19,9 @@ pub(crate) fn snapshot(sequence: u64, state: &DurableGraphState) -> pb::WatchGra
     }
 }
 
-pub(crate) fn change(sequence: u64, state: &DurableGraphState) -> pb::WatchGraphResponse {
-    pb::WatchGraphResponse {
-        item: pb::WatchGraphChange {
+pub(crate) fn change(sequence: u64, state: &DurableGraphState) -> protobuf::v1::WatchGraphResponse {
+    protobuf::v1::WatchGraphResponse {
+        item: protobuf::v1::WatchGraphChange {
             sequence: Some(sequence),
             state: MessageField::some(state.into()),
             ..Default::default()
@@ -28,9 +31,12 @@ pub(crate) fn change(sequence: u64, state: &DurableGraphState) -> pb::WatchGraph
     }
 }
 
-pub(crate) fn volatile_status(sequence: u64, reports: &[SliceReport]) -> pb::WatchGraphResponse {
-    pb::WatchGraphResponse {
-        item: pb::WatchGraphVolatileStatus {
+pub(crate) fn volatile_status(
+    sequence: u64,
+    reports: &[SliceReport],
+) -> protobuf::v1::WatchGraphResponse {
+    protobuf::v1::WatchGraphResponse {
+        item: protobuf::v1::WatchGraphVolatileStatus {
             delivered_sequence: Some(sequence),
             reports: reports.iter().map(Into::into).collect(),
             ..Default::default()
@@ -40,9 +46,9 @@ pub(crate) fn volatile_status(sequence: u64, reports: &[SliceReport]) -> pb::Wat
     }
 }
 
-pub(crate) fn progress(sequence: u64) -> pb::WatchGraphResponse {
-    pb::WatchGraphResponse {
-        item: pb::WatchGraphProgress {
+pub(crate) fn progress(sequence: u64) -> protobuf::v1::WatchGraphResponse {
+    protobuf::v1::WatchGraphResponse {
+        item: protobuf::v1::WatchGraphProgress {
             delivered_sequence: Some(sequence),
             ..Default::default()
         }

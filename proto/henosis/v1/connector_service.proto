@@ -28,7 +28,7 @@ message GraphSlice {
   bytes graph_id = 1;
   uint64 generation = 2;
   string connector = 3;
-  repeated RegisteredComponentSpec components = 4;
+  repeated Component components = 4;
   repeated ComponentOutputs upstream_outputs = 5;
   uint64 sequence = 6;
 }
@@ -36,7 +36,7 @@ message GraphSlice {
 message ReconcileSliceRequest {
   GraphSlice slice = 1;
   // Cleanup is level-retained by connectors across later desired levels.
-  repeated RegisteredComponentSpec superseded_components = 2;
+  repeated Component superseded_components = 2;
 }
 
 message ReconcileSliceResponse {

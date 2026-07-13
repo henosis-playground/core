@@ -5,19 +5,19 @@ use anyhow::Context;
 use connectrpc::client::ClientConfig;
 use connectrpc::client::HttpClient;
 use henosis_db_queries::ConnectorCheckpointStore;
+use henosis_proto::api::reconcile_slice_request;
+use henosis_proto::api::retire_slice_request;
 use henosis_proto::connect::henosis::v1::ConnectorServiceClient;
-use henosis_proto::proto::henosis::v1 as pb;
-use henosis_proto::reconcile_slice_request;
-use henosis_proto::retire_slice_request;
-use henosis_types::ConnectorKey;
-use henosis_types::GraphHistory;
-use henosis_types::GraphUuid;
-use henosis_types::NewConnectorCheckpoint;
+use henosis_proto::protobuf;
 use scoped_futures::ScopedFutureExt;
 use tokio::time::sleep;
 use tracing::Span;
 use tracing::field::Empty;
 use tracing::instrument;
+use types::domain::ConnectorKey;
+use types::domain::GraphHistory;
+use types::domain::GraphUuid;
+use types::domain::NewConnectorCheckpoint;
 
 use crate::ConnectorConfig;
 use crate::Orchestrator;
@@ -115,7 +115,7 @@ impl Orchestrator {
         &self,
         graph_id: GraphUuid,
         history: &GraphHistory,
-        specs: &henosis_types::SpecCatalog,
+        specs: &types::domain::ComponentCatalog,
         sequence: u64,
         connector: &ConnectorKey,
     ) -> anyhow::Result<()> {
@@ -168,14 +168,14 @@ impl Orchestrator {
     async fn deliver_retirement(
         &self,
         history: &GraphHistory,
-        specs: &henosis_types::SpecCatalog,
+        specs: &types::domain::ComponentCatalog,
     ) -> anyhow::Result<()> {
         let mut connectors = std::collections::BTreeSet::new();
         for graph in history.generations() {
             for component in graph.components() {
                 connectors.insert(
                     specs
-                        .get(component.spec_hash())
+                        .get(component.component_id())
                         .context("retired graph references an unknown spec")?
                         .spec()
                         .connector()
@@ -208,7 +208,7 @@ impl Orchestrator {
     async fn deliver_connector_retirement(
         &self,
         connector: &ConnectorKey,
-        slice: &henosis_types::GraphSlice,
+        slice: &types::domain::GraphSlice,
     ) -> anyhow::Result<()> {
         let config = self
             .connectors
@@ -242,7 +242,7 @@ impl Orchestrator {
 
 async fn reconcile(
     config: &ConnectorConfig,
-    request: pb::ReconcileSliceRequest,
+    request: protobuf::v1::ReconcileSliceRequest,
 ) -> anyhow::Result<u64> {
     let response = connector_client(config)?
         .reconcile_slice(request)
@@ -254,7 +254,10 @@ async fn reconcile(
         .context("connector omitted accepted_sequence")
 }
 
-async fn retire(config: &ConnectorConfig, request: pb::RetireSliceRequest) -> anyhow::Result<u64> {
+async fn retire(
+    config: &ConnectorConfig,
+    request: protobuf::v1::RetireSliceRequest,
+) -> anyhow::Result<u64> {
     let response = connector_client(config)?
         .retire_slice(request)
         .await?

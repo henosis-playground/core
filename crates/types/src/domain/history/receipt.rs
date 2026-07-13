@@ -1,0 +1,178 @@
+use iddqd::IdHashItem;
+use iddqd::id_upcast;
+
+use crate::domain::ConnectorKey;
+use crate::domain::Graph;
+use crate::domain::GraphUuid;
+use crate::domain::PublicationUuid;
+use crate::domain::RequestUuid;
+use crate::domain::SliceReport;
+use blake3::Hash;
+
+/// Graph mutation represented by a request receipt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MutationKind {
+    Create,
+    AddComponents,
+    UpdateComponents,
+    RemoveComponents,
+    Retire,
+}
+
+/// Durable response replayed for an idempotent graph mutation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MutationResponse {
+    Graph(Graph),
+    Retired {
+        graph_id: GraphUuid,
+        last_generation: u64,
+    },
+}
+
+/// Durable graph-mutation request identity and response.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MutationReceipt {
+    pub(super) request_id: RequestUuid,
+    pub(super) kind: MutationKind,
+    pub(super) hash: Hash,
+    pub(super) response: MutationResponse,
+}
+
+impl MutationReceipt {
+    #[must_use]
+    pub const fn request_id(&self) -> RequestUuid {
+        self.request_id
+    }
+
+    #[must_use]
+    pub const fn kind(&self) -> MutationKind {
+        self.kind
+    }
+
+    #[must_use]
+    pub const fn hash(&self) -> Hash {
+        self.hash
+    }
+
+    #[must_use]
+    pub const fn response(&self) -> &MutationResponse {
+        &self.response
+    }
+}
+
+impl IdHashItem for MutationReceipt {
+    type Key<'a> = RequestUuid;
+
+    id_upcast!();
+
+    fn key(&self) -> Self::Key<'_> {
+        self.request_id
+    }
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct OutputRequestKey<'a> {
+    connector: &'a ConnectorKey,
+    request_id: RequestUuid,
+}
+
+impl<'a> OutputRequestKey<'a> {
+    pub const fn new(connector: &'a ConnectorKey, request_id: RequestUuid) -> Self {
+        Self {
+            connector,
+            request_id,
+        }
+    }
+}
+
+/// Durable idempotency receipt for one connector report request.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OutputRequestReceipt {
+    pub(super) connector: ConnectorKey,
+    pub(super) request_id: RequestUuid,
+    pub(super) hash: Hash,
+    pub(super) publication_sequence: Option<u64>,
+}
+
+impl OutputRequestReceipt {
+    #[must_use]
+    pub const fn hash(&self) -> Hash {
+        self.hash
+    }
+
+    #[must_use]
+    pub const fn publication_sequence(&self) -> Option<u64> {
+        self.publication_sequence
+    }
+}
+
+impl IdHashItem for OutputRequestReceipt {
+    type Key<'a> = OutputRequestKey<'a>;
+
+    id_upcast!();
+
+    fn key(&self) -> Self::Key<'_> {
+        OutputRequestKey::new(&self.connector, self.request_id)
+    }
+}
+
+/// Slice report plus the identities needed for durable replay.
+#[derive(Clone, Debug)]
+pub struct RecordedSliceReport {
+    pub report: SliceReport,
+    pub request_id: RequestUuid,
+    pub request_hash: Hash,
+    pub publication_id: Option<PublicationUuid>,
+    pub publication_hash: Option<Hash>,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct PublicationKey<'a> {
+    connector: &'a ConnectorKey,
+    publication_id: PublicationUuid,
+}
+
+impl<'a> PublicationKey<'a> {
+    pub const fn new(connector: &'a ConnectorKey, publication_id: PublicationUuid) -> Self {
+        Self {
+            connector,
+            publication_id,
+        }
+    }
+}
+
+/// Durable idempotency receipt for one connector publication.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PublicationReceipt {
+    pub(super) connector: ConnectorKey,
+    pub(super) publication_id: PublicationUuid,
+    pub(super) hash: Hash,
+    pub(super) publication_sequence: u64,
+}
+
+impl PublicationReceipt {
+    #[must_use]
+    pub const fn connector(&self) -> &ConnectorKey {
+        &self.connector
+    }
+
+    #[must_use]
+    pub const fn hash(&self) -> Hash {
+        self.hash
+    }
+
+    #[must_use]
+    pub const fn publication_sequence(&self) -> u64 {
+        self.publication_sequence
+    }
+}
+
+impl IdHashItem for PublicationReceipt {
+    type Key<'a> = PublicationKey<'a>;
+
+    id_upcast!();
+
+    fn key(&self) -> Self::Key<'_> {
+        PublicationKey::new(&self.connector, self.publication_id)
+    }
+}

@@ -20,7 +20,7 @@ message SpecStreamRecordV1 {
 }
 
 message ComponentSpecRegisteredV1 {
-  bytes hash = 1;
+  bytes component_id = 1;
   ComponentSpecRecordV1 spec = 2;
 }
 
@@ -28,7 +28,7 @@ message ComponentSpecRecordV1 {
   string name = 1;
   string connector = 2;
   bytes outputs_schema = 3;
-  repeated bytes depends_on = 4;
+  repeated bytes depends_on_component_ids = 4;
   bytes connector_context = 5;
 }
 
@@ -52,15 +52,15 @@ message GraphStreamRecordV1 {
 message SliceReportedV1 {
   SliceReport report = 1;
   bytes request_id = 2;
-  bytes request_fingerprint = 3;
+  bytes request_hash = 3;
   bytes publication_id = 4;
-  bytes publication_fingerprint = 5;
+  bytes publication_hash = 5;
 }
 
 message GraphCreatedV1 {
   GraphSnapshotV1 graph = 1;
   bytes request_id = 2;
-  bytes request_fingerprint = 3;
+  bytes request_hash = 3;
 }
 
 enum GraphMutationKindV1 {
@@ -74,7 +74,7 @@ message GenerationAcceptedV1 {
   GraphSnapshotV1 graph = 1;
   bytes request_id = 2;
   GraphMutationKindV1 mutation_kind = 3;
-  bytes request_fingerprint = 4;
+  bytes request_hash = 4;
 }
 
 message OutputsPublishedV1 {
@@ -82,9 +82,9 @@ message OutputsPublishedV1 {
   string connector = 2;
   repeated ComponentOutputsRecordV1 outputs = 3;
   bytes request_id = 4;
-  bytes request_fingerprint = 5;
+  bytes request_hash = 5;
   bytes publication_id = 6;
-  bytes publication_fingerprint = 7;
+  bytes publication_hash = 7;
   uint64 input_sequence = 8;
 }
 
@@ -92,17 +92,17 @@ message GraphRetiredV1 {
   bytes graph_id = 1;
   uint64 last_generation = 2;
   bytes request_id = 3;
-  bytes request_fingerprint = 4;
+  bytes request_hash = 4;
 }
 
 message GraphSnapshotV1 {
   bytes id = 1;
   uint64 generation = 2;
-  repeated bytes component_spec_hashes = 3;
+  repeated bytes component_ids = 3;
 }
 
 message ComponentOutputsRecordV1 {
-  bytes component_spec_hash = 1;
+  bytes component_id = 1;
   bytes values_json = 2;
 }
 

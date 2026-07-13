@@ -5,9 +5,8 @@ package henosis.v1;
 import "henosis/v1/types.proto";
 
 service GraphService {
-  // RegisterComponentSpec durably appends an immutable spec before any graph may reference it.
-  // Resending identical content is idempotent by content hash and does not append again.
-  rpc RegisterComponentSpec(RegisterComponentSpecRequest) returns (RegisterComponentSpecResponse) {
+  // CreateComponent durably creates a component and its initial specification.
+  rpc CreateComponent(CreateComponentRequest) returns (CreateComponentResponse) {
     option idempotency_level = IDEMPOTENT;
   }
   rpc CreateGraph(CreateGraphRequest) returns (CreateGraphResponse) {
@@ -36,17 +35,18 @@ service GraphService {
   }
 }
 
-message RegisterComponentSpecRequest {
-  ComponentSpec spec = 1;
+message CreateComponentRequest {
+  bytes component_id = 1;
+  NewComponentSpec spec = 2;
 }
 
-message RegisterComponentSpecResponse {
-  RegisteredComponentSpec component = 1;
+message CreateComponentResponse {
+  Component component = 1;
 }
 
 message CreateGraphRequest {
   bytes graph_id = 1;
-  repeated bytes component_spec_hashes = 2;
+  repeated bytes component_ids = 2;
   bytes request_id = 3;
 }
 
@@ -57,7 +57,7 @@ message CreateGraphResponse {
 message AddComponentsRequest {
   bytes graph_id = 1;
   uint64 expected_generation = 2;
-  repeated bytes component_spec_hashes = 3;
+  repeated bytes component_ids = 3;
   bytes request_id = 4;
 }
 
@@ -66,8 +66,8 @@ message AddComponentsResponse {
 }
 
 message ComponentReplacement {
-  bytes current_spec_hash = 1;
-  bytes replacement_spec_hash = 2;
+  bytes current_component_id = 1;
+  bytes replacement_component_id = 2;
 }
 
 message UpdateComponentsRequest {
@@ -84,7 +84,7 @@ message UpdateComponentsResponse {
 message RemoveComponentsRequest {
   bytes graph_id = 1;
   uint64 expected_generation = 2;
-  repeated bytes component_spec_hashes = 3;
+  repeated bytes component_ids = 3;
   bytes request_id = 4;
 }
 
@@ -112,7 +112,7 @@ message GetGraphGenerationRequest {
 
 message GetGraphGenerationResponse {
   GraphState state = 1;
-  repeated RegisteredComponentSpec components = 2;
+  repeated Component components = 2;
   GraphLifecycle current_lifecycle = 3;
   uint64 last_published_generation = 4;
 }

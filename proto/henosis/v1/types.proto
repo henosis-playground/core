@@ -2,13 +2,15 @@ edition = "2023";
 
 package henosis.v1;
 
-// UUID fields are raw 16-byte UUIDs on the protobuf wire. Content hashes are raw 32-byte BLAKE3
-// digests. Human-facing adapters render UUIDs as TypeIDs and hashes as lowercase hexadecimal.
+import "google/protobuf/timestamp.proto";
+
+// UUID fields are raw 16-byte UUIDs on the protobuf wire. Human-facing adapters may render typed
+// UUIDs differently without changing their wire representation.
 
 message Diagnostic {
   string code = 1;
   string message = 2;
-  bytes component_spec_hash = 3;
+  bytes component_id = 3;
   string pointer = 4;
   string help = 5;
   DiagnosticSeverity severity = 6;
@@ -45,31 +47,42 @@ enum DiagnosticSeverity {
   DIAGNOSTIC_SEVERITY_INFO = 3;
 }
 
-// ComponentSpec is immutable connector input. Its identity is the BLAKE3 hash of its canonical
-// protobuf encoding. Source provenance belongs inside connector_context, not core vocabulary.
+// NewComponentSpec is connector input awaiting durable acceptance.
+message NewComponentSpec {
+  string name = 1;
+  string connector = 2;
+  bytes outputs_schema = 3;
+  repeated bytes depends_on_component_ids = 4;
+  bytes connector_context = 5;
+}
+
+// ComponentSpec is the connector input accepted at one component generation.
 message ComponentSpec {
   string name = 1;
   string connector = 2;
   bytes outputs_schema = 3;
-  repeated bytes depends_on = 4;
+  repeated bytes depends_on_component_ids = 4;
   bytes connector_context = 5;
 }
 
-message RegisteredComponentSpec {
-  bytes hash = 1;
+message Component {
+  bytes id = 1;
   ComponentSpec spec = 2;
+  uint64 generation = 3;
+  google.protobuf.Timestamp time_created = 4;
+  google.protobuf.Timestamp time_modified = 5;
 }
 
-// Graph is one accepted, complete world listing. Component bodies are resolved through the spec
-// stream; generations contain only their content-addressed identities.
+// Graph is one accepted, complete world listing. Component bodies are resolved through their
+// component streams.
 message Graph {
   bytes id = 1;
   uint64 generation = 2;
-  repeated bytes component_spec_hashes = 3;
+  repeated bytes component_ids = 3;
 }
 
 message ComponentOutputs {
-  bytes component_spec_hash = 1;
+  bytes component_id = 1;
   bytes values_json = 2;
 }
 
@@ -91,7 +104,7 @@ enum ComponentDispositionKind {
 }
 
 message ComponentDisposition {
-  bytes component_spec_hash = 1;
+  bytes component_id = 1;
   ComponentDispositionKind kind = 2;
 }
 

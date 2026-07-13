@@ -1,19 +1,19 @@
 use buffa::Message;
 use buffa::MessageField;
-use henosis_types as domain;
+use types::domain;
 
-use crate::proto::henosis::v1 as pb;
+use crate::protobuf;
 
 const FORMAT_VERSION: u32 = 1;
 
 #[must_use]
-pub fn encode_spec_record(value: &domain::RegisteredComponentSpec) -> Vec<u8> {
-    pb::SpecStreamEnvelope {
+pub fn encode_spec_record(value: &domain::NewComponent) -> Vec<u8> {
+    protobuf::v1::SpecStreamEnvelope {
         format_version: Some(FORMAT_VERSION),
-        version: pb::SpecStreamRecordV1 {
+        version: protobuf::v1::SpecStreamRecordV1 {
             event: Some(
-                pb::ComponentSpecRegisteredV1 {
-                    hash: Some(value.hash().as_bytes().to_vec()),
+                protobuf::v1::ComponentSpecRegisteredV1 {
+                    component_id: Some(value.id().into_bytes().to_vec()),
                     spec: MessageField::some(spec_to_record(value.spec())),
                     ..Default::default()
                 }
@@ -33,11 +33,11 @@ pub fn encode_graph_event(event: &domain::GraphEvent) -> Vec<u8> {
         domain::GraphEvent::Created {
             graph,
             request_id,
-            request_fingerprint,
-        } => pb::GraphCreatedV1 {
+            request_hash,
+        } => protobuf::v1::GraphCreatedV1 {
             graph: MessageField::some(graph_to_record(graph)),
             request_id: Some(request_id.into_bytes().to_vec()),
-            request_fingerprint: Some(request_fingerprint.as_bytes().to_vec()),
+            request_hash: Some(request_hash.as_bytes().to_vec()),
             ..Default::default()
         }
         .into(),
@@ -45,37 +45,35 @@ pub fn encode_graph_event(event: &domain::GraphEvent) -> Vec<u8> {
             graph,
             request_id,
             mutation_kind,
-            request_fingerprint,
-        } => pb::GenerationAcceptedV1 {
+            request_hash,
+        } => protobuf::v1::GenerationAcceptedV1 {
             graph: MessageField::some(graph_to_record(graph)),
             request_id: Some(request_id.into_bytes().to_vec()),
             mutation_kind: Some(edit_kind(*mutation_kind).into()),
-            request_fingerprint: Some(request_fingerprint.as_bytes().to_vec()),
+            request_hash: Some(request_hash.as_bytes().to_vec()),
             ..Default::default()
         }
         .into(),
-        domain::GraphEvent::OutputsPublished(value) => pb::OutputsPublishedV1 {
+        domain::GraphEvent::OutputsPublished(value) => protobuf::v1::OutputsPublishedV1 {
             generation: Some(value.generation),
             connector: Some(value.connector.to_string()),
             outputs: value.outputs.iter().map(output_to_record).collect(),
             request_id: Some(value.request_id.into_bytes().to_vec()),
-            request_fingerprint: Some(value.request_fingerprint.as_bytes().to_vec()),
+            request_hash: Some(value.request_hash.as_bytes().to_vec()),
             publication_id: Some(value.publication_id.into_bytes().to_vec()),
-            publication_fingerprint: Some(value.publication_fingerprint.as_bytes().to_vec()),
+            publication_hash: Some(value.publication_hash.as_bytes().to_vec()),
             input_sequence: Some(value.input_sequence),
             ..Default::default()
         }
         .into(),
-        domain::GraphEvent::SliceReported(value) => pb::SliceReportedV1 {
+        domain::GraphEvent::SliceReported(value) => protobuf::v1::SliceReportedV1 {
             report: MessageField::some((&value.report).into()),
             request_id: Some(value.request_id.into_bytes().to_vec()),
-            request_fingerprint: Some(value.request_fingerprint.as_bytes().to_vec()),
+            request_hash: Some(value.request_hash.as_bytes().to_vec()),
             publication_id: value
                 .publication_id
                 .map(|publication_id| publication_id.into_bytes().to_vec()),
-            publication_fingerprint: value
-                .publication_fingerprint
-                .map(|fingerprint| fingerprint.as_bytes().to_vec()),
+            publication_hash: value.publication_hash.map(|hash| hash.as_bytes().to_vec()),
             ..Default::default()
         }
         .into(),
@@ -83,19 +81,19 @@ pub fn encode_graph_event(event: &domain::GraphEvent) -> Vec<u8> {
             graph_id,
             last_generation,
             request_id,
-            request_fingerprint,
-        } => pb::GraphRetiredV1 {
+            request_hash,
+        } => protobuf::v1::GraphRetiredV1 {
             graph_id: Some(graph_id.into_bytes().to_vec()),
             last_generation: Some(*last_generation),
             request_id: Some(request_id.into_bytes().to_vec()),
-            request_fingerprint: Some(request_fingerprint.as_bytes().to_vec()),
+            request_hash: Some(request_hash.as_bytes().to_vec()),
             ..Default::default()
         }
         .into(),
     };
-    pb::GraphStreamEnvelope {
+    protobuf::v1::GraphStreamEnvelope {
         format_version: Some(FORMAT_VERSION),
-        version: pb::GraphStreamRecordV1 {
+        version: protobuf::v1::GraphStreamRecordV1 {
             event: Some(event),
             ..Default::default()
         }
@@ -111,7 +109,7 @@ pub fn encode_registry_event(event: domain::RegistryEvent) -> Vec<u8> {
         domain::RegistryEvent::Created {
             graph_id,
             request_id,
-        } => pb::RegistryGraphCreatedV1 {
+        } => protobuf::v1::RegistryGraphCreatedV1 {
             graph_id: Some(graph_id.into_bytes().to_vec()),
             request_id: Some(request_id.into_bytes().to_vec()),
             ..Default::default()
@@ -120,16 +118,16 @@ pub fn encode_registry_event(event: domain::RegistryEvent) -> Vec<u8> {
         domain::RegistryEvent::Retired {
             graph_id,
             request_id,
-        } => pb::RegistryGraphRetiredV1 {
+        } => protobuf::v1::RegistryGraphRetiredV1 {
             graph_id: Some(graph_id.into_bytes().to_vec()),
             request_id: Some(request_id.into_bytes().to_vec()),
             ..Default::default()
         }
         .into(),
     };
-    pb::RegistryStreamEnvelope {
+    protobuf::v1::RegistryStreamEnvelope {
         format_version: Some(FORMAT_VERSION),
-        version: pb::RegistryStreamRecordV1 {
+        version: protobuf::v1::RegistryStreamRecordV1 {
             event: Some(event),
             ..Default::default()
         }
@@ -139,35 +137,39 @@ pub fn encode_registry_event(event: domain::RegistryEvent) -> Vec<u8> {
     .encode_to_vec()
 }
 
-fn edit_kind(kind: domain::MutationKind) -> pb::GraphMutationKindV1 {
+fn edit_kind(kind: domain::MutationKind) -> protobuf::v1::GraphMutationKindV1 {
     match kind {
-        domain::MutationKind::AddComponents => pb::GraphMutationKindV1::AddComponents,
-        domain::MutationKind::UpdateComponents => pb::GraphMutationKindV1::UpdateComponents,
-        domain::MutationKind::RemoveComponents => pb::GraphMutationKindV1::RemoveComponents,
+        domain::MutationKind::AddComponents => protobuf::v1::GraphMutationKindV1::AddComponents,
+        domain::MutationKind::UpdateComponents => {
+            protobuf::v1::GraphMutationKindV1::UpdateComponents
+        }
+        domain::MutationKind::RemoveComponents => {
+            protobuf::v1::GraphMutationKindV1::RemoveComponents
+        }
         domain::MutationKind::Create | domain::MutationKind::Retire => {
             unreachable!("creation and retirement have dedicated durable events")
         }
     }
 }
 
-fn graph_to_record(graph: &domain::Graph) -> pb::GraphSnapshotV1 {
-    pb::GraphSnapshotV1 {
+fn graph_to_record(graph: &domain::Graph) -> protobuf::v1::GraphSnapshotV1 {
+    protobuf::v1::GraphSnapshotV1 {
         id: Some(graph.id().into_bytes().to_vec()),
         generation: Some(graph.generation()),
-        component_spec_hashes: graph
+        component_ids: graph
             .components()
-            .map(|component| component.spec_hash().as_bytes().to_vec())
+            .map(|component| component.component_id().as_bytes().to_vec())
             .collect(),
         ..Default::default()
     }
 }
 
-fn spec_to_record(value: &domain::ComponentSpec) -> pb::ComponentSpecRecordV1 {
-    pb::ComponentSpecRecordV1 {
+fn spec_to_record(value: &domain::NewComponentSpec) -> protobuf::v1::ComponentSpecRecordV1 {
+    protobuf::v1::ComponentSpecRecordV1 {
         name: Some(value.name().to_owned()),
         connector: Some(value.connector().to_string()),
         outputs_schema: Some(value.outputs_schema().to_vec()),
-        depends_on: value
+        depends_on_component_ids: value
             .depends_on()
             .iter()
             .map(|item| item.as_bytes().to_vec())
@@ -177,9 +179,9 @@ fn spec_to_record(value: &domain::ComponentSpec) -> pb::ComponentSpecRecordV1 {
     }
 }
 
-fn output_to_record(value: &domain::ComponentOutputs) -> pb::ComponentOutputsRecordV1 {
-    pb::ComponentOutputsRecordV1 {
-        component_spec_hash: Some(value.component_spec_hash().as_bytes().to_vec()),
+fn output_to_record(value: &domain::ComponentOutputs) -> protobuf::v1::ComponentOutputsRecordV1 {
+    protobuf::v1::ComponentOutputsRecordV1 {
+        component_id: Some(value.component_id().as_bytes().to_vec()),
         values_json: Some(value.values_json().to_vec()),
         ..Default::default()
     }

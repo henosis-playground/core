@@ -1,13 +1,13 @@
-//! S2-backed durable stores for graph, registry, and component-spec streams.
+//! S2-backed durable stores for graph, registry, and component streams.
 //!
 //! Wire records are parsed by `henosis-proto` into validated domain events.
 //! Domain histories own all folding rules and never observe protobuf values.
 
 mod client;
+mod component;
 mod error;
 mod graph;
 mod registry;
-mod spec;
 mod stream;
 
 use s2_sdk::S2Basin;

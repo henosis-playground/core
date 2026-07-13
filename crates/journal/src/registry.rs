@@ -5,11 +5,11 @@ use faultline::Never;
 use futures::StreamExt;
 use henosis_proto::journal::decode_registry_stream;
 use henosis_proto::journal::encode_registry_event;
-use henosis_types::GraphUuid;
-use henosis_types::RegistryEvent;
-use henosis_types::RegistryHistory;
-use henosis_types::RequestUuid;
 use s2_sdk::S2Stream;
+use types::domain::GraphUuid;
+use types::domain::RegistryEvent;
+use types::domain::RegistryHistory;
+use types::domain::RequestUuid;
 
 use crate::Journal;
 use crate::JournalError;

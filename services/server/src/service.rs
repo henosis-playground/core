@@ -12,7 +12,7 @@ use henosis_orchestrator::Orchestrator;
 use henosis_orchestrator::WatchEvent;
 use henosis_proto::connect::henosis::v1::ConnectorCallbackService;
 use henosis_proto::connect::henosis::v1::GraphService;
-use henosis_proto::proto::henosis::v1 as pb;
+use henosis_proto::protobuf;
 use tokio::sync::broadcast;
 use tokio::time::interval;
 
@@ -53,23 +53,23 @@ impl Api {
 }
 
 impl GraphService for Api {
-    // === RegisterComponentSpec ===
+    // === CreateComponent ===
 
-    async fn register_component_spec<'a>(
+    async fn create_component<'a>(
         &'a self,
         context: RequestContext,
-        request: ServiceRequest<'_, pb::RegisterComponentSpecRequest>,
-    ) -> ServiceResult<impl connectrpc::Encodable<pb::RegisterComponentSpecResponse> + Send + use<'a>>
-    {
+        request: ServiceRequest<'_, protobuf::v1::CreateComponentRequest>,
+    ) -> ServiceResult<
+        impl connectrpc::Encodable<protobuf::v1::CreateComponentResponse> + Send + use<'a>,
+    > {
         self.authorize(&context)?;
-        let command =
-            henosis_types::RegisterComponentSpec::try_from(&*request).map_err(conversion_error)?;
+        let command = types::domain::NewComponent::try_from(&*request).map_err(conversion_error)?;
         let component = self
             .core
-            .component_spec_register(command)
+            .component_create(command)
             .await
             .map_err(|error| connect_error(error, ErrorSurface::Edit))?;
-        Ok(Response::new(pb::RegisterComponentSpecResponse {
+        Ok(Response::new(protobuf::v1::CreateComponentResponse {
             component: MessageField::some((&component).into()),
             ..Default::default()
         }))
@@ -80,16 +80,17 @@ impl GraphService for Api {
     async fn create_graph<'a>(
         &'a self,
         context: RequestContext,
-        request: ServiceRequest<'_, pb::CreateGraphRequest>,
-    ) -> ServiceResult<impl connectrpc::Encodable<pb::CreateGraphResponse> + Send + use<'a>> {
+        request: ServiceRequest<'_, protobuf::v1::CreateGraphRequest>,
+    ) -> ServiceResult<impl connectrpc::Encodable<protobuf::v1::CreateGraphResponse> + Send + use<'a>>
+    {
         self.authorize(&context)?;
-        let command = henosis_types::CreateGraph::try_from(&*request).map_err(conversion_error)?;
+        let command = types::domain::CreateGraph::try_from(&*request).map_err(conversion_error)?;
         let graph = self
             .core
             .graph_create(command)
             .await
             .map_err(|error| connect_error(error, ErrorSurface::Edit))?;
-        Ok(Response::new(pb::CreateGraphResponse {
+        Ok(Response::new(protobuf::v1::CreateGraphResponse {
             graph: MessageField::some((&graph).into()),
             ..Default::default()
         }))
@@ -100,17 +101,19 @@ impl GraphService for Api {
     async fn add_components<'a>(
         &'a self,
         context: RequestContext,
-        request: ServiceRequest<'_, pb::AddComponentsRequest>,
-    ) -> ServiceResult<impl connectrpc::Encodable<pb::AddComponentsResponse> + Send + use<'a>> {
+        request: ServiceRequest<'_, protobuf::v1::AddComponentsRequest>,
+    ) -> ServiceResult<
+        impl connectrpc::Encodable<protobuf::v1::AddComponentsResponse> + Send + use<'a>,
+    > {
         self.authorize(&context)?;
         let command =
-            henosis_types::AddComponents::try_from(&*request).map_err(conversion_error)?;
+            types::domain::AddComponents::try_from(&*request).map_err(conversion_error)?;
         let graph = self
             .core
             .graph_add_components(command)
             .await
             .map_err(|error| connect_error(error, ErrorSurface::Edit))?;
-        Ok(Response::new(pb::AddComponentsResponse {
+        Ok(Response::new(protobuf::v1::AddComponentsResponse {
             graph: MessageField::some((&graph).into()),
             ..Default::default()
         }))
@@ -121,18 +124,19 @@ impl GraphService for Api {
     async fn update_components<'a>(
         &'a self,
         context: RequestContext,
-        request: ServiceRequest<'_, pb::UpdateComponentsRequest>,
-    ) -> ServiceResult<impl connectrpc::Encodable<pb::UpdateComponentsResponse> + Send + use<'a>>
-    {
+        request: ServiceRequest<'_, protobuf::v1::UpdateComponentsRequest>,
+    ) -> ServiceResult<
+        impl connectrpc::Encodable<protobuf::v1::UpdateComponentsResponse> + Send + use<'a>,
+    > {
         self.authorize(&context)?;
         let command =
-            henosis_types::UpdateComponents::try_from(&*request).map_err(conversion_error)?;
+            types::domain::UpdateComponents::try_from(&*request).map_err(conversion_error)?;
         let graph = self
             .core
             .graph_update_components(command)
             .await
             .map_err(|error| connect_error(error, ErrorSurface::Edit))?;
-        Ok(Response::new(pb::UpdateComponentsResponse {
+        Ok(Response::new(protobuf::v1::UpdateComponentsResponse {
             graph: MessageField::some((&graph).into()),
             ..Default::default()
         }))
@@ -143,18 +147,19 @@ impl GraphService for Api {
     async fn remove_components<'a>(
         &'a self,
         context: RequestContext,
-        request: ServiceRequest<'_, pb::RemoveComponentsRequest>,
-    ) -> ServiceResult<impl connectrpc::Encodable<pb::RemoveComponentsResponse> + Send + use<'a>>
-    {
+        request: ServiceRequest<'_, protobuf::v1::RemoveComponentsRequest>,
+    ) -> ServiceResult<
+        impl connectrpc::Encodable<protobuf::v1::RemoveComponentsResponse> + Send + use<'a>,
+    > {
         self.authorize(&context)?;
         let command =
-            henosis_types::RemoveComponents::try_from(&*request).map_err(conversion_error)?;
+            types::domain::RemoveComponents::try_from(&*request).map_err(conversion_error)?;
         let graph = self
             .core
             .graph_remove_components(command)
             .await
             .map_err(|error| connect_error(error, ErrorSurface::Edit))?;
-        Ok(Response::new(pb::RemoveComponentsResponse {
+        Ok(Response::new(protobuf::v1::RemoveComponentsResponse {
             graph: MessageField::some((&graph).into()),
             ..Default::default()
         }))
@@ -165,16 +170,17 @@ impl GraphService for Api {
     async fn get_graph<'a>(
         &'a self,
         context: RequestContext,
-        request: ServiceRequest<'_, pb::GetGraphRequest>,
-    ) -> ServiceResult<impl connectrpc::Encodable<pb::GetGraphResponse> + Send + use<'a>> {
+        request: ServiceRequest<'_, protobuf::v1::GetGraphRequest>,
+    ) -> ServiceResult<impl connectrpc::Encodable<protobuf::v1::GetGraphResponse> + Send + use<'a>>
+    {
         self.authorize(&context)?;
-        let command = henosis_types::GetGraph::try_from(&*request).map_err(conversion_error)?;
+        let command = types::domain::GetGraph::try_from(&*request).map_err(conversion_error)?;
         let state = self
             .core
             .graph_get(command.graph_id())
             .await
             .map_err(|error| connect_error(error, ErrorSurface::Edit))?;
-        Ok(Response::new(pb::GetGraphResponse {
+        Ok(Response::new(protobuf::v1::GetGraphResponse {
             state: MessageField::some((&state).into()),
             ..Default::default()
         }))
@@ -185,22 +191,23 @@ impl GraphService for Api {
     async fn get_graph_generation<'a>(
         &'a self,
         context: RequestContext,
-        request: ServiceRequest<'_, pb::GetGraphGenerationRequest>,
-    ) -> ServiceResult<impl connectrpc::Encodable<pb::GetGraphGenerationResponse> + Send + use<'a>>
-    {
+        request: ServiceRequest<'_, protobuf::v1::GetGraphGenerationRequest>,
+    ) -> ServiceResult<
+        impl connectrpc::Encodable<protobuf::v1::GetGraphGenerationResponse> + Send + use<'a>,
+    > {
         self.authorize(&context)?;
         let command =
-            henosis_types::GetGraphGeneration::try_from(&*request).map_err(conversion_error)?;
+            types::domain::GetGraphGeneration::try_from(&*request).map_err(conversion_error)?;
         let generation = self
             .core
             .graph_generation_get(command)
             .await
             .map_err(|error| connect_error(error, ErrorSurface::Edit))?;
         let current_lifecycle = match generation.current_lifecycle() {
-            henosis_types::GraphLifecycle::Active => pb::GraphLifecycle::Active,
-            henosis_types::GraphLifecycle::Retired => pb::GraphLifecycle::Retired,
+            types::domain::GraphLifecycle::Active => protobuf::v1::GraphLifecycle::Active,
+            types::domain::GraphLifecycle::Retired => protobuf::v1::GraphLifecycle::Retired,
         };
-        Ok(Response::new(pb::GetGraphGenerationResponse {
+        Ok(Response::new(protobuf::v1::GetGraphGenerationResponse {
             state: MessageField::some(generation.state().into()),
             components: generation.components().iter().map(Into::into).collect(),
             current_lifecycle: Some(current_lifecycle.into()),
@@ -214,16 +221,17 @@ impl GraphService for Api {
     async fn retire_graph<'a>(
         &'a self,
         context: RequestContext,
-        request: ServiceRequest<'_, pb::RetireGraphRequest>,
-    ) -> ServiceResult<impl connectrpc::Encodable<pb::RetireGraphResponse> + Send + use<'a>> {
+        request: ServiceRequest<'_, protobuf::v1::RetireGraphRequest>,
+    ) -> ServiceResult<impl connectrpc::Encodable<protobuf::v1::RetireGraphResponse> + Send + use<'a>>
+    {
         self.authorize(&context)?;
-        let command = henosis_types::RetireGraph::try_from(&*request).map_err(conversion_error)?;
+        let command = types::domain::RetireGraph::try_from(&*request).map_err(conversion_error)?;
         let (graph_id, last_generation) = self
             .core
             .graph_retire(command)
             .await
             .map_err(|error| connect_error(error, ErrorSurface::Edit))?;
-        Ok(Response::new(pb::RetireGraphResponse {
+        Ok(Response::new(protobuf::v1::RetireGraphResponse {
             graph_id: Some(graph_id.into_bytes().to_vec()),
             last_generation: Some(last_generation),
             ..Default::default()
@@ -235,12 +243,12 @@ impl GraphService for Api {
     async fn watch_graph(
         &self,
         context: RequestContext,
-        request: ServiceRequest<'_, pb::WatchGraphRequest>,
+        request: ServiceRequest<'_, protobuf::v1::WatchGraphRequest>,
     ) -> ServiceResult<
-        ServiceStream<impl connectrpc::Encodable<pb::WatchGraphResponse> + Send + use<>>,
+        ServiceStream<impl connectrpc::Encodable<protobuf::v1::WatchGraphResponse> + Send + use<>>,
     > {
         self.authorize(&context)?;
-        let command = henosis_types::WatchGraph::try_from(&*request).map_err(conversion_error)?;
+        let command = types::domain::WatchGraph::try_from(&*request).map_err(conversion_error)?;
         let watch = self
             .core
             .graph_watch(command)
@@ -305,16 +313,17 @@ impl ConnectorCallbackService for Api {
     async fn report_slice<'a>(
         &'a self,
         context: RequestContext,
-        request: ServiceRequest<'_, pb::ReportSliceRequest>,
-    ) -> ServiceResult<impl connectrpc::Encodable<pb::ReportSliceResponse> + Send + use<'a>> {
+        request: ServiceRequest<'_, protobuf::v1::ReportSliceRequest>,
+    ) -> ServiceResult<impl connectrpc::Encodable<protobuf::v1::ReportSliceResponse> + Send + use<'a>>
+    {
         self.authorize(&context)?;
-        let command = henosis_types::ReportSlice::try_from(&*request).map_err(conversion_error)?;
+        let command = types::domain::ReportSlice::try_from(&*request).map_err(conversion_error)?;
         let publication_sequence = self
             .core
             .slice_report(command)
             .await
             .map_err(|error| connect_error(error, ErrorSurface::Report))?;
-        Ok(Response::new(pb::ReportSliceResponse {
+        Ok(Response::new(protobuf::v1::ReportSliceResponse {
             publication_sequence,
             ..Default::default()
         }))
@@ -325,16 +334,17 @@ impl ConnectorCallbackService for Api {
     async fn fetch_slice<'a>(
         &'a self,
         context: RequestContext,
-        request: ServiceRequest<'_, pb::FetchSliceRequest>,
-    ) -> ServiceResult<impl connectrpc::Encodable<pb::FetchSliceResponse> + Send + use<'a>> {
+        request: ServiceRequest<'_, protobuf::v1::FetchSliceRequest>,
+    ) -> ServiceResult<impl connectrpc::Encodable<protobuf::v1::FetchSliceResponse> + Send + use<'a>>
+    {
         self.authorize(&context)?;
-        let command = henosis_types::FetchSlice::try_from(&*request).map_err(conversion_error)?;
+        let command = types::domain::FetchSlice::try_from(&*request).map_err(conversion_error)?;
         let slice = self
             .core
             .slice_fetch(command)
             .await
             .map_err(|error| connect_error(error, ErrorSurface::Report))?;
-        Ok(Response::new(pb::FetchSliceResponse {
+        Ok(Response::new(protobuf::v1::FetchSliceResponse {
             slice: MessageField::some((&slice).into()),
             ..Default::default()
         }))

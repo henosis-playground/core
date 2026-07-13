@@ -1,12 +1,12 @@
 use std::collections::BTreeSet;
 
-use henosis_types::ComponentOutputs;
-use henosis_types::ConnectorKey;
-use henosis_types::GraphHistory;
-use henosis_types::GraphSlice;
-use henosis_types::RegisteredComponentSpec;
-use henosis_types::SpecCatalog;
 use thiserror::Error;
+use types::domain::Component;
+use types::domain::ComponentCatalog;
+use types::domain::ComponentOutputs;
+use types::domain::ConnectorKey;
+use types::domain::GraphHistory;
+use types::domain::GraphSlice;
 
 #[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
 pub(crate) enum SliceError {
@@ -20,7 +20,7 @@ pub(crate) enum SliceError {
 
 pub(crate) fn compute_slice(
     history: &GraphHistory,
-    specs: &SpecCatalog,
+    specs: &ComponentCatalog,
     sequence: u64,
     connector: &ConnectorKey,
 ) -> Result<GraphSlice, SliceError> {
@@ -30,14 +30,14 @@ pub(crate) fn compute_slice(
     let graph = state.graph();
     let components = graph
         .components()
-        .map(|component| component.spec_hash())
+        .map(|component| component.component_id())
         .filter_map(|hash| specs.get(hash))
         .filter(|registered| registered.spec().connector() == connector)
         .cloned()
         .collect::<Vec<_>>();
     let owned = components
         .iter()
-        .map(RegisteredComponentSpec::hash)
+        .map(Component::id)
         .collect::<BTreeSet<_>>();
     let mut upstream = BTreeSet::new();
     let mut pending = components
@@ -56,7 +56,7 @@ pub(crate) fn compute_slice(
         .published_outputs()
         .filter(|published| published.generation() == graph.generation())
         .flat_map(|published| published.outputs().iter())
-        .filter(|output| upstream.contains(&output.component_spec_hash()))
+        .filter(|output| upstream.contains(&output.component_id()))
         .cloned()
         .collect::<Vec<ComponentOutputs>>();
     GraphSlice::new(
@@ -72,7 +72,7 @@ pub(crate) fn compute_slice(
 
 pub(crate) fn connectors_for_sequence(
     history: &GraphHistory,
-    specs: &SpecCatalog,
+    specs: &ComponentCatalog,
     sequence: u64,
 ) -> Result<BTreeSet<ConnectorKey>, SliceError> {
     let state = history
@@ -87,7 +87,7 @@ pub(crate) fn connectors_for_sequence(
         if let Some(graph) = history.generation(selected) {
             for component in graph.components() {
                 let registered = specs
-                    .get(component.spec_hash())
+                    .get(component.component_id())
                     .ok_or(SliceError::SpecNotFound)?;
                 connectors.insert(registered.spec().connector().clone());
             }
@@ -98,10 +98,10 @@ pub(crate) fn connectors_for_sequence(
 
 pub(crate) fn superseded_components(
     history: &GraphHistory,
-    specs: &SpecCatalog,
+    specs: &ComponentCatalog,
     sequence: u64,
     connector: &ConnectorKey,
-) -> Result<Vec<RegisteredComponentSpec>, SliceError> {
+) -> Result<Vec<Component>, SliceError> {
     let current = history
         .state_at(sequence)
         .ok_or(SliceError::StateNotFound)?
@@ -112,16 +112,16 @@ pub(crate) fn superseded_components(
             continue;
         }
         for component in graph.components() {
-            if current.contains(component.spec_hash()) {
+            if current.contains(component.component_id()) {
                 continue;
             }
             let registered = specs
-                .get(component.spec_hash())
+                .get(component.component_id())
                 .ok_or(SliceError::SpecNotFound)?;
             if registered.spec().connector() == connector
                 && !superseded
                     .iter()
-                    .any(|item: &RegisteredComponentSpec| item.hash() == registered.hash())
+                    .any(|item: &Component| item.id() == registered.id())
             {
                 superseded.push(registered.clone());
             }
@@ -132,49 +132,42 @@ pub(crate) fn superseded_components(
 
 #[cfg(test)]
 mod tests {
-    use henosis_proto::register_component_spec;
-    use henosis_types::ComponentOutputs;
-    use henosis_types::ComponentSpec;
-    use henosis_types::ComponentSpecHash;
-    use henosis_types::Fingerprint;
-    use henosis_types::Graph;
-    use henosis_types::GraphEvent;
-    use henosis_types::GraphHistory;
-    use henosis_types::GraphUuid;
-    use henosis_types::MutationKind;
-    use henosis_types::NewComponentSpec;
-    use henosis_types::NewGraph;
-    use henosis_types::OutputPublication;
-    use henosis_types::PublicationUuid;
-    use henosis_types::RequestUuid;
-    use henosis_types::SequencedGraphEvent;
-    use henosis_types::SpecCatalog;
+    use std::time::UNIX_EPOCH;
+
+    use blake3::Hash;
+    use types::domain::ComponentCatalog;
+    use types::domain::ComponentOutputs;
+    use types::domain::ComponentUuid;
+    use types::domain::Graph;
+    use types::domain::GraphEvent;
+    use types::domain::GraphHistory;
+    use types::domain::GraphUuid;
+    use types::domain::MutationKind;
+    use types::domain::NewComponentSpec;
+    use types::domain::NewGraph;
+    use types::domain::OutputPublication;
+    use types::domain::PublicationUuid;
+    use types::domain::RequestUuid;
+    use types::domain::SequencedGraphEvent;
 
     use super::*;
 
-    fn registered(
-        name: &str,
-        connector: &str,
-        depends_on: Vec<ComponentSpecHash>,
-    ) -> RegisteredComponentSpec {
-        register_component_spec(
-            ComponentSpec::new(NewComponentSpec {
-                name: name.to_owned(),
-                connector: connector.parse().unwrap(),
-                outputs_schema: Vec::new(),
-                depends_on,
-                connector_context: Vec::new(),
-            })
-            .unwrap(),
+    fn registered(name: &str, connector: &str, depends_on: Vec<ComponentUuid>) -> Component {
+        Component::new(
+            ComponentUuid::from_bytes([name.as_bytes()[0]; 16]),
+            0,
+            UNIX_EPOCH,
+            UNIX_EPOCH,
+            NewComponentSpec::new(name, connector.parse().unwrap(), &[], depends_on, &[]).unwrap(),
         )
     }
 
     #[test]
     fn slices_use_transitive_outputs_only_from_the_current_generation() {
         let source = registered("source", "source", Vec::new());
-        let middle = registered("middle", "middle", vec![source.hash()]);
-        let target = registered("target", "target", vec![middle.hash()]);
-        let mut specs = SpecCatalog::default();
+        let middle = registered("middle", "middle", vec![source.id()]);
+        let target = registered("target", "target", vec![middle.id()]);
+        let mut specs = ComponentCatalog::default();
         specs.apply(source.clone()).unwrap();
         specs.apply(middle.clone()).unwrap();
         specs.apply(target.clone()).unwrap();
@@ -182,7 +175,7 @@ mod tests {
         let graph = Graph::new(NewGraph {
             id: graph_id,
             generation: 1,
-            component_spec_hashes: vec![source.hash(), middle.hash(), target.hash()],
+            component_ids: vec![source.id(), middle.id(), target.id()],
         })
         .unwrap();
         let mut history = GraphHistory::new(graph_id);
@@ -192,7 +185,7 @@ mod tests {
                 GraphEvent::Created {
                     graph: graph.clone(),
                     request_id: RequestUuid::from_bytes(2_u128.to_be_bytes()),
-                    request_fingerprint: Fingerprint::from_bytes([2; 32]),
+                    request_hash: Hash::from_bytes([2; 32]),
                 },
             ))
             .unwrap();
@@ -204,13 +197,13 @@ mod tests {
                     input_sequence: 0,
                     connector: "source".parse().unwrap(),
                     outputs: vec![ComponentOutputs::new(
-                        source.hash(),
+                        source.id(),
                         br#"{"url":"https://example.test"}"#.to_vec(),
                     )],
                     request_id: RequestUuid::from_bytes(3_u128.to_be_bytes()),
-                    request_fingerprint: Fingerprint::from_bytes([3; 32]),
+                    request_hash: Hash::from_bytes([3; 32]),
                     publication_id: PublicationUuid::from_bytes(4_u128.to_be_bytes()),
-                    publication_fingerprint: Fingerprint::from_bytes([4; 32]),
+                    publication_hash: Hash::from_bytes([4; 32]),
                 }),
             ))
             .unwrap();
@@ -221,7 +214,7 @@ mod tests {
         let graph_v2 = Graph::new(NewGraph {
             id: graph_id,
             generation: 2,
-            component_spec_hashes: graph.component_spec_hashes(),
+            component_ids: graph.component_ids(),
         })
         .unwrap();
         history
@@ -231,7 +224,7 @@ mod tests {
                     graph: graph_v2,
                     request_id: RequestUuid::from_bytes(5_u128.to_be_bytes()),
                     mutation_kind: MutationKind::UpdateComponents,
-                    request_fingerprint: Fingerprint::from_bytes([5; 32]),
+                    request_hash: Hash::from_bytes([5; 32]),
                 },
             ))
             .unwrap();

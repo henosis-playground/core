@@ -7,7 +7,7 @@ use faultline::Error as Fault;
 use faultline::Never;
 use henosis_db_model::DbAuthMaterial;
 use henosis_db_schema::auth_material;
-use henosis_types::AuthMaterial;
+use types::domain::AuthMaterial;
 
 use crate::error::diesel_fault;
 

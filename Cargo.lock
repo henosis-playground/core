@@ -835,12 +835,12 @@ dependencies = [
  "henosis-journal",
  "henosis-orchestrator",
  "henosis-proto",
- "henosis-types",
  "serde",
  "serde_json",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "types",
  "workspace-hack",
 ]
 
@@ -850,8 +850,8 @@ version = "0.0.0"
 dependencies = [
  "diesel",
  "henosis-db-schema",
- "henosis-types",
  "thiserror",
+ "types",
  "uuid",
  "workspace-hack",
 ]
@@ -866,9 +866,9 @@ dependencies = [
  "faultline",
  "henosis-db-model",
  "henosis-db-schema",
- "henosis-types",
  "scoped-futures",
  "thiserror",
+ "types",
  "uuid",
  "workspace-hack",
 ]
@@ -890,9 +890,9 @@ dependencies = [
  "faultline",
  "futures",
  "henosis-proto",
- "henosis-types",
  "s2-sdk",
  "thiserror",
+ "types",
  "workspace-hack",
 ]
 
@@ -908,7 +908,6 @@ dependencies = [
  "henosis-db-queries",
  "henosis-journal",
  "henosis-proto",
- "henosis-types",
  "http",
  "iddqd",
  "newtype-uuid",
@@ -918,6 +917,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+ "types",
  "workspace-hack",
 ]
 
@@ -930,24 +930,11 @@ dependencies = [
  "buffa-types",
  "connectrpc",
  "futures",
- "henosis-types",
  "newtype-uuid",
  "serde",
  "serde_json",
  "thiserror",
- "workspace-hack",
-]
-
-[[package]]
-name = "henosis-types"
-version = "0.0.0"
-dependencies = [
- "iddqd",
- "newtype-uuid",
- "newtype-uuid-macros",
- "serde",
- "thiserror",
- "uuid",
+ "types",
  "workspace-hack",
 ]
 
@@ -2305,6 +2292,20 @@ name = "typenum"
 version = "1.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
+
+[[package]]
+name = "types"
+version = "0.0.0"
+dependencies = [
+ "blake3",
+ "iddqd",
+ "newtype-uuid",
+ "newtype-uuid-macros",
+ "serde",
+ "thiserror",
+ "uuid",
+ "workspace-hack",
+]
 
 [[package]]
 name = "unicode-bidi"

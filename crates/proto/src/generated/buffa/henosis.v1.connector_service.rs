@@ -34,7 +34,7 @@ pub struct GraphSlice {
         skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec",
         deserialize_with = "::buffa::json_helpers::null_as_default"
     )]
-    pub components: ::buffa::alloc::vec::Vec<RegisteredComponentSpec>,
+    pub components: ::buffa::alloc::vec::Vec<Component>,
     /// Field 5: `upstream_outputs`
     #[serde(
         rename = "upstreamOutputs",
@@ -321,7 +321,7 @@ pub struct ReconcileSliceRequest {
         skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec",
         deserialize_with = "::buffa::json_helpers::null_as_default"
     )]
-    pub superseded_components: ::buffa::alloc::vec::Vec<RegisteredComponentSpec>,
+    pub superseded_components: ::buffa::alloc::vec::Vec<Component>,
     #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,

@@ -1,7 +1,7 @@
-use henosis_types::ConnectorKey;
 use iddqd::IdOrdItem;
 use iddqd::id_upcast;
 use serde::Deserialize;
+use types::domain::ConnectorKey;
 
 /// Endpoint and bearer material for one configured connector.
 #[derive(Clone, Debug, Deserialize)]

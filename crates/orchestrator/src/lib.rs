@@ -15,11 +15,11 @@ use std::sync::Arc;
 
 use henosis_db_queries::DbPool;
 use henosis_journal::Journal;
-use henosis_types::SpecCatalog;
 use iddqd::IdHashMap;
 use iddqd::IdOrdMap;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
+use types::domain::ComponentCatalog;
 
 use crate::runtime::GraphRuntimeHandle;
 
@@ -38,7 +38,7 @@ pub struct Orchestrator {
     journal: Journal,
     metadata: DbPool,
     connectors: Arc<IdOrdMap<ConnectorConfig>>,
-    specs: Arc<RwLock<SpecCatalog>>,
+    specs: Arc<RwLock<ComponentCatalog>>,
     runtimes: Arc<Mutex<IdHashMap<GraphRuntimeHandle>>>,
 }
 
@@ -54,7 +54,7 @@ impl Orchestrator {
             connectors: Arc::new(
                 IdOrdMap::from_iter_unique(connectors).map_err(|_| DuplicateConnector)?,
             ),
-            specs: Arc::new(RwLock::new(SpecCatalog::default())),
+            specs: Arc::new(RwLock::new(ComponentCatalog::default())),
             runtimes: Arc::new(Mutex::new(IdHashMap::new())),
         })
     }

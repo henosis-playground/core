@@ -1,13 +1,13 @@
 use std::collections::BTreeSet;
 
-use henosis_types::ComponentDispositionKind;
-use henosis_types::ComponentSpecHash;
-use henosis_types::Diagnostic;
-use henosis_types::DiagnosticSeverity;
-use henosis_types::Graph;
-use henosis_types::GraphSlice;
-use henosis_types::SliceReport;
-use henosis_types::SpecCatalog;
+use types::domain::ComponentCatalog;
+use types::domain::ComponentDispositionKind;
+use types::domain::ComponentUuid;
+use types::domain::Diagnostic;
+use types::domain::DiagnosticSeverity;
+use types::domain::Graph;
+use types::domain::GraphSlice;
+use types::domain::SliceReport;
 
 use crate::Orchestrator;
 
@@ -19,13 +19,13 @@ pub(crate) enum GraphValidationError {
 
 pub(crate) fn validate_graph(
     graph: &Graph,
-    specs: &SpecCatalog,
+    specs: &ComponentCatalog,
     orchestrator: &Orchestrator,
 ) -> Result<(), GraphValidationError> {
     let mut invalid = Vec::new();
     let mut preconditions = Vec::new();
     for component in graph.components() {
-        let hash = component.spec_hash();
+        let hash = component.component_id();
         let Some(registered) = specs.get(hash) else {
             preconditions
                 .push(Diagnostic::error("component.spec.unregistered").for_component(hash));
@@ -59,12 +59,12 @@ pub(crate) fn validate_graph(
     Ok(())
 }
 
-fn has_cycle(graph: &Graph, specs: &SpecCatalog) -> bool {
+fn has_cycle(graph: &Graph, specs: &ComponentCatalog) -> bool {
     let mut visited = BTreeSet::new();
     let mut visiting = BTreeSet::new();
     graph.components().any(|component| {
         visit(
-            component.spec_hash(),
+            component.component_id(),
             graph,
             specs,
             &mut visiting,
@@ -74,11 +74,11 @@ fn has_cycle(graph: &Graph, specs: &SpecCatalog) -> bool {
 }
 
 fn visit(
-    hash: ComponentSpecHash,
+    hash: ComponentUuid,
     graph: &Graph,
-    specs: &SpecCatalog,
-    visiting: &mut BTreeSet<ComponentSpecHash>,
-    visited: &mut BTreeSet<ComponentSpecHash>,
+    specs: &ComponentCatalog,
+    visiting: &mut BTreeSet<ComponentUuid>,
+    visited: &mut BTreeSet<ComponentUuid>,
 ) -> bool {
     if visited.contains(&hash) {
         return false;
@@ -121,11 +121,11 @@ pub(crate) fn validate_report(
     }
     let owned = slice
         .components()
-        .map(|component| component.hash())
+        .map(|component| component.id())
         .collect::<BTreeSet<_>>();
     let dispositions = report
         .dispositions()
-        .map(|disposition| disposition.component_spec_hash())
+        .map(|disposition| disposition.component_id())
         .collect::<BTreeSet<_>>();
     if dispositions != owned {
         return Err(ReportValidationError::Invalid(vec![Diagnostic::error(
@@ -150,7 +150,7 @@ pub(crate) fn validate_report(
     }
     let outputs = report
         .outputs()
-        .map(|output| output.component_spec_hash())
+        .map(|output| output.component_id())
         .collect::<BTreeSet<_>>();
     if outputs != owned {
         return Err(ReportValidationError::FailedPrecondition(vec![

@@ -1,7 +1,7 @@
 use diesel::HasQuery;
 use diesel::Insertable;
 use henosis_db_schema::graph_labels;
-use henosis_types as domain;
+use types::domain;
 use uuid::Uuid;
 
 /// Stored user-facing graph label.

@@ -2,29 +2,29 @@ use std::sync::Arc;
 
 use anyhow::Error;
 use faultline::Error as Fault;
-use henosis_proto::add_fingerprint;
-use henosis_proto::create_fingerprint;
-use henosis_proto::remove_fingerprint;
-use henosis_proto::retire_fingerprint;
-use henosis_proto::update_fingerprint;
-use henosis_types::AddComponents;
-use henosis_types::CreateGraph;
-use henosis_types::DurableGraphState;
-use henosis_types::Graph;
-use henosis_types::GraphEditError;
-use henosis_types::GraphEvent;
-use henosis_types::GraphGenerationState;
-use henosis_types::GraphHistory;
-use henosis_types::GraphState;
-use henosis_types::MutationKind;
-use henosis_types::MutationResponse;
-use henosis_types::NewGraph;
-use henosis_types::RegisterComponentSpec;
-use henosis_types::RegisteredComponentSpec;
-use henosis_types::RemoveComponents;
-use henosis_types::RequestUuid;
-use henosis_types::RetireGraph;
-use henosis_types::UpdateComponents;
+use henosis_proto::api::add_request_hash;
+use henosis_proto::api::create_request_hash;
+use henosis_proto::api::remove_request_hash;
+use henosis_proto::api::retire_request_hash;
+use henosis_proto::api::update_request_hash;
+use types::domain::AddComponents;
+use types::domain::Component;
+use types::domain::CreateGraph;
+use types::domain::DurableGraphState;
+use types::domain::Graph;
+use types::domain::GraphEditError;
+use types::domain::GraphEvent;
+use types::domain::GraphGenerationState;
+use types::domain::GraphHistory;
+use types::domain::GraphState;
+use types::domain::MutationKind;
+use types::domain::MutationResponse;
+use types::domain::NewComponent;
+use types::domain::NewGraph;
+use types::domain::RemoveComponents;
+use types::domain::RequestUuid;
+use types::domain::RetireGraph;
+use types::domain::UpdateComponents;
 
 use crate::Orchestrator;
 use crate::OrchestratorError;
@@ -47,7 +47,7 @@ impl Orchestrator {
     ) -> Result<(), Fault<OrchestratorError, Error, Error>> {
         let catalog = self
             .journal
-            .component_spec_catalog()
+            .component_catalog()
             .await
             .map_err(|error| error.squash())?;
         *self.specs.write().await = catalog;
@@ -70,21 +70,22 @@ impl Orchestrator {
         Ok(())
     }
 
-    // === RegisterComponentSpec ===
+    // === CreateComponent ===
 
-    /// Durably register a content-addressed component spec before graph use.
-    pub async fn component_spec_register(
+    /// Durably create a component and its initial specification before graph
+    /// use.
+    pub async fn component_create(
         &self,
-        command: RegisterComponentSpec,
-    ) -> Result<RegisteredComponentSpec, Fault<OrchestratorError, Error, Error>> {
+        command: NewComponent,
+    ) -> Result<Component, Fault<OrchestratorError, Error, Error>> {
         let registered = self
             .journal
-            .component_spec_register(command.into_component())
+            .component_register(command)
             .await
             .map_err(|error| error.squash())?;
         let catalog = self
             .journal
-            .component_spec_catalog()
+            .component_catalog()
             .await
             .map_err(|error| error.squash())?;
         *self.specs.write().await = catalog;
@@ -98,7 +99,7 @@ impl Orchestrator {
         self: &Arc<Self>,
         command: CreateGraph,
     ) -> Result<Graph, Fault<OrchestratorError, Error, Error>> {
-        let fingerprint = create_fingerprint(&command);
+        let hash = create_request_hash(&command);
         let graph_id = command.graph_id();
         let request_id = command.request_id();
         let runtime = self.runtime(graph_id).await;
@@ -109,7 +110,7 @@ impl Orchestrator {
                     cached.as_ref().expect("history was loaded"),
                     request_id,
                     MutationKind::Create,
-                    fingerprint,
+                    hash,
                 )?;
                 self.registry_ensure(graph_id, request_id, false).await?;
                 return Ok(graph);
@@ -120,14 +121,14 @@ impl Orchestrator {
         let graph = Graph::new(NewGraph {
             id: graph_id,
             generation: 1,
-            component_spec_hashes: command.component_spec_hashes().to_vec(),
+            component_ids: command.component_ids().to_vec(),
         })
         .map_err(|_| invalid_argument("graph.invalid"))?;
         self.validate(&graph).await?;
         let event = GraphEvent::Created {
             graph: graph.clone(),
             request_id,
-            request_fingerprint: fingerprint,
+            request_hash: hash,
         };
         self.journal
             .graph_append(graph_id, 0, &event)
@@ -151,14 +152,14 @@ impl Orchestrator {
         self: &Arc<Self>,
         command: AddComponents,
     ) -> Result<Graph, Fault<OrchestratorError, Error, Error>> {
-        let fingerprint = add_fingerprint(&command);
+        let hash = add_request_hash(&command);
         self.graph_edit(
             command.graph_id(),
             command.request_id(),
             command.expected_generation(),
             MutationKind::AddComponents,
-            fingerprint,
-            |graph| graph.add(command.component_spec_hashes()),
+            hash,
+            |graph| graph.add(command.component_ids()),
         )
         .await
     }
@@ -167,13 +168,13 @@ impl Orchestrator {
         self: &Arc<Self>,
         command: UpdateComponents,
     ) -> Result<Graph, Fault<OrchestratorError, Error, Error>> {
-        let fingerprint = update_fingerprint(&command);
+        let hash = update_request_hash(&command);
         self.graph_edit(
             command.graph_id(),
             command.request_id(),
             command.expected_generation(),
             MutationKind::UpdateComponents,
-            fingerprint,
+            hash,
             |graph| graph.replace(command.replacements()),
         )
         .await
@@ -183,14 +184,14 @@ impl Orchestrator {
         self: &Arc<Self>,
         command: RemoveComponents,
     ) -> Result<Graph, Fault<OrchestratorError, Error, Error>> {
-        let fingerprint = remove_fingerprint(&command);
+        let hash = remove_request_hash(&command);
         self.graph_edit(
             command.graph_id(),
             command.request_id(),
             command.expected_generation(),
             MutationKind::RemoveComponents,
-            fingerprint,
-            |graph| graph.remove(command.component_spec_hashes()),
+            hash,
+            |graph| graph.remove(command.component_ids()),
         )
         .await
     }
@@ -199,7 +200,7 @@ impl Orchestrator {
 
     pub async fn graph_get(
         &self,
-        graph_id: henosis_types::GraphUuid,
+        graph_id: types::domain::GraphUuid,
     ) -> Result<GraphState, Fault<OrchestratorError, Error, Error>> {
         let runtime = self.runtime(graph_id).await;
         let mut cached = runtime.history.lock().await;
@@ -215,7 +216,7 @@ impl Orchestrator {
 
     pub async fn graph_generation_get(
         &self,
-        command: henosis_types::GetGraphGeneration,
+        command: types::domain::GetGraphGeneration,
     ) -> Result<GraphGenerationState, Fault<OrchestratorError, Error, Error>> {
         let runtime = self.runtime(command.graph_id()).await;
         let mut cached = runtime.history.lock().await;
@@ -236,7 +237,7 @@ impl Orchestrator {
             .components()
             .map(|component| {
                 specs
-                    .get(component.spec_hash())
+                    .get(component.component_id())
                     .cloned()
                     .ok_or_else(|| invariant("generation references an unregistered spec"))
             })
@@ -258,8 +259,8 @@ impl Orchestrator {
     pub async fn graph_retire(
         self: &Arc<Self>,
         command: RetireGraph,
-    ) -> Result<(henosis_types::GraphUuid, u64), Fault<OrchestratorError, Error, Error>> {
-        let fingerprint = retire_fingerprint(command);
+    ) -> Result<(types::domain::GraphUuid, u64), Fault<OrchestratorError, Error, Error>> {
+        let hash = retire_request_hash(command);
         let graph_id = command.graph_id();
         let request_id = command.request_id();
         let runtime = self.runtime(graph_id).await;
@@ -267,7 +268,7 @@ impl Orchestrator {
         self.ensure_loaded(graph_id, &mut cached).await?;
         let history = cached.as_ref().expect("history was loaded");
         if let Some(receipt) = history.request(request_id) {
-            if receipt.kind() != MutationKind::Retire || receipt.fingerprint() != fingerprint {
+            if receipt.kind() != MutationKind::Retire || receipt.hash() != hash {
                 return Err(already_exists("request_id.reused"));
             }
             if let MutationResponse::Retired {
@@ -291,7 +292,7 @@ impl Orchestrator {
             graph_id,
             last_generation: generation,
             request_id,
-            request_fingerprint: fingerprint,
+            request_hash: hash,
         };
         self.journal
             .graph_append(graph_id, history.next_sequence(), &event)
@@ -313,11 +314,11 @@ impl Orchestrator {
 
     async fn graph_edit(
         self: &Arc<Self>,
-        graph_id: henosis_types::GraphUuid,
+        graph_id: types::domain::GraphUuid,
         request_id: RequestUuid,
         expected_generation: u64,
         kind: MutationKind,
-        fingerprint: henosis_types::Fingerprint,
+        hash: blake3::Hash,
         apply: impl FnOnce(&mut Graph) -> Result<(), GraphEditError> + Send,
     ) -> Result<Graph, Fault<OrchestratorError, Error, Error>> {
         let runtime = self.runtime(graph_id).await;
@@ -325,7 +326,7 @@ impl Orchestrator {
         self.ensure_loaded(graph_id, &mut cached).await?;
         let history = cached.as_ref().expect("history was loaded");
         if history.request(request_id).is_some() {
-            return replay_graph(history, request_id, kind, fingerprint);
+            return replay_graph(history, request_id, kind, hash);
         }
         if history.is_retired() {
             return Err(failed_precondition("graph.retired"));
@@ -344,7 +345,7 @@ impl Orchestrator {
             graph: graph.clone(),
             request_id,
             mutation_kind: kind,
-            request_fingerprint: fingerprint,
+            request_hash: hash,
         };
         self.journal
             .graph_append(graph_id, history.next_sequence(), &event)
@@ -375,7 +376,7 @@ impl Orchestrator {
 
     pub(crate) async fn ensure_loaded(
         &self,
-        graph_id: henosis_types::GraphUuid,
+        graph_id: types::domain::GraphUuid,
         cached: &mut Option<GraphHistory>,
     ) -> Result<(), Fault<OrchestratorError, Error, Error>> {
         if cached.is_none() {
@@ -391,7 +392,7 @@ impl Orchestrator {
 
     async fn registry_ensure(
         &self,
-        graph_id: henosis_types::GraphUuid,
+        graph_id: types::domain::GraphUuid,
         request_id: RequestUuid,
         retired: bool,
     ) -> Result<(), Fault<OrchestratorError, Error, Error>> {
@@ -408,12 +409,12 @@ fn replay_graph(
     history: &GraphHistory,
     request_id: RequestUuid,
     kind: MutationKind,
-    fingerprint: henosis_types::Fingerprint,
+    hash: blake3::Hash,
 ) -> Result<Graph, Fault<OrchestratorError, Error, Error>> {
     let receipt = history
         .request(request_id)
         .ok_or_else(|| already_exists("graph.already_exists"))?;
-    if receipt.kind() != kind || receipt.fingerprint() != fingerprint {
+    if receipt.kind() != kind || receipt.hash() != hash {
         return Err(already_exists("request_id.reused"));
     }
     match receipt.response() {
