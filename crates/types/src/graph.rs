@@ -4,7 +4,7 @@ use iddqd::id_upcast;
 use thiserror::Error;
 
 use crate::ComponentSpecHash;
-use crate::GraphId;
+use crate::GraphUuid;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 /// One component-spec identity included in a graph generation.
@@ -37,7 +37,7 @@ impl IdOrdItem for GraphComponent {
 #[derive(Clone, Debug, Eq, PartialEq)]
 /// Unvalidated input used to construct a graph generation.
 pub struct NewGraph {
-    pub id: GraphId,
+    pub id: GraphUuid,
     pub generation: u64,
     pub component_spec_hashes: Vec<ComponentSpecHash>,
 }
@@ -45,7 +45,7 @@ pub struct NewGraph {
 /// A complete accepted world at one graph generation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Graph {
-    id: GraphId,
+    id: GraphUuid,
     generation: u64,
     components: IdOrdMap<GraphComponent>,
 }
@@ -78,7 +78,7 @@ impl Graph {
     }
 
     #[must_use]
-    pub const fn id(&self) -> GraphId {
+    pub const fn id(&self) -> GraphUuid {
         self.id
     }
 

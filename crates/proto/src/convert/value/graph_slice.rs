@@ -6,7 +6,7 @@ use crate::proto::henosis::v1 as pb;
 impl From<&domain::GraphSlice> for pb::GraphSlice {
     fn from(value: &domain::GraphSlice) -> Self {
         Self {
-            graph_id: Some(value.graph_id().to_bytes().to_vec()),
+            graph_id: Some(value.graph_id().into_bytes().to_vec()),
             generation: Some(value.generation()),
             connector: Some(value.connector().to_string()),
             components: value.components().map(Into::into).collect(),

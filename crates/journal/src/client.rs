@@ -1,7 +1,7 @@
 use anyhow::Context;
 use faultline::Error as Fault;
 use faultline::Never;
-use henosis_types::GraphId;
+use henosis_types::GraphUuid;
 use s2_sdk::S2;
 use s2_sdk::S2Stream;
 use s2_sdk::types::AccountEndpoint;
@@ -41,7 +41,7 @@ impl Journal {
 
     pub(super) fn graph_stream(
         &self,
-        graph_id: GraphId,
+        graph_id: GraphUuid,
     ) -> Result<S2Stream, Fault<JournalError, anyhow::Error, anyhow::Error>> {
         graph_id
             .to_string()

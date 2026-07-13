@@ -3,10 +3,10 @@ use buffa::MessageField;
 use henosis_types as domain;
 
 use super::super::ConversionError;
-use super::super::graph_id;
 use super::super::invalid;
 use super::super::missing;
 use super::super::spec_hash;
+use super::super::uuid;
 use crate::proto::henosis::v1 as pb;
 use crate::proto::henosis::v1::__buffa::view;
 
@@ -59,7 +59,7 @@ impl TryFrom<&view::SliceReportView<'_>> for domain::SliceReport {
 
     fn try_from(value: &view::SliceReportView<'_>) -> Result<Self, Self::Error> {
         domain::SliceReport::new(domain::NewSliceReport {
-            graph_id: graph_id(value.graph_id, "report.graph_id")?,
+            graph_id: uuid(value.graph_id, "report.graph_id")?,
             generation: value
                 .generation
                 .ok_or_else(|| missing("report.generation"))?,
@@ -108,7 +108,7 @@ impl TryFrom<&view::SliceReportView<'_>> for domain::SliceReport {
 impl From<&domain::SliceReport> for pb::SliceReport {
     fn from(value: &domain::SliceReport) -> Self {
         Self {
-            graph_id: Some(value.graph_id().to_bytes().to_vec()),
+            graph_id: Some(value.graph_id().into_bytes().to_vec()),
             generation: Some(value.generation()),
             connector: Some(value.connector().to_string()),
             dispositions: value.dispositions().map(Into::into).collect(),

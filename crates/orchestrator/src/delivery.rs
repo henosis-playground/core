@@ -11,7 +11,7 @@ use henosis_proto::reconcile_slice_request;
 use henosis_proto::retire_slice_request;
 use henosis_types::ConnectorKey;
 use henosis_types::GraphHistory;
-use henosis_types::GraphId;
+use henosis_types::GraphUuid;
 use henosis_types::NewConnectorCheckpoint;
 use scoped_futures::ScopedFutureExt;
 use tokio::time::sleep;
@@ -27,7 +27,7 @@ use crate::slice::superseded_components;
 use crate::telemetry;
 
 impl Orchestrator {
-    pub(crate) async fn schedule_delivery(self: &Arc<Self>, graph_id: GraphId) {
+    pub(crate) async fn schedule_delivery(self: &Arc<Self>, graph_id: GraphUuid) {
         let orchestrator = Arc::clone(self);
         tokio::spawn(async move {
             let _ = orchestrator.deliver_graph(graph_id).await;
@@ -43,7 +43,7 @@ impl Orchestrator {
             { telemetry::ERROR_TYPE } = Empty,
         )
     )]
-    async fn deliver_graph(self: &Arc<Self>, graph_id: GraphId) -> anyhow::Result<()> {
+    async fn deliver_graph(self: &Arc<Self>, graph_id: GraphUuid) -> anyhow::Result<()> {
         let result = self.deliver_graph_inner(graph_id).await;
         let span = Span::current();
         match &result {
@@ -58,7 +58,7 @@ impl Orchestrator {
         result
     }
 
-    async fn deliver_graph_inner(self: &Arc<Self>, graph_id: GraphId) -> anyhow::Result<()> {
+    async fn deliver_graph_inner(self: &Arc<Self>, graph_id: GraphUuid) -> anyhow::Result<()> {
         let runtime = self.runtime(graph_id).await;
         let _delivery = runtime.delivery.lock().await;
         let history = {
@@ -113,7 +113,7 @@ impl Orchestrator {
     )]
     async fn deliver_sequence(
         &self,
-        graph_id: GraphId,
+        graph_id: GraphUuid,
         history: &GraphHistory,
         specs: &henosis_types::SpecCatalog,
         sequence: u64,

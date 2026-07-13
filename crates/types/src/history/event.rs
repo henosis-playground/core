@@ -4,32 +4,32 @@ use iddqd::id_upcast;
 use crate::DurableGraphState;
 use crate::Fingerprint;
 use crate::Graph;
-use crate::GraphId;
+use crate::GraphUuid;
 use crate::MutationKind;
 use crate::OutputPublication;
 use crate::RecordedSliceReport;
-use crate::RequestId;
+use crate::RequestUuid;
 
 /// Domain event stored in one graph stream.
 #[derive(Clone, Debug)]
 pub enum GraphEvent {
     Created {
         graph: Graph,
-        request_id: RequestId,
+        request_id: RequestUuid,
         request_fingerprint: Fingerprint,
     },
     GenerationAccepted {
         graph: Graph,
-        request_id: RequestId,
+        request_id: RequestUuid,
         mutation_kind: MutationKind,
         request_fingerprint: Fingerprint,
     },
     OutputsPublished(OutputPublication),
     SliceReported(RecordedSliceReport),
     Retired {
-        graph_id: GraphId,
+        graph_id: GraphUuid,
         last_generation: u64,
-        request_id: RequestId,
+        request_id: RequestUuid,
         request_fingerprint: Fingerprint,
     },
 }
@@ -38,12 +38,12 @@ pub enum GraphEvent {
 #[derive(Clone, Copy, Debug)]
 pub enum RegistryEvent {
     Created {
-        graph_id: GraphId,
-        request_id: RequestId,
+        graph_id: GraphUuid,
+        request_id: RequestUuid,
     },
     Retired {
-        graph_id: GraphId,
-        request_id: RequestId,
+        graph_id: GraphUuid,
+        request_id: RequestUuid,
     },
 }
 

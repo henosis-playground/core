@@ -3,13 +3,13 @@ use thiserror::Error;
 
 use crate::ComponentOutputs;
 use crate::ConnectorKey;
-use crate::GraphId;
+use crate::GraphUuid;
 use crate::RegisteredComponentSpec;
 
 /// Immutable connector-specific view of one graph sequence.
 #[derive(Clone, Debug)]
 pub struct GraphSlice {
-    graph_id: GraphId,
+    graph_id: GraphUuid,
     generation: u64,
     connector: ConnectorKey,
     components: IdOrdMap<RegisteredComponentSpec>,
@@ -19,7 +19,7 @@ pub struct GraphSlice {
 
 impl GraphSlice {
     pub fn new(
-        graph_id: GraphId,
+        graph_id: GraphUuid,
         generation: u64,
         connector: ConnectorKey,
         components: Vec<RegisteredComponentSpec>,
@@ -42,7 +42,7 @@ impl GraphSlice {
     }
 
     #[must_use]
-    pub const fn graph_id(&self) -> GraphId {
+    pub const fn graph_id(&self) -> GraphUuid {
         self.graph_id
     }
 

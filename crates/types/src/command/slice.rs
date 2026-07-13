@@ -1,23 +1,23 @@
 use crate::ConnectorKey;
-use crate::GraphId;
-use crate::PublicationId;
-use crate::RequestId;
+use crate::GraphUuid;
+use crate::PublicationUuid;
+use crate::RequestUuid;
 use crate::SliceReport;
 
 /// Records one connector's report for a graph slice.
 #[derive(Clone, Debug)]
 pub struct ReportSlice {
-    request_id: RequestId,
+    request_id: RequestUuid,
     report: SliceReport,
-    publication_id: Option<PublicationId>,
+    publication_id: Option<PublicationUuid>,
 }
 
 impl ReportSlice {
     #[must_use]
     pub const fn new(
-        request_id: RequestId,
+        request_id: RequestUuid,
         report: SliceReport,
-        publication_id: Option<PublicationId>,
+        publication_id: Option<PublicationUuid>,
     ) -> Self {
         Self {
             request_id,
@@ -27,7 +27,7 @@ impl ReportSlice {
     }
 
     #[must_use]
-    pub const fn request_id(&self) -> RequestId {
+    pub const fn request_id(&self) -> RequestUuid {
         self.request_id
     }
 
@@ -37,7 +37,7 @@ impl ReportSlice {
     }
 
     #[must_use]
-    pub const fn publication_id(&self) -> Option<PublicationId> {
+    pub const fn publication_id(&self) -> Option<PublicationUuid> {
         self.publication_id
     }
 }
@@ -45,14 +45,14 @@ impl ReportSlice {
 /// Fetches an immutable connector slice by durable sequence.
 #[derive(Clone, Debug)]
 pub struct FetchSlice {
-    graph_id: GraphId,
+    graph_id: GraphUuid,
     connector: ConnectorKey,
     sequence: u64,
 }
 
 impl FetchSlice {
     #[must_use]
-    pub const fn new(graph_id: GraphId, connector: ConnectorKey, sequence: u64) -> Self {
+    pub const fn new(graph_id: GraphUuid, connector: ConnectorKey, sequence: u64) -> Self {
         Self {
             graph_id,
             connector,
@@ -61,7 +61,7 @@ impl FetchSlice {
     }
 
     #[must_use]
-    pub const fn graph_id(&self) -> GraphId {
+    pub const fn graph_id(&self) -> GraphUuid {
         self.graph_id
     }
 

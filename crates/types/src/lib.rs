@@ -6,20 +6,24 @@
 
 mod command;
 mod component_spec;
+mod component_spec_hash;
 mod connector;
+mod fingerprint;
 mod graph;
 mod history;
-mod id;
 mod metadata;
 mod output;
 mod report;
+mod uuid;
 
 pub use command::*;
 pub use component_spec::*;
+pub use component_spec_hash::*;
 pub use connector::*;
+pub use fingerprint::*;
 pub use graph::*;
 pub use history::*;
-pub use id::*;
 pub use metadata::*;
 pub use output::*;
 pub use report::*;
+pub use uuid::*;

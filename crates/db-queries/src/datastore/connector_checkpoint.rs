@@ -10,9 +10,10 @@ use henosis_db_model::DbConnectorCheckpoint;
 use henosis_db_schema::connector_checkpoints;
 use henosis_types::ConnectorCheckpoint;
 use henosis_types::ConnectorKey;
-use henosis_types::GraphId;
+use henosis_types::GraphUuid;
 use henosis_types::NewConnectorCheckpoint;
 use thiserror::Error;
+use uuid::Uuid;
 
 use crate::error::diesel_fault;
 use crate::error::invariant;
@@ -30,7 +31,7 @@ pub trait ConnectorCheckpointStore {
     /// Return the current connector delivery checkpoint, if one exists.
     fn connector_checkpoint_get(
         &self,
-        graph_id: GraphId,
+        graph_id: GraphUuid,
         connector: &ConnectorKey,
     ) -> impl Future<
         Output = Result<Option<ConnectorCheckpoint>, Fault<Never, anyhow::Error, anyhow::Error>>,
@@ -49,12 +50,15 @@ pub trait ConnectorCheckpointStore {
 impl ConnectorCheckpointStore for AsyncPgConnection {
     async fn connector_checkpoint_get(
         &self,
-        graph_id: GraphId,
+        graph_id: GraphUuid,
         connector: &ConnectorKey,
     ) -> Result<Option<ConnectorCheckpoint>, Fault<Never, anyhow::Error, anyhow::Error>> {
         let mut connection = self;
         let row = DbConnectorCheckpoint::query()
-            .filter(checkpoint_filter(graph_id.as_uuid(), connector.as_str()))
+            .filter(checkpoint_filter(
+                Uuid::from_bytes(graph_id.into_bytes()),
+                connector.as_str(),
+            ))
             .first::<DbConnectorCheckpoint>(&mut connection)
             .await
             .optional()
@@ -96,7 +100,7 @@ impl ConnectorCheckpointStore for AsyncPgConnection {
 }
 
 #[diesel::dsl::auto_type(no_type_alias)]
-fn checkpoint_filter(graph_id: uuid::Uuid, connector: &str) -> _ {
+fn checkpoint_filter(graph_id: Uuid, connector: &str) -> _ {
     connector_checkpoints::graph_id
         .eq(graph_id)
         .and(connector_checkpoints::connector.eq(connector))

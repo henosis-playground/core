@@ -1,12 +1,10 @@
 use henosis_types as domain;
 
 use super::ConversionError;
-use super::graph_id;
 use super::invalid;
 use super::missing;
-use super::publication_id;
-use super::request_id;
 use super::spec_hash;
+use super::uuid;
 use crate::convert::register_component_spec;
 use crate::proto::henosis::v1::__buffa::view;
 
@@ -24,13 +22,13 @@ impl TryFrom<&view::CreateGraphRequestView<'_>> for domain::CreateGraph {
 
     fn try_from(value: &view::CreateGraphRequestView<'_>) -> Result<Self, Self::Error> {
         Ok(Self::new(
-            graph_id(value.graph_id, "graph_id")?,
+            uuid(value.graph_id, "graph_id")?,
             value
                 .component_spec_hashes
                 .iter()
                 .map(|item| spec_hash(Some(item), "component_spec_hashes"))
                 .collect::<Result<Vec<_>, _>>()?,
-            request_id(value.request_id, "request_id")?,
+            uuid(value.request_id, "request_id")?,
         ))
     }
 }
@@ -40,14 +38,14 @@ impl TryFrom<&view::AddComponentsRequestView<'_>> for domain::AddComponents {
 
     fn try_from(value: &view::AddComponentsRequestView<'_>) -> Result<Self, Self::Error> {
         Ok(Self::new(
-            graph_id(value.graph_id, "graph_id")?,
+            uuid(value.graph_id, "graph_id")?,
             required_generation(value.expected_generation, "expected_generation")?,
             value
                 .component_spec_hashes
                 .iter()
                 .map(|item| spec_hash(Some(item), "component_spec_hashes"))
                 .collect::<Result<Vec<_>, _>>()?,
-            request_id(value.request_id, "request_id")?,
+            uuid(value.request_id, "request_id")?,
         ))
     }
 }
@@ -71,14 +69,14 @@ impl TryFrom<&view::UpdateComponentsRequestView<'_>> for domain::UpdateComponent
 
     fn try_from(value: &view::UpdateComponentsRequestView<'_>) -> Result<Self, Self::Error> {
         Ok(Self::new(
-            graph_id(value.graph_id, "graph_id")?,
+            uuid(value.graph_id, "graph_id")?,
             required_generation(value.expected_generation, "expected_generation")?,
             value
                 .replacements
                 .iter()
                 .map(TryInto::try_into)
                 .collect::<Result<Vec<_>, _>>()?,
-            request_id(value.request_id, "request_id")?,
+            uuid(value.request_id, "request_id")?,
         ))
     }
 }
@@ -88,14 +86,14 @@ impl TryFrom<&view::RemoveComponentsRequestView<'_>> for domain::RemoveComponent
 
     fn try_from(value: &view::RemoveComponentsRequestView<'_>) -> Result<Self, Self::Error> {
         Ok(Self::new(
-            graph_id(value.graph_id, "graph_id")?,
+            uuid(value.graph_id, "graph_id")?,
             required_generation(value.expected_generation, "expected_generation")?,
             value
                 .component_spec_hashes
                 .iter()
                 .map(|item| spec_hash(Some(item), "component_spec_hashes"))
                 .collect::<Result<Vec<_>, _>>()?,
-            request_id(value.request_id, "request_id")?,
+            uuid(value.request_id, "request_id")?,
         ))
     }
 }
@@ -105,9 +103,9 @@ impl TryFrom<&view::RetireGraphRequestView<'_>> for domain::RetireGraph {
 
     fn try_from(value: &view::RetireGraphRequestView<'_>) -> Result<Self, Self::Error> {
         Ok(Self::new(
-            graph_id(value.graph_id, "graph_id")?,
+            uuid(value.graph_id, "graph_id")?,
             required_generation(value.expected_generation, "expected_generation")?,
-            request_id(value.request_id, "request_id")?,
+            uuid(value.request_id, "request_id")?,
         ))
     }
 }
@@ -116,7 +114,7 @@ impl TryFrom<&view::GetGraphRequestView<'_>> for domain::GetGraph {
     type Error = ConversionError;
 
     fn try_from(value: &view::GetGraphRequestView<'_>) -> Result<Self, Self::Error> {
-        Ok(Self::new(graph_id(value.graph_id, "graph_id")?))
+        Ok(Self::new(uuid(value.graph_id, "graph_id")?))
     }
 }
 
@@ -125,7 +123,7 @@ impl TryFrom<&view::GetGraphGenerationRequestView<'_>> for domain::GetGraphGener
 
     fn try_from(value: &view::GetGraphGenerationRequestView<'_>) -> Result<Self, Self::Error> {
         Ok(Self::new(
-            graph_id(value.graph_id, "get_generation.graph_id")?,
+            uuid(value.graph_id, "get_generation.graph_id")?,
             value
                 .generation
                 .filter(|generation| *generation > 0)
@@ -139,7 +137,7 @@ impl TryFrom<&view::WatchGraphRequestView<'_>> for domain::WatchGraph {
 
     fn try_from(value: &view::WatchGraphRequestView<'_>) -> Result<Self, Self::Error> {
         Ok(Self::new(
-            graph_id(value.graph_id, "graph_id")?,
+            uuid(value.graph_id, "graph_id")?,
             value.after_sequence,
         ))
     }
@@ -150,7 +148,7 @@ impl TryFrom<&view::FetchSliceRequestView<'_>> for domain::FetchSlice {
 
     fn try_from(value: &view::FetchSliceRequestView<'_>) -> Result<Self, Self::Error> {
         Ok(Self::new(
-            graph_id(value.graph_id, "graph_id")?,
+            uuid(value.graph_id, "graph_id")?,
             value
                 .connector
                 .ok_or_else(|| missing("connector"))?
@@ -166,7 +164,7 @@ impl TryFrom<&view::ReportSliceRequestView<'_>> for domain::ReportSlice {
 
     fn try_from(value: &view::ReportSliceRequestView<'_>) -> Result<Self, Self::Error> {
         Ok(Self::new(
-            request_id(value.request_id, "request_id")?,
+            uuid(value.request_id, "request_id")?,
             value
                 .report
                 .as_option()
@@ -174,7 +172,7 @@ impl TryFrom<&view::ReportSliceRequestView<'_>> for domain::ReportSlice {
                 .try_into()?,
             value
                 .publication_id
-                .map(|item| publication_id(Some(item), "publication_id"))
+                .map(|item| uuid(Some(item), "publication_id"))
                 .transpose()?,
         ))
     }

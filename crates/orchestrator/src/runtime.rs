@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use henosis_types::GraphHistory;
-use henosis_types::GraphId;
+use henosis_types::GraphUuid;
 use henosis_types::SliceReport;
 use iddqd::IdHashItem;
 use iddqd::IdOrdMap;
@@ -35,12 +35,12 @@ impl GraphRuntime {
 
 #[derive(Clone, Debug)]
 pub(crate) struct GraphRuntimeHandle {
-    graph_id: GraphId,
+    graph_id: GraphUuid,
     runtime: Arc<GraphRuntime>,
 }
 
 impl IdHashItem for GraphRuntimeHandle {
-    type Key<'a> = GraphId;
+    type Key<'a> = GraphUuid;
 
     id_upcast!();
 
@@ -50,7 +50,7 @@ impl IdHashItem for GraphRuntimeHandle {
 }
 
 impl Orchestrator {
-    pub(crate) async fn runtime(&self, graph_id: GraphId) -> Arc<GraphRuntime> {
+    pub(crate) async fn runtime(&self, graph_id: GraphUuid) -> Arc<GraphRuntime> {
         let mut runtimes = self.runtimes.lock().await;
         if let Some(handle) = runtimes.get(&graph_id) {
             return Arc::clone(&handle.runtime);

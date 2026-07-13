@@ -22,7 +22,7 @@ use henosis_types::NewGraph;
 use henosis_types::RegisterComponentSpec;
 use henosis_types::RegisteredComponentSpec;
 use henosis_types::RemoveComponents;
-use henosis_types::RequestId;
+use henosis_types::RequestUuid;
 use henosis_types::RetireGraph;
 use henosis_types::UpdateComponents;
 
@@ -199,7 +199,7 @@ impl Orchestrator {
 
     pub async fn graph_get(
         &self,
-        graph_id: henosis_types::GraphId,
+        graph_id: henosis_types::GraphUuid,
     ) -> Result<GraphState, Fault<OrchestratorError, Error, Error>> {
         let runtime = self.runtime(graph_id).await;
         let mut cached = runtime.history.lock().await;
@@ -258,7 +258,7 @@ impl Orchestrator {
     pub async fn graph_retire(
         self: &Arc<Self>,
         command: RetireGraph,
-    ) -> Result<(henosis_types::GraphId, u64), Fault<OrchestratorError, Error, Error>> {
+    ) -> Result<(henosis_types::GraphUuid, u64), Fault<OrchestratorError, Error, Error>> {
         let fingerprint = retire_fingerprint(command);
         let graph_id = command.graph_id();
         let request_id = command.request_id();
@@ -313,8 +313,8 @@ impl Orchestrator {
 
     async fn graph_edit(
         self: &Arc<Self>,
-        graph_id: henosis_types::GraphId,
-        request_id: RequestId,
+        graph_id: henosis_types::GraphUuid,
+        request_id: RequestUuid,
         expected_generation: u64,
         kind: MutationKind,
         fingerprint: henosis_types::Fingerprint,
@@ -375,7 +375,7 @@ impl Orchestrator {
 
     pub(crate) async fn ensure_loaded(
         &self,
-        graph_id: henosis_types::GraphId,
+        graph_id: henosis_types::GraphUuid,
         cached: &mut Option<GraphHistory>,
     ) -> Result<(), Fault<OrchestratorError, Error, Error>> {
         if cached.is_none() {
@@ -391,8 +391,8 @@ impl Orchestrator {
 
     async fn registry_ensure(
         &self,
-        graph_id: henosis_types::GraphId,
-        request_id: RequestId,
+        graph_id: henosis_types::GraphUuid,
+        request_id: RequestUuid,
         retired: bool,
     ) -> Result<(), Fault<OrchestratorError, Error, Error>> {
         self.journal
@@ -406,7 +406,7 @@ impl Orchestrator {
 
 fn replay_graph(
     history: &GraphHistory,
-    request_id: RequestId,
+    request_id: RequestUuid,
     kind: MutationKind,
     fingerprint: henosis_types::Fingerprint,
 ) -> Result<Graph, Fault<OrchestratorError, Error, Error>> {

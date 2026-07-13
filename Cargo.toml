@@ -31,10 +31,8 @@ faultline = "0.1.0"
 futures = "0.3"
 http = "1"
 iddqd = "0.4.5"
-newtype-uuid = { git = "https://github.com/henosis-playground/newtype-uuid.git", rev = "f20e0aff365e59de7eadd29e769cf0c93990c587", features = [
-  "serde",
-  "v7",
-] }
+newtype-uuid = { version = "1.3.2", features = ["serde", "v7"] }
+newtype-uuid-macros = "0.1.0"
 s2-sdk = "=0.31.9"
 scoped-futures = "0.1.4"
 serde = { version = "1", features = ["derive"] }

@@ -16,7 +16,7 @@ pub struct DbGraphLabel {
 impl From<domain::NewGraphLabel> for DbGraphLabel {
     fn from(value: domain::NewGraphLabel) -> Self {
         Self {
-            graph_id: value.graph_id.as_uuid(),
+            graph_id: Uuid::from_bytes(value.graph_id.into_bytes()),
             display_label: value.display_label,
         }
     }
@@ -25,7 +25,7 @@ impl From<domain::NewGraphLabel> for DbGraphLabel {
 impl From<DbGraphLabel> for domain::GraphLabel {
     fn from(value: DbGraphLabel) -> Self {
         Self::new(
-            domain::GraphId::from_uuid(value.graph_id),
+            domain::GraphUuid::from_bytes(value.graph_id.into_bytes()),
             value.display_label,
         )
     }

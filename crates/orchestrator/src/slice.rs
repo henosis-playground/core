@@ -140,13 +140,13 @@ mod tests {
     use henosis_types::Graph;
     use henosis_types::GraphEvent;
     use henosis_types::GraphHistory;
-    use henosis_types::GraphId;
+    use henosis_types::GraphUuid;
     use henosis_types::MutationKind;
     use henosis_types::NewComponentSpec;
     use henosis_types::NewGraph;
     use henosis_types::OutputPublication;
-    use henosis_types::PublicationId;
-    use henosis_types::RequestId;
+    use henosis_types::PublicationUuid;
+    use henosis_types::RequestUuid;
     use henosis_types::SequencedGraphEvent;
     use henosis_types::SpecCatalog;
 
@@ -178,7 +178,7 @@ mod tests {
         specs.apply(source.clone()).unwrap();
         specs.apply(middle.clone()).unwrap();
         specs.apply(target.clone()).unwrap();
-        let graph_id = GraphId::from_bytes(1_u128.to_be_bytes());
+        let graph_id = GraphUuid::from_bytes(1_u128.to_be_bytes());
         let graph = Graph::new(NewGraph {
             id: graph_id,
             generation: 1,
@@ -191,7 +191,7 @@ mod tests {
                 0,
                 GraphEvent::Created {
                     graph: graph.clone(),
-                    request_id: RequestId::from_bytes(2_u128.to_be_bytes()),
+                    request_id: RequestUuid::from_bytes(2_u128.to_be_bytes()),
                     request_fingerprint: Fingerprint::from_bytes([2; 32]),
                 },
             ))
@@ -207,9 +207,9 @@ mod tests {
                         source.hash(),
                         br#"{"url":"https://example.test"}"#.to_vec(),
                     )],
-                    request_id: RequestId::from_bytes(3_u128.to_be_bytes()),
+                    request_id: RequestUuid::from_bytes(3_u128.to_be_bytes()),
                     request_fingerprint: Fingerprint::from_bytes([3; 32]),
-                    publication_id: PublicationId::from_bytes(4_u128.to_be_bytes()),
+                    publication_id: PublicationUuid::from_bytes(4_u128.to_be_bytes()),
                     publication_fingerprint: Fingerprint::from_bytes([4; 32]),
                 }),
             ))
@@ -229,7 +229,7 @@ mod tests {
                 2,
                 GraphEvent::GenerationAccepted {
                     graph: graph_v2,
-                    request_id: RequestId::from_bytes(5_u128.to_be_bytes()),
+                    request_id: RequestUuid::from_bytes(5_u128.to_be_bytes()),
                     mutation_kind: MutationKind::UpdateComponents,
                     request_fingerprint: Fingerprint::from_bytes([5; 32]),
                 },

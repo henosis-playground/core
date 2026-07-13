@@ -5,10 +5,10 @@ use faultline::Never;
 use futures::StreamExt;
 use henosis_proto::journal::decode_registry_stream;
 use henosis_proto::journal::encode_registry_event;
-use henosis_types::GraphId;
+use henosis_types::GraphUuid;
 use henosis_types::RegistryEvent;
 use henosis_types::RegistryHistory;
-use henosis_types::RequestId;
+use henosis_types::RequestUuid;
 use s2_sdk::S2Stream;
 
 use crate::Journal;
@@ -25,15 +25,15 @@ impl Journal {
     /// List graph identities recorded in the discovery registry.
     pub async fn graph_list(
         &self,
-    ) -> Result<Vec<GraphId>, Fault<Never, anyhow::Error, anyhow::Error>> {
+    ) -> Result<Vec<GraphUuid>, Fault<Never, anyhow::Error, anyhow::Error>> {
         Ok(self.registry_load().await?.graph_ids().collect::<Vec<_>>())
     }
 
     /// Convergently record one graph lifecycle level in the registry.
     pub async fn graph_registry_ensure(
         &self,
-        graph_id: GraphId,
-        request_id: RequestId,
+        graph_id: GraphUuid,
+        request_id: RequestUuid,
         retired: bool,
     ) -> Result<(), Fault<Never, anyhow::Error, anyhow::Error>> {
         for _ in 0..8 {

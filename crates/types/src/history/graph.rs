@@ -11,18 +11,18 @@ use crate::DurableGraphState;
 use crate::Fingerprint;
 use crate::Graph;
 use crate::GraphEvent;
-use crate::GraphId;
 use crate::GraphLifecycle;
+use crate::GraphUuid;
 use crate::MutationKind;
 use crate::MutationReceipt;
 use crate::MutationResponse;
 use crate::OutputPublication;
 use crate::OutputRequestReceipt;
-use crate::PublicationId;
 use crate::PublicationReceipt;
+use crate::PublicationUuid;
 use crate::PublishedSliceOutputs;
 use crate::RecordedSliceReport;
-use crate::RequestId;
+use crate::RequestUuid;
 use crate::SequencedGraphEvent;
 use crate::SequencedGraphState;
 use crate::SliceReport;
@@ -30,7 +30,7 @@ use crate::SliceReport;
 /// Folded state and idempotency indexes for one graph stream.
 #[derive(Clone, Debug)]
 pub struct GraphHistory {
-    graph_id: GraphId,
+    graph_id: GraphUuid,
     tail_sequence: Option<u64>,
     desired_sequence: Option<u64>,
     durable: Option<DurableGraphState>,
@@ -50,7 +50,7 @@ pub enum HistoryError {
     #[error("graph creation is not the first record")]
     CreationOrder,
     #[error("graph event identity does not match its stream")]
-    GraphIdentity,
+    GraphUuidentity,
     #[error("created graph generation is not one")]
     InitialGeneration,
     #[error("graph generation is not consecutive")]
@@ -75,7 +75,7 @@ impl GraphHistory {
     // === Construction and folding ===
 
     #[must_use]
-    pub fn new(graph_id: GraphId) -> Self {
+    pub fn new(graph_id: GraphUuid) -> Self {
         Self {
             graph_id,
             tail_sequence: None,
@@ -210,7 +210,7 @@ impl GraphHistory {
     fn apply_created(
         &mut self,
         graph: Graph,
-        request_id: RequestId,
+        request_id: RequestUuid,
         fingerprint: Fingerprint,
     ) -> Result<(), HistoryError> {
         if self.durable.is_some() || graph.generation() != 1 {
@@ -243,7 +243,7 @@ impl GraphHistory {
     fn apply_generation(
         &mut self,
         graph: Graph,
-        request_id: RequestId,
+        request_id: RequestUuid,
         mutation_kind: MutationKind,
         fingerprint: Fingerprint,
     ) -> Result<(), HistoryError> {
@@ -310,14 +310,14 @@ impl GraphHistory {
 
     fn apply_retired(
         &mut self,
-        graph_id: GraphId,
+        graph_id: GraphUuid,
         last_generation: u64,
-        request_id: RequestId,
+        request_id: RequestUuid,
         fingerprint: Fingerprint,
     ) -> Result<(), HistoryError> {
         self.require_active()?;
         if graph_id != self.graph_id {
-            return Err(HistoryError::GraphIdentity);
+            return Err(HistoryError::GraphUuidentity);
         }
         if last_generation != self.durable()?.graph().generation() {
             return Err(HistoryError::RetirementGeneration);
@@ -341,7 +341,7 @@ impl GraphHistory {
         if graph.id() == self.graph_id {
             Ok(())
         } else {
-            Err(HistoryError::GraphIdentity)
+            Err(HistoryError::GraphUuidentity)
         }
     }
 
@@ -363,7 +363,7 @@ impl GraphHistory {
     // === History queries ===
 
     #[must_use]
-    pub const fn graph_id(&self) -> GraphId {
+    pub const fn graph_id(&self) -> GraphUuid {
         self.graph_id
     }
 
@@ -449,7 +449,7 @@ impl GraphHistory {
     }
 
     #[must_use]
-    pub fn request(&self, request_id: RequestId) -> Option<&MutationReceipt> {
+    pub fn request(&self, request_id: RequestUuid) -> Option<&MutationReceipt> {
         self.requests.get(&request_id)
     }
 
@@ -457,7 +457,7 @@ impl GraphHistory {
     pub fn output_request(
         &self,
         connector: &ConnectorKey,
-        request_id: RequestId,
+        request_id: RequestUuid,
     ) -> Option<OutputRequestReceipt> {
         self.output_requests
             .get(&OutputRequestKey::new(connector, request_id))
@@ -468,7 +468,7 @@ impl GraphHistory {
     pub fn publication(
         &self,
         connector: &ConnectorKey,
-        publication_id: PublicationId,
+        publication_id: PublicationUuid,
     ) -> Option<PublicationReceipt> {
         self.publications
             .get(&PublicationKey::new(connector, publication_id))
@@ -492,7 +492,7 @@ impl GraphHistory {
 }
 
 impl IdHashItem for GraphHistory {
-    type Key<'a> = GraphId;
+    type Key<'a> = GraphUuid;
 
     id_upcast!();
 

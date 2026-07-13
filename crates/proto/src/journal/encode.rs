@@ -36,7 +36,7 @@ pub fn encode_graph_event(event: &domain::GraphEvent) -> Vec<u8> {
             request_fingerprint,
         } => pb::GraphCreatedV1 {
             graph: MessageField::some(graph_to_record(graph)),
-            request_id: Some(request_id.to_bytes().to_vec()),
+            request_id: Some(request_id.into_bytes().to_vec()),
             request_fingerprint: Some(request_fingerprint.as_bytes().to_vec()),
             ..Default::default()
         }
@@ -48,7 +48,7 @@ pub fn encode_graph_event(event: &domain::GraphEvent) -> Vec<u8> {
             request_fingerprint,
         } => pb::GenerationAcceptedV1 {
             graph: MessageField::some(graph_to_record(graph)),
-            request_id: Some(request_id.to_bytes().to_vec()),
+            request_id: Some(request_id.into_bytes().to_vec()),
             mutation_kind: Some(edit_kind(*mutation_kind).into()),
             request_fingerprint: Some(request_fingerprint.as_bytes().to_vec()),
             ..Default::default()
@@ -58,9 +58,9 @@ pub fn encode_graph_event(event: &domain::GraphEvent) -> Vec<u8> {
             generation: Some(value.generation),
             connector: Some(value.connector.to_string()),
             outputs: value.outputs.iter().map(output_to_record).collect(),
-            request_id: Some(value.request_id.to_bytes().to_vec()),
+            request_id: Some(value.request_id.into_bytes().to_vec()),
             request_fingerprint: Some(value.request_fingerprint.as_bytes().to_vec()),
-            publication_id: Some(value.publication_id.to_bytes().to_vec()),
+            publication_id: Some(value.publication_id.into_bytes().to_vec()),
             publication_fingerprint: Some(value.publication_fingerprint.as_bytes().to_vec()),
             input_sequence: Some(value.input_sequence),
             ..Default::default()
@@ -68,11 +68,11 @@ pub fn encode_graph_event(event: &domain::GraphEvent) -> Vec<u8> {
         .into(),
         domain::GraphEvent::SliceReported(value) => pb::SliceReportedV1 {
             report: MessageField::some((&value.report).into()),
-            request_id: Some(value.request_id.to_bytes().to_vec()),
+            request_id: Some(value.request_id.into_bytes().to_vec()),
             request_fingerprint: Some(value.request_fingerprint.as_bytes().to_vec()),
             publication_id: value
                 .publication_id
-                .map(|publication_id| publication_id.to_bytes().to_vec()),
+                .map(|publication_id| publication_id.into_bytes().to_vec()),
             publication_fingerprint: value
                 .publication_fingerprint
                 .map(|fingerprint| fingerprint.as_bytes().to_vec()),
@@ -85,9 +85,9 @@ pub fn encode_graph_event(event: &domain::GraphEvent) -> Vec<u8> {
             request_id,
             request_fingerprint,
         } => pb::GraphRetiredV1 {
-            graph_id: Some(graph_id.to_bytes().to_vec()),
+            graph_id: Some(graph_id.into_bytes().to_vec()),
             last_generation: Some(*last_generation),
-            request_id: Some(request_id.to_bytes().to_vec()),
+            request_id: Some(request_id.into_bytes().to_vec()),
             request_fingerprint: Some(request_fingerprint.as_bytes().to_vec()),
             ..Default::default()
         }
@@ -112,8 +112,8 @@ pub fn encode_registry_event(event: domain::RegistryEvent) -> Vec<u8> {
             graph_id,
             request_id,
         } => pb::RegistryGraphCreatedV1 {
-            graph_id: Some(graph_id.to_bytes().to_vec()),
-            request_id: Some(request_id.to_bytes().to_vec()),
+            graph_id: Some(graph_id.into_bytes().to_vec()),
+            request_id: Some(request_id.into_bytes().to_vec()),
             ..Default::default()
         }
         .into(),
@@ -121,8 +121,8 @@ pub fn encode_registry_event(event: domain::RegistryEvent) -> Vec<u8> {
             graph_id,
             request_id,
         } => pb::RegistryGraphRetiredV1 {
-            graph_id: Some(graph_id.to_bytes().to_vec()),
-            request_id: Some(request_id.to_bytes().to_vec()),
+            graph_id: Some(graph_id.into_bytes().to_vec()),
+            request_id: Some(request_id.into_bytes().to_vec()),
             ..Default::default()
         }
         .into(),
@@ -152,7 +152,7 @@ fn edit_kind(kind: domain::MutationKind) -> pb::GraphMutationKindV1 {
 
 fn graph_to_record(graph: &domain::Graph) -> pb::GraphSnapshotV1 {
     pb::GraphSnapshotV1 {
-        id: Some(graph.id().to_bytes().to_vec()),
+        id: Some(graph.id().into_bytes().to_vec()),
         generation: Some(graph.generation()),
         component_spec_hashes: graph
             .components()

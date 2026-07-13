@@ -3,20 +3,20 @@ use iddqd::IdOrdMap;
 use iddqd::id_upcast;
 use thiserror::Error;
 
-use crate::GraphId;
+use crate::GraphUuid;
 use crate::RegistryEvent;
 use crate::SequencedRegistryEvent;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 /// Discovery-registry state for one graph.
 pub struct RegistryGraph {
-    graph_id: GraphId,
+    graph_id: GraphUuid,
     retired: bool,
 }
 
 impl RegistryGraph {
     #[must_use]
-    pub const fn graph_id(self) -> GraphId {
+    pub const fn graph_id(self) -> GraphUuid {
         self.graph_id
     }
 
@@ -27,7 +27,7 @@ impl RegistryGraph {
 }
 
 impl IdOrdItem for RegistryGraph {
-    type Key<'a> = GraphId;
+    type Key<'a> = GraphUuid;
 
     id_upcast!();
 
@@ -80,12 +80,12 @@ impl RegistryHistory {
         Ok(())
     }
 
-    pub fn graph_ids(&self) -> impl ExactSizeIterator<Item = GraphId> + '_ {
+    pub fn graph_ids(&self) -> impl ExactSizeIterator<Item = GraphUuid> + '_ {
         self.graphs.iter().map(|graph| graph.graph_id)
     }
 
     #[must_use]
-    pub fn retirement(&self, graph_id: GraphId) -> Option<bool> {
+    pub fn retirement(&self, graph_id: GraphUuid) -> Option<bool> {
         self.graphs.get(&graph_id).map(|graph| graph.retired)
     }
 }

@@ -18,7 +18,7 @@ pub struct DbConnectorCheckpoint {
 impl DbConnectorCheckpoint {
     pub fn try_from_new(value: domain::NewConnectorCheckpoint) -> Result<Self, SequenceOutOfRange> {
         Ok(Self {
-            graph_id: value.graph_id.as_uuid(),
+            graph_id: Uuid::from_bytes(value.graph_id.into_bytes()),
             connector: value.connector.to_string(),
             accepted_sequence: i64::try_from(value.accepted_sequence)
                 .map_err(|_| SequenceOutOfRange)?,
@@ -31,7 +31,7 @@ impl TryFrom<DbConnectorCheckpoint> for domain::ConnectorCheckpoint {
 
     fn try_from(value: DbConnectorCheckpoint) -> Result<Self, Self::Error> {
         Ok(Self::new(
-            domain::GraphId::from_uuid(value.graph_id),
+            domain::GraphUuid::from_bytes(value.graph_id.into_bytes()),
             value
                 .connector
                 .parse()

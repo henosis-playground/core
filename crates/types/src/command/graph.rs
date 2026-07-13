@@ -1,22 +1,22 @@
 use crate::ComponentReplacement;
 use crate::ComponentSpecHash;
-use crate::GraphId;
-use crate::RequestId;
+use crate::GraphUuid;
+use crate::RequestUuid;
 
 /// Creates generation one of a graph.
 #[derive(Clone, Debug)]
 pub struct CreateGraph {
-    graph_id: GraphId,
+    graph_id: GraphUuid,
     component_spec_hashes: Vec<ComponentSpecHash>,
-    request_id: RequestId,
+    request_id: RequestUuid,
 }
 
 impl CreateGraph {
     #[must_use]
     pub const fn new(
-        graph_id: GraphId,
+        graph_id: GraphUuid,
         component_spec_hashes: Vec<ComponentSpecHash>,
-        request_id: RequestId,
+        request_id: RequestUuid,
     ) -> Self {
         Self {
             graph_id,
@@ -26,7 +26,7 @@ impl CreateGraph {
     }
 
     #[must_use]
-    pub const fn graph_id(&self) -> GraphId {
+    pub const fn graph_id(&self) -> GraphUuid {
         self.graph_id
     }
 
@@ -36,7 +36,7 @@ impl CreateGraph {
     }
 
     #[must_use]
-    pub const fn request_id(&self) -> RequestId {
+    pub const fn request_id(&self) -> RequestUuid {
         self.request_id
     }
 }
@@ -44,19 +44,19 @@ impl CreateGraph {
 /// Adds component specs to the next graph generation.
 #[derive(Clone, Debug)]
 pub struct AddComponents {
-    graph_id: GraphId,
+    graph_id: GraphUuid,
     expected_generation: u64,
     component_spec_hashes: Vec<ComponentSpecHash>,
-    request_id: RequestId,
+    request_id: RequestUuid,
 }
 
 impl AddComponents {
     #[must_use]
     pub const fn new(
-        graph_id: GraphId,
+        graph_id: GraphUuid,
         expected_generation: u64,
         component_spec_hashes: Vec<ComponentSpecHash>,
-        request_id: RequestId,
+        request_id: RequestUuid,
     ) -> Self {
         Self {
             graph_id,
@@ -67,7 +67,7 @@ impl AddComponents {
     }
 
     #[must_use]
-    pub const fn graph_id(&self) -> GraphId {
+    pub const fn graph_id(&self) -> GraphUuid {
         self.graph_id
     }
 
@@ -82,7 +82,7 @@ impl AddComponents {
     }
 
     #[must_use]
-    pub const fn request_id(&self) -> RequestId {
+    pub const fn request_id(&self) -> RequestUuid {
         self.request_id
     }
 }
@@ -90,19 +90,19 @@ impl AddComponents {
 /// Replaces component specs in the next graph generation.
 #[derive(Clone, Debug)]
 pub struct UpdateComponents {
-    graph_id: GraphId,
+    graph_id: GraphUuid,
     expected_generation: u64,
     replacements: Vec<ComponentReplacement>,
-    request_id: RequestId,
+    request_id: RequestUuid,
 }
 
 impl UpdateComponents {
     #[must_use]
     pub const fn new(
-        graph_id: GraphId,
+        graph_id: GraphUuid,
         expected_generation: u64,
         replacements: Vec<ComponentReplacement>,
-        request_id: RequestId,
+        request_id: RequestUuid,
     ) -> Self {
         Self {
             graph_id,
@@ -113,7 +113,7 @@ impl UpdateComponents {
     }
 
     #[must_use]
-    pub const fn graph_id(&self) -> GraphId {
+    pub const fn graph_id(&self) -> GraphUuid {
         self.graph_id
     }
 
@@ -128,7 +128,7 @@ impl UpdateComponents {
     }
 
     #[must_use]
-    pub const fn request_id(&self) -> RequestId {
+    pub const fn request_id(&self) -> RequestUuid {
         self.request_id
     }
 }
@@ -136,19 +136,19 @@ impl UpdateComponents {
 /// Removes component specs from the next graph generation.
 #[derive(Clone, Debug)]
 pub struct RemoveComponents {
-    graph_id: GraphId,
+    graph_id: GraphUuid,
     expected_generation: u64,
     component_spec_hashes: Vec<ComponentSpecHash>,
-    request_id: RequestId,
+    request_id: RequestUuid,
 }
 
 impl RemoveComponents {
     #[must_use]
     pub const fn new(
-        graph_id: GraphId,
+        graph_id: GraphUuid,
         expected_generation: u64,
         component_spec_hashes: Vec<ComponentSpecHash>,
-        request_id: RequestId,
+        request_id: RequestUuid,
     ) -> Self {
         Self {
             graph_id,
@@ -159,7 +159,7 @@ impl RemoveComponents {
     }
 
     #[must_use]
-    pub const fn graph_id(&self) -> GraphId {
+    pub const fn graph_id(&self) -> GraphUuid {
         self.graph_id
     }
 
@@ -174,7 +174,7 @@ impl RemoveComponents {
     }
 
     #[must_use]
-    pub const fn request_id(&self) -> RequestId {
+    pub const fn request_id(&self) -> RequestUuid {
         self.request_id
     }
 }
@@ -182,14 +182,18 @@ impl RemoveComponents {
 /// Retires an active graph at an expected generation.
 #[derive(Clone, Copy, Debug)]
 pub struct RetireGraph {
-    graph_id: GraphId,
+    graph_id: GraphUuid,
     expected_generation: u64,
-    request_id: RequestId,
+    request_id: RequestUuid,
 }
 
 impl RetireGraph {
     #[must_use]
-    pub const fn new(graph_id: GraphId, expected_generation: u64, request_id: RequestId) -> Self {
+    pub const fn new(
+        graph_id: GraphUuid,
+        expected_generation: u64,
+        request_id: RequestUuid,
+    ) -> Self {
         Self {
             graph_id,
             expected_generation,
@@ -198,7 +202,7 @@ impl RetireGraph {
     }
 
     #[must_use]
-    pub const fn graph_id(self) -> GraphId {
+    pub const fn graph_id(self) -> GraphUuid {
         self.graph_id
     }
 
@@ -208,7 +212,7 @@ impl RetireGraph {
     }
 
     #[must_use]
-    pub const fn request_id(self) -> RequestId {
+    pub const fn request_id(self) -> RequestUuid {
         self.request_id
     }
 }
@@ -216,17 +220,17 @@ impl RetireGraph {
 /// Reads the current state of one graph.
 #[derive(Clone, Copy, Debug)]
 pub struct GetGraph {
-    graph_id: GraphId,
+    graph_id: GraphUuid,
 }
 
 impl GetGraph {
     #[must_use]
-    pub const fn new(graph_id: GraphId) -> Self {
+    pub const fn new(graph_id: GraphUuid) -> Self {
         Self { graph_id }
     }
 
     #[must_use]
-    pub const fn graph_id(self) -> GraphId {
+    pub const fn graph_id(self) -> GraphUuid {
         self.graph_id
     }
 }
@@ -234,13 +238,13 @@ impl GetGraph {
 /// Reads one accepted generation of a graph.
 #[derive(Clone, Copy, Debug)]
 pub struct GetGraphGeneration {
-    graph_id: GraphId,
+    graph_id: GraphUuid,
     generation: u64,
 }
 
 impl GetGraphGeneration {
     #[must_use]
-    pub const fn new(graph_id: GraphId, generation: u64) -> Self {
+    pub const fn new(graph_id: GraphUuid, generation: u64) -> Self {
         Self {
             graph_id,
             generation,
@@ -248,7 +252,7 @@ impl GetGraphGeneration {
     }
 
     #[must_use]
-    pub const fn graph_id(self) -> GraphId {
+    pub const fn graph_id(self) -> GraphUuid {
         self.graph_id
     }
 
@@ -261,13 +265,13 @@ impl GetGraphGeneration {
 /// Watches durable and volatile state changes for one graph.
 #[derive(Clone, Copy, Debug)]
 pub struct WatchGraph {
-    graph_id: GraphId,
+    graph_id: GraphUuid,
     after_sequence: Option<u64>,
 }
 
 impl WatchGraph {
     #[must_use]
-    pub const fn new(graph_id: GraphId, after_sequence: Option<u64>) -> Self {
+    pub const fn new(graph_id: GraphUuid, after_sequence: Option<u64>) -> Self {
         Self {
             graph_id,
             after_sequence,
@@ -275,7 +279,7 @@ impl WatchGraph {
     }
 
     #[must_use]
-    pub const fn graph_id(self) -> GraphId {
+    pub const fn graph_id(self) -> GraphUuid {
         self.graph_id
     }
 

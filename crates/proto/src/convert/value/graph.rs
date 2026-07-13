@@ -1,10 +1,10 @@
 use henosis_types as domain;
 
 use super::super::ConversionError;
-use super::super::graph_id;
 use super::super::invalid;
 use super::super::missing;
 use super::super::spec_hash;
+use super::super::uuid;
 use crate::proto::henosis::v1 as pb;
 use crate::proto::henosis::v1::__buffa::view;
 
@@ -13,7 +13,7 @@ impl TryFrom<&view::GraphView<'_>> for domain::Graph {
 
     fn try_from(value: &view::GraphView<'_>) -> Result<Self, Self::Error> {
         domain::Graph::new(domain::NewGraph {
-            id: graph_id(value.id, "graph.id")?,
+            id: uuid(value.id, "graph.id")?,
             generation: value
                 .generation
                 .ok_or_else(|| missing("graph.generation"))?,
@@ -32,7 +32,7 @@ impl TryFrom<&view::GraphSnapshotV1View<'_>> for domain::Graph {
 
     fn try_from(value: &view::GraphSnapshotV1View<'_>) -> Result<Self, Self::Error> {
         domain::Graph::new(domain::NewGraph {
-            id: graph_id(value.id, "graph.id")?,
+            id: uuid(value.id, "graph.id")?,
             generation: value
                 .generation
                 .ok_or_else(|| missing("graph.generation"))?,
@@ -49,7 +49,7 @@ impl TryFrom<&view::GraphSnapshotV1View<'_>> for domain::Graph {
 impl From<&domain::Graph> for pb::Graph {
     fn from(value: &domain::Graph) -> Self {
         Self {
-            id: Some(value.id().to_bytes().to_vec()),
+            id: Some(value.id().into_bytes().to_vec()),
             generation: Some(value.generation()),
             component_spec_hashes: value
                 .components()

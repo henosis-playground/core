@@ -4,9 +4,9 @@ use iddqd::id_upcast;
 use crate::ConnectorKey;
 use crate::Fingerprint;
 use crate::Graph;
-use crate::GraphId;
-use crate::PublicationId;
-use crate::RequestId;
+use crate::GraphUuid;
+use crate::PublicationUuid;
+use crate::RequestUuid;
 use crate::SliceReport;
 
 /// Graph mutation represented by a request receipt.
@@ -24,7 +24,7 @@ pub enum MutationKind {
 pub enum MutationResponse {
     Graph(Graph),
     Retired {
-        graph_id: GraphId,
+        graph_id: GraphUuid,
         last_generation: u64,
     },
 }
@@ -32,7 +32,7 @@ pub enum MutationResponse {
 /// Durable graph-mutation request identity and response.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MutationReceipt {
-    pub(super) request_id: RequestId,
+    pub(super) request_id: RequestUuid,
     pub(super) kind: MutationKind,
     pub(super) fingerprint: Fingerprint,
     pub(super) response: MutationResponse,
@@ -40,7 +40,7 @@ pub struct MutationReceipt {
 
 impl MutationReceipt {
     #[must_use]
-    pub const fn request_id(&self) -> RequestId {
+    pub const fn request_id(&self) -> RequestUuid {
         self.request_id
     }
 
@@ -61,7 +61,7 @@ impl MutationReceipt {
 }
 
 impl IdHashItem for MutationReceipt {
-    type Key<'a> = RequestId;
+    type Key<'a> = RequestUuid;
 
     id_upcast!();
 
@@ -73,11 +73,11 @@ impl IdHashItem for MutationReceipt {
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct OutputRequestKey<'a> {
     connector: &'a ConnectorKey,
-    request_id: RequestId,
+    request_id: RequestUuid,
 }
 
 impl<'a> OutputRequestKey<'a> {
-    pub const fn new(connector: &'a ConnectorKey, request_id: RequestId) -> Self {
+    pub const fn new(connector: &'a ConnectorKey, request_id: RequestUuid) -> Self {
         Self {
             connector,
             request_id,
@@ -89,7 +89,7 @@ impl<'a> OutputRequestKey<'a> {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OutputRequestReceipt {
     pub(super) connector: ConnectorKey,
-    pub(super) request_id: RequestId,
+    pub(super) request_id: RequestUuid,
     pub(super) fingerprint: Fingerprint,
     pub(super) publication_sequence: Option<u64>,
 }
@@ -120,20 +120,20 @@ impl IdHashItem for OutputRequestReceipt {
 #[derive(Clone, Debug)]
 pub struct RecordedSliceReport {
     pub report: SliceReport,
-    pub request_id: RequestId,
+    pub request_id: RequestUuid,
     pub request_fingerprint: Fingerprint,
-    pub publication_id: Option<PublicationId>,
+    pub publication_id: Option<PublicationUuid>,
     pub publication_fingerprint: Option<Fingerprint>,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct PublicationKey<'a> {
     connector: &'a ConnectorKey,
-    publication_id: PublicationId,
+    publication_id: PublicationUuid,
 }
 
 impl<'a> PublicationKey<'a> {
-    pub const fn new(connector: &'a ConnectorKey, publication_id: PublicationId) -> Self {
+    pub const fn new(connector: &'a ConnectorKey, publication_id: PublicationUuid) -> Self {
         Self {
             connector,
             publication_id,
@@ -145,7 +145,7 @@ impl<'a> PublicationKey<'a> {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PublicationReceipt {
     pub(super) connector: ConnectorKey,
-    pub(super) publication_id: PublicationId,
+    pub(super) publication_id: PublicationUuid,
     pub(super) fingerprint: Fingerprint,
     pub(super) publication_sequence: u64,
 }

@@ -8,12 +8,10 @@ use thiserror::Error;
 use super::WireRecord;
 use crate::ConversionError;
 use crate::convert::fingerprint;
-use crate::convert::graph_id;
 use crate::convert::invalid;
-use crate::convert::publication_id;
 use crate::convert::register_component_spec;
-use crate::convert::request_id;
 use crate::convert::spec_hash;
+use crate::convert::uuid;
 use crate::proto::henosis::v1 as pb;
 use crate::proto::henosis::v1::__buffa::view;
 use crate::proto::henosis::v1::__buffa::view::oneof;
@@ -105,7 +103,7 @@ pub fn decode_graph_record(
                 .ok_or(JournalDecodeError::Missing("created graph"))?
                 .try_into()
                 .map_err(JournalDecodeError::InvalidDomain)?,
-            request_id: request_id(value.request_id, "created.request_id")
+            request_id: uuid(value.request_id, "created.request_id")
                 .map_err(JournalDecodeError::InvalidDomain)?,
             request_fingerprint: fingerprint(
                 value.request_fingerprint,
@@ -133,7 +131,7 @@ pub fn decode_graph_record(
                     .ok_or(JournalDecodeError::Missing("accepted graph"))?
                     .try_into()
                     .map_err(JournalDecodeError::InvalidDomain)?,
-                request_id: request_id(value.request_id, "accepted.request_id")
+                request_id: uuid(value.request_id, "accepted.request_id")
                     .map_err(JournalDecodeError::InvalidDomain)?,
                 mutation_kind,
                 request_fingerprint: fingerprint(
@@ -164,14 +162,14 @@ pub fn decode_graph_record(
                     .map(TryInto::try_into)
                     .collect::<Result<Vec<_>, _>>()
                     .map_err(JournalDecodeError::InvalidDomain)?,
-                request_id: request_id(value.request_id, "output.request_id")
+                request_id: uuid(value.request_id, "output.request_id")
                     .map_err(JournalDecodeError::InvalidDomain)?,
                 request_fingerprint: fingerprint(
                     value.request_fingerprint,
                     "output.request_fingerprint",
                 )
                 .map_err(JournalDecodeError::InvalidDomain)?,
-                publication_id: publication_id(value.publication_id, "output.publication_id")
+                publication_id: uuid(value.publication_id, "output.publication_id")
                     .map_err(JournalDecodeError::InvalidDomain)?,
                 publication_fingerprint: fingerprint(
                     value.publication_fingerprint,
@@ -188,7 +186,7 @@ pub fn decode_graph_record(
                     .ok_or(JournalDecodeError::Missing("slice report"))?
                     .try_into()
                     .map_err(JournalDecodeError::InvalidDomain)?,
-                request_id: request_id(value.request_id, "report.request_id")
+                request_id: uuid(value.request_id, "report.request_id")
                     .map_err(JournalDecodeError::InvalidDomain)?,
                 request_fingerprint: fingerprint(
                     value.request_fingerprint,
@@ -197,7 +195,7 @@ pub fn decode_graph_record(
                 .map_err(JournalDecodeError::InvalidDomain)?,
                 publication_id: value
                     .publication_id
-                    .map(|value| publication_id(Some(value), "report.publication_id"))
+                    .map(|value| uuid(Some(value), "report.publication_id"))
                     .transpose()
                     .map_err(JournalDecodeError::InvalidDomain)?,
                 publication_fingerprint: value
@@ -208,12 +206,12 @@ pub fn decode_graph_record(
             })
         }
         oneof::graph_stream_record_v1::Event::GraphRetired(value) => domain::GraphEvent::Retired {
-            graph_id: graph_id(value.graph_id, "retired.graph_id")
+            graph_id: uuid(value.graph_id, "retired.graph_id")
                 .map_err(JournalDecodeError::InvalidDomain)?,
             last_generation: value
                 .last_generation
                 .ok_or(JournalDecodeError::Missing("retired generation"))?,
-            request_id: request_id(value.request_id, "retired.request_id")
+            request_id: uuid(value.request_id, "retired.request_id")
                 .map_err(JournalDecodeError::InvalidDomain)?,
             request_fingerprint: fingerprint(
                 value.request_fingerprint,
@@ -242,17 +240,17 @@ pub fn decode_registry_record(
     {
         oneof::registry_stream_record_v1::Event::GraphCreated(value) => {
             domain::RegistryEvent::Created {
-                graph_id: graph_id(value.graph_id, "registry.graph_id")
+                graph_id: uuid(value.graph_id, "registry.graph_id")
                     .map_err(JournalDecodeError::InvalidDomain)?,
-                request_id: request_id(value.request_id, "registry.request_id")
+                request_id: uuid(value.request_id, "registry.request_id")
                     .map_err(JournalDecodeError::InvalidDomain)?,
             }
         }
         oneof::registry_stream_record_v1::Event::GraphRetired(value) => {
             domain::RegistryEvent::Retired {
-                graph_id: graph_id(value.graph_id, "registry.graph_id")
+                graph_id: uuid(value.graph_id, "registry.graph_id")
                     .map_err(JournalDecodeError::InvalidDomain)?,
-                request_id: request_id(value.request_id, "registry.request_id")
+                request_id: uuid(value.request_id, "registry.request_id")
                     .map_err(JournalDecodeError::InvalidDomain)?,
             }
         }

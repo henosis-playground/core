@@ -6,7 +6,7 @@ use henosis_proto::journal::decode_graph_stream;
 use henosis_proto::journal::encode_graph_event;
 use henosis_types::GraphEvent;
 use henosis_types::GraphHistory;
-use henosis_types::GraphId;
+use henosis_types::GraphUuid;
 
 use crate::Journal;
 use crate::JournalError;
@@ -21,7 +21,7 @@ impl Journal {
     /// Load and fold one graph stream through its current head.
     pub async fn graph_load(
         &self,
-        graph_id: GraphId,
+        graph_id: GraphUuid,
     ) -> Result<GraphHistory, Fault<JournalError, anyhow::Error, anyhow::Error>> {
         let stream = self.graph_stream(graph_id)?;
         let tail = stream
@@ -49,7 +49,7 @@ impl Journal {
     /// Compare-and-append one already-validated domain event.
     pub async fn graph_append(
         &self,
-        graph_id: GraphId,
+        graph_id: GraphUuid,
         expected_tail: u64,
         event: &GraphEvent,
     ) -> Result<u64, Fault<JournalError, anyhow::Error, anyhow::Error>> {

@@ -1,8 +1,8 @@
 use crate::ComponentSpecHash;
 use crate::ConnectorKey;
 use crate::Fingerprint;
-use crate::PublicationId;
-use crate::RequestId;
+use crate::PublicationUuid;
+use crate::RequestUuid;
 use iddqd::IdOrdItem;
 use iddqd::id_upcast;
 
@@ -50,7 +50,7 @@ pub struct PublishedSliceOutputs {
     connector: ConnectorKey,
     outputs: Vec<ComponentOutputs>,
     publication_sequence: u64,
-    publication_id: PublicationId,
+    publication_id: PublicationUuid,
     input_sequence: u64,
 }
 
@@ -62,7 +62,7 @@ impl PublishedSliceOutputs {
         connector: ConnectorKey,
         outputs: Vec<ComponentOutputs>,
         publication_sequence: u64,
-        publication_id: PublicationId,
+        publication_id: PublicationUuid,
         input_sequence: u64,
     ) -> Self {
         Self {
@@ -96,7 +96,7 @@ impl PublishedSliceOutputs {
     }
 
     #[must_use]
-    pub const fn publication_id(&self) -> PublicationId {
+    pub const fn publication_id(&self) -> PublicationUuid {
         self.publication_id
     }
 
@@ -123,8 +123,8 @@ pub struct OutputPublication {
     pub input_sequence: u64,
     pub connector: ConnectorKey,
     pub outputs: Vec<ComponentOutputs>,
-    pub request_id: RequestId,
+    pub request_id: RequestUuid,
     pub request_fingerprint: Fingerprint,
-    pub publication_id: PublicationId,
+    pub publication_id: PublicationUuid,
     pub publication_fingerprint: Fingerprint,
 }

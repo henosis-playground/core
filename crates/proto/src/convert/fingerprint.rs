@@ -18,7 +18,7 @@ pub fn create_fingerprint(command: &domain::CreateGraph) -> domain::Fingerprint 
     digest(
         b"create",
         &pb::CreateGraphRequest {
-            graph_id: Some(command.graph_id().to_bytes().to_vec()),
+            graph_id: Some(command.graph_id().into_bytes().to_vec()),
             component_spec_hashes: command
                 .component_spec_hashes()
                 .iter()
@@ -34,7 +34,7 @@ pub fn add_fingerprint(command: &domain::AddComponents) -> domain::Fingerprint {
     digest(
         b"add",
         &pb::AddComponentsRequest {
-            graph_id: Some(command.graph_id().to_bytes().to_vec()),
+            graph_id: Some(command.graph_id().into_bytes().to_vec()),
             expected_generation: Some(command.expected_generation()),
             component_spec_hashes: command
                 .component_spec_hashes()
@@ -53,7 +53,7 @@ pub fn update_fingerprint(command: &domain::UpdateComponents) -> domain::Fingerp
     digest(
         b"update",
         &pb::UpdateComponentsRequest {
-            graph_id: Some(command.graph_id().to_bytes().to_vec()),
+            graph_id: Some(command.graph_id().into_bytes().to_vec()),
             expected_generation: Some(command.expected_generation()),
             replacements: replacements
                 .into_iter()
@@ -73,7 +73,7 @@ pub fn remove_fingerprint(command: &domain::RemoveComponents) -> domain::Fingerp
     digest(
         b"remove",
         &pb::RemoveComponentsRequest {
-            graph_id: Some(command.graph_id().to_bytes().to_vec()),
+            graph_id: Some(command.graph_id().into_bytes().to_vec()),
             expected_generation: Some(command.expected_generation()),
             component_spec_hashes: command
                 .component_spec_hashes()
@@ -90,7 +90,7 @@ pub fn retire_fingerprint(command: domain::RetireGraph) -> domain::Fingerprint {
     digest(
         b"retire",
         &pb::RetireGraphRequest {
-            graph_id: Some(command.graph_id().to_bytes().to_vec()),
+            graph_id: Some(command.graph_id().into_bytes().to_vec()),
             expected_generation: Some(command.expected_generation()),
             ..Default::default()
         },
@@ -105,7 +105,7 @@ pub fn report_fingerprint(command: &domain::ReportSlice) -> domain::Fingerprint 
             report: MessageField::some(command.report().into()),
             publication_id: command
                 .publication_id()
-                .map(|item| item.to_bytes().to_vec()),
+                .map(|item| item.into_bytes().to_vec()),
             ..Default::default()
         },
     )
@@ -115,7 +115,7 @@ pub fn report_fingerprint(command: &domain::ReportSlice) -> domain::Fingerprint 
 pub fn publication_fingerprint(report: &domain::SliceReport) -> domain::Fingerprint {
     let mut hasher = Hasher::new();
     hasher.update(b"publication\0");
-    hasher.update(&report.graph_id().to_bytes());
+    hasher.update(&report.graph_id().into_bytes());
     hasher.update(&report.generation().to_be_bytes());
     hasher.update(report.connector().as_str().as_bytes());
     for output in report.outputs() {

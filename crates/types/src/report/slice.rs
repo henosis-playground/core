@@ -7,7 +7,7 @@ use crate::ComponentOutputs;
 use crate::ComponentSpecHash;
 use crate::ConnectorKey;
 use crate::Diagnostic;
-use crate::GraphId;
+use crate::GraphUuid;
 
 /// Revision and URI published by a connector.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -80,7 +80,7 @@ impl IdOrdItem for ComponentDisposition {
 /// Validated connector report for one graph generation and input sequence.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SliceReport {
-    graph_id: GraphId,
+    graph_id: GraphUuid,
     generation: u64,
     connector: ConnectorKey,
     dispositions: IdOrdMap<ComponentDisposition>,
@@ -93,7 +93,7 @@ pub struct SliceReport {
 /// Unvalidated input used to construct a slice report.
 #[derive(Clone, Debug)]
 pub struct NewSliceReport {
-    pub graph_id: GraphId,
+    pub graph_id: GraphUuid,
     pub generation: u64,
     pub connector: ConnectorKey,
     pub dispositions: Vec<ComponentDisposition>,
@@ -136,7 +136,7 @@ impl SliceReport {
     }
 
     #[must_use]
-    pub const fn graph_id(&self) -> GraphId {
+    pub const fn graph_id(&self) -> GraphUuid {
         self.graph_id
     }
 

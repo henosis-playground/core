@@ -224,7 +224,7 @@ impl GraphService for Api {
             .await
             .map_err(|error| connect_error(error, ErrorSurface::Edit))?;
         Ok(Response::new(pb::RetireGraphResponse {
-            graph_id: Some(graph_id.to_bytes().to_vec()),
+            graph_id: Some(graph_id.into_bytes().to_vec()),
             last_generation: Some(last_generation),
             ..Default::default()
         }))

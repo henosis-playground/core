@@ -1,9 +1,9 @@
-use crate::GraphId;
+use crate::GraphUuid;
 
 /// User-facing graph label loaded from the datastore.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GraphLabel {
-    graph_id: GraphId,
+    graph_id: GraphUuid,
     display_label: String,
 }
 
@@ -11,7 +11,7 @@ impl GraphLabel {
     /// Construct a value loaded and validated by the datastore boundary.
     #[doc(hidden)]
     #[must_use]
-    pub const fn new(graph_id: GraphId, display_label: String) -> Self {
+    pub const fn new(graph_id: GraphUuid, display_label: String) -> Self {
         Self {
             graph_id,
             display_label,
@@ -19,7 +19,7 @@ impl GraphLabel {
     }
 
     #[must_use]
-    pub const fn graph_id(&self) -> GraphId {
+    pub const fn graph_id(&self) -> GraphUuid {
         self.graph_id
     }
 
@@ -32,6 +32,6 @@ impl GraphLabel {
 /// Input used to create or replace a graph label.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NewGraphLabel {
-    pub graph_id: GraphId,
+    pub graph_id: GraphUuid,
     pub display_label: String,
 }

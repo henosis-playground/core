@@ -10,7 +10,7 @@ impl From<&domain::PublishedSliceOutputs> for pb::PublishedSliceOutputs {
             connector: Some(value.connector().to_string()),
             outputs: value.outputs().iter().map(Into::into).collect(),
             publication_sequence: Some(value.publication_sequence()),
-            publication_id: Some(value.publication_id().to_bytes().to_vec()),
+            publication_id: Some(value.publication_id().into_bytes().to_vec()),
             input_sequence: Some(value.input_sequence()),
             ..Self::default()
         }
