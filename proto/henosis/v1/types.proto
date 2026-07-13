@@ -2,18 +2,13 @@ edition = "2023";
 
 package henosis.v1;
 
-import "buf/validate/validate.proto";
-
 // UUID fields are raw 16-byte UUIDs on the protobuf wire. Content hashes are raw 32-byte BLAKE3
 // digests. Human-facing adapters render UUIDs as TypeIDs and hashes as lowercase hexadecimal.
 
 message Diagnostic {
-  string code = 1 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).string.min_len = 1
-  ];
+  string code = 1;
   string message = 2;
-  bytes component_spec_hash = 3 [(buf.validate.field).bytes.len = 32];
+  bytes component_spec_hash = 3;
   string pointer = 4;
   string help = 5;
   DiagnosticSeverity severity = 6;
@@ -31,23 +26,14 @@ enum ContractFailureKind {
 // Lossless renderer evidence. Presentation adapters, rather than connectors, turn this into the
 // D20 error/note/help form.
 message ContractFailureDetail {
-  string consumer = 1 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).string.min_len = 1
-  ];
-  string producer = 2 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).string.min_len = 1
-  ];
+  string consumer = 1;
+  string producer = 2;
   string pinned_sha = 3;
   string resolved_sha = 4;
   bytes outputs_schema_at_pinned_json = 5;
   bytes outputs_schema_at_resolved_json = 6;
-  repeated string consumed_paths = 7 [(buf.validate.field).repeated.unique = true];
-  ContractFailureKind kind = 8 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).enum.defined_only = true
-  ];
+  repeated string consumed_paths = 7;
+  ContractFailureKind kind = 8;
   string excerpt = 9;
   string source_url = 10;
 }
@@ -62,80 +48,38 @@ enum DiagnosticSeverity {
 // ComponentSpec is immutable connector input. Its identity is the BLAKE3 hash of its canonical
 // protobuf encoding. Source provenance belongs inside connector_context, not core vocabulary.
 message ComponentSpec {
-  string name = 1 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).string.min_len = 1
-  ];
-  string connector = 2 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).string.min_len = 1
-  ];
+  string name = 1;
+  string connector = 2;
   bytes outputs_schema = 3;
-  repeated bytes depends_on = 4 [(buf.validate.field).repeated = {
-    unique: true
-    items: {bytes: {len: 32}}
-  }];
+  repeated bytes depends_on = 4;
   bytes connector_context = 5;
 }
 
 message RegisteredComponentSpec {
-  bytes hash = 1 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).bytes.len = 32
-  ];
-  ComponentSpec spec = 2 [(buf.validate.field).required = true];
+  bytes hash = 1;
+  ComponentSpec spec = 2;
 }
 
 // Graph is one accepted, complete world listing. Component bodies are resolved through the spec
 // stream; generations contain only their content-addressed identities.
 message Graph {
-  option (buf.validate.message).cel = {
-    id: "graph.component_spec_hashes.unique"
-    message: "component spec hashes must be unique"
-    expression: "this.component_spec_hashes.unique()"
-  };
-
-  bytes id = 1 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).bytes.len = 16
-  ];
-  uint64 generation = 2 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).uint64.gt = 0
-  ];
-  repeated bytes component_spec_hashes = 3 [(buf.validate.field).repeated.items.bytes.len = 32];
+  bytes id = 1;
+  uint64 generation = 2;
+  repeated bytes component_spec_hashes = 3;
 }
 
 message ComponentOutputs {
-  bytes component_spec_hash = 1 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).bytes.len = 32
-  ];
+  bytes component_spec_hash = 1;
   bytes values_json = 2;
 }
 
 message PublishedSliceOutputs {
-  option (buf.validate.message).cel = {
-    id: "published_slice_outputs.outputs.unique"
-    message: "output component spec hashes must be unique"
-    expression: "this.outputs.map(o, o.component_spec_hash).unique()"
-  };
-
-  uint64 generation = 1 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).uint64.gt = 0
-  ];
-  string connector = 2 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).string.min_len = 1
-  ];
+  uint64 generation = 1;
+  string connector = 2;
   repeated ComponentOutputs outputs = 3;
-  uint64 publication_sequence = 4 [(buf.validate.field).required = true];
-  bytes publication_id = 5 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).bytes.len = 16
-  ];
-  uint64 input_sequence = 6 [(buf.validate.field).required = true];
+  uint64 publication_sequence = 4;
+  bytes publication_id = 5;
+  uint64 input_sequence = 6;
 }
 
 enum ComponentDispositionKind {
@@ -147,55 +91,26 @@ enum ComponentDispositionKind {
 }
 
 message ComponentDisposition {
-  bytes component_spec_hash = 1 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).bytes.len = 32
-  ];
+  bytes component_spec_hash = 1;
   ComponentDispositionKind kind = 2;
 }
 
 message SliceReport {
-  option (buf.validate.message).cel = {
-    id: "slice_report.dispositions.unique"
-    message: "disposition component spec hashes must be unique"
-    expression: "this.dispositions.map(d, d.component_spec_hash).unique()"
-  };
-  option (buf.validate.message).cel = {
-    id: "slice_report.outputs.unique"
-    message: "output component spec hashes must be unique"
-    expression: "this.outputs.map(o, o.component_spec_hash).unique()"
-  };
-
-  bytes graph_id = 1 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).bytes.len = 16
-  ];
-  uint64 generation = 2 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).uint64.gt = 0
-  ];
-  string connector = 3 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).string.min_len = 1
-  ];
+  bytes graph_id = 1;
+  uint64 generation = 2;
+  string connector = 3;
   repeated ComponentDisposition dispositions = 4;
   repeated ComponentOutputs outputs = 5;
   repeated Diagnostic diagnostics = 6;
-  uint64 sequence = 7 [(buf.validate.field).required = true];
+  uint64 sequence = 7;
   PublicationEvidence publication = 8;
 }
 
 // Connector-owned immutable publication evidence. `uri` addresses the exact revision, never a
 // moving branch.
 message PublicationEvidence {
-  string revision = 1 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).string.min_len = 1
-  ];
-  string uri = 2 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).string.uri = true
-  ];
+  string revision = 1;
+  string uri = 2;
 }
 
 enum GraphLifecycle {

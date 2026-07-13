@@ -2,7 +2,6 @@ edition = "2023";
 
 package henosis.v1;
 
-import "buf/validate/validate.proto";
 import "henosis/v1/types.proto";
 
 service GraphService {
@@ -38,26 +37,17 @@ service GraphService {
 }
 
 message RegisterComponentSpecRequest {
-  ComponentSpec spec = 1 [(buf.validate.field).required = true];
+  ComponentSpec spec = 1;
 }
 
 message RegisterComponentSpecResponse {
-  RegisteredComponentSpec component = 1 [(buf.validate.field).required = true];
+  RegisteredComponentSpec component = 1;
 }
 
 message CreateGraphRequest {
-  bytes graph_id = 1 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).bytes.len = 16
-  ];
-  repeated bytes component_spec_hashes = 2 [(buf.validate.field).repeated = {
-    unique: true
-    items: {bytes: {len: 32}}
-  }];
-  bytes request_id = 3 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).bytes.len = 16
-  ];
+  bytes graph_id = 1;
+  repeated bytes component_spec_hashes = 2;
+  bytes request_id = 3;
 }
 
 message CreateGraphResponse {
@@ -65,22 +55,10 @@ message CreateGraphResponse {
 }
 
 message AddComponentsRequest {
-  bytes graph_id = 1 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).bytes.len = 16
-  ];
-  uint64 expected_generation = 2 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).uint64.gt = 0
-  ];
-  repeated bytes component_spec_hashes = 3 [(buf.validate.field).repeated = {
-    unique: true
-    items: {bytes: {len: 32}}
-  }];
-  bytes request_id = 4 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).bytes.len = 16
-  ];
+  bytes graph_id = 1;
+  uint64 expected_generation = 2;
+  repeated bytes component_spec_hashes = 3;
+  bytes request_id = 4;
 }
 
 message AddComponentsResponse {
@@ -88,30 +66,15 @@ message AddComponentsResponse {
 }
 
 message ComponentReplacement {
-  bytes current_spec_hash = 1 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).bytes.len = 32
-  ];
-  bytes replacement_spec_hash = 2 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).bytes.len = 32
-  ];
+  bytes current_spec_hash = 1;
+  bytes replacement_spec_hash = 2;
 }
 
 message UpdateComponentsRequest {
-  bytes graph_id = 1 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).bytes.len = 16
-  ];
-  uint64 expected_generation = 2 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).uint64.gt = 0
-  ];
+  bytes graph_id = 1;
+  uint64 expected_generation = 2;
   repeated ComponentReplacement replacements = 3;
-  bytes request_id = 4 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).bytes.len = 16
-  ];
+  bytes request_id = 4;
 }
 
 message UpdateComponentsResponse {
@@ -119,22 +82,10 @@ message UpdateComponentsResponse {
 }
 
 message RemoveComponentsRequest {
-  bytes graph_id = 1 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).bytes.len = 16
-  ];
-  uint64 expected_generation = 2 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).uint64.gt = 0
-  ];
-  repeated bytes component_spec_hashes = 3 [(buf.validate.field).repeated = {
-    unique: true
-    items: {bytes: {len: 32}}
-  }];
-  bytes request_id = 4 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).bytes.len = 16
-  ];
+  bytes graph_id = 1;
+  uint64 expected_generation = 2;
+  repeated bytes component_spec_hashes = 3;
+  bytes request_id = 4;
 }
 
 message RemoveComponentsResponse {
@@ -147,10 +98,7 @@ message EditRejectionDetails {
 }
 
 message GetGraphRequest {
-  bytes graph_id = 1 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).bytes.len = 16
-  ];
+  bytes graph_id = 1;
 }
 
 message GetGraphResponse {
@@ -158,54 +106,30 @@ message GetGraphResponse {
 }
 
 message GetGraphGenerationRequest {
-  bytes graph_id = 1 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).bytes.len = 16
-  ];
-  uint64 generation = 2 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).uint64.gt = 0
-  ];
+  bytes graph_id = 1;
+  uint64 generation = 2;
 }
 
 message GetGraphGenerationResponse {
-  GraphState state = 1 [(buf.validate.field).required = true];
+  GraphState state = 1;
   repeated RegisteredComponentSpec components = 2;
-  GraphLifecycle current_lifecycle = 3 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).enum.defined_only = true
-  ];
+  GraphLifecycle current_lifecycle = 3;
   uint64 last_published_generation = 4;
 }
 
 message RetireGraphRequest {
-  bytes graph_id = 1 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).bytes.len = 16
-  ];
-  uint64 expected_generation = 2 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).uint64.gt = 0
-  ];
-  bytes request_id = 3 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).bytes.len = 16
-  ];
+  bytes graph_id = 1;
+  uint64 expected_generation = 2;
+  bytes request_id = 3;
 }
 
 message RetireGraphResponse {
-  bytes graph_id = 1 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).bytes.len = 16
-  ];
-  uint64 last_generation = 2 [(buf.validate.field).uint64.gt = 0];
+  bytes graph_id = 1;
+  uint64 last_generation = 2;
 }
 
 message WatchGraphRequest {
-  bytes graph_id = 1 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).bytes.len = 16
-  ];
+  bytes graph_id = 1;
   uint64 after_sequence = 2;
 }
 

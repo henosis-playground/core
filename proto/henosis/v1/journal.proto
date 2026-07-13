@@ -2,16 +2,12 @@ edition = "2023";
 
 package henosis.v1;
 
-import "buf/validate/validate.proto";
 import "henosis/v1/types.proto";
 
 // Every durable envelope is fail-closed: unknown versions and unknown/unset events stop parsing.
 
 message SpecStreamEnvelope {
-  uint32 format_version = 1 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).uint32.const = 1
-  ];
+  uint32 format_version = 1;
   oneof version {
     SpecStreamRecordV1 v1 = 2;
   }
@@ -24,35 +20,20 @@ message SpecStreamRecordV1 {
 }
 
 message ComponentSpecRegisteredV1 {
-  bytes hash = 1 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).bytes.len = 32
-  ];
-  ComponentSpecRecordV1 spec = 2 [(buf.validate.field).required = true];
+  bytes hash = 1;
+  ComponentSpecRecordV1 spec = 2;
 }
 
 message ComponentSpecRecordV1 {
-  string name = 1 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).string.min_len = 1
-  ];
-  string connector = 2 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).string.min_len = 1
-  ];
+  string name = 1;
+  string connector = 2;
   bytes outputs_schema = 3;
-  repeated bytes depends_on = 4 [(buf.validate.field).repeated = {
-    unique: true
-    items: {bytes: {len: 32}}
-  }];
+  repeated bytes depends_on = 4;
   bytes connector_context = 5;
 }
 
 message GraphStreamEnvelope {
-  uint32 format_version = 1 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).uint32.const = 1
-  ];
+  uint32 format_version = 1;
   oneof version {
     GraphStreamRecordV1 v1 = 2;
   }
@@ -69,29 +50,17 @@ message GraphStreamRecordV1 {
 }
 
 message SliceReportedV1 {
-  SliceReport report = 1 [(buf.validate.field).required = true];
-  bytes request_id = 2 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).bytes.len = 16
-  ];
-  bytes request_fingerprint = 3 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).bytes.len = 32
-  ];
-  bytes publication_id = 4 [(buf.validate.field).bytes.len = 16];
-  bytes publication_fingerprint = 5 [(buf.validate.field).bytes.len = 32];
+  SliceReport report = 1;
+  bytes request_id = 2;
+  bytes request_fingerprint = 3;
+  bytes publication_id = 4;
+  bytes publication_fingerprint = 5;
 }
 
 message GraphCreatedV1 {
-  GraphSnapshotV1 graph = 1 [(buf.validate.field).required = true];
-  bytes request_id = 2 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).bytes.len = 16
-  ];
-  bytes request_fingerprint = 3 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).bytes.len = 32
-  ];
+  GraphSnapshotV1 graph = 1;
+  bytes request_id = 2;
+  bytes request_fingerprint = 3;
 }
 
 enum GraphMutationKindV1 {
@@ -102,97 +71,43 @@ enum GraphMutationKindV1 {
 }
 
 message GenerationAcceptedV1 {
-  GraphSnapshotV1 graph = 1 [(buf.validate.field).required = true];
-  bytes request_id = 2 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).bytes.len = 16
-  ];
-  GraphMutationKindV1 mutation_kind = 3 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).enum.defined_only = true
-  ];
-  bytes request_fingerprint = 4 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).bytes.len = 32
-  ];
+  GraphSnapshotV1 graph = 1;
+  bytes request_id = 2;
+  GraphMutationKindV1 mutation_kind = 3;
+  bytes request_fingerprint = 4;
 }
 
 message OutputsPublishedV1 {
-  uint64 generation = 1 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).uint64.gt = 0
-  ];
-  string connector = 2 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).string.min_len = 1
-  ];
+  uint64 generation = 1;
+  string connector = 2;
   repeated ComponentOutputsRecordV1 outputs = 3;
-  bytes request_id = 4 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).bytes.len = 16
-  ];
-  bytes request_fingerprint = 5 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).bytes.len = 32
-  ];
-  bytes publication_id = 6 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).bytes.len = 16
-  ];
-  bytes publication_fingerprint = 7 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).bytes.len = 32
-  ];
-  uint64 input_sequence = 8 [(buf.validate.field).required = true];
+  bytes request_id = 4;
+  bytes request_fingerprint = 5;
+  bytes publication_id = 6;
+  bytes publication_fingerprint = 7;
+  uint64 input_sequence = 8;
 }
 
 message GraphRetiredV1 {
-  bytes graph_id = 1 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).bytes.len = 16
-  ];
-  uint64 last_generation = 2 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).uint64.gt = 0
-  ];
-  bytes request_id = 3 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).bytes.len = 16
-  ];
-  bytes request_fingerprint = 4 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).bytes.len = 32
-  ];
+  bytes graph_id = 1;
+  uint64 last_generation = 2;
+  bytes request_id = 3;
+  bytes request_fingerprint = 4;
 }
 
 message GraphSnapshotV1 {
-  bytes id = 1 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).bytes.len = 16
-  ];
-  uint64 generation = 2 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).uint64.gt = 0
-  ];
-  repeated bytes component_spec_hashes = 3 [(buf.validate.field).repeated = {
-    unique: true
-    items: {bytes: {len: 32}}
-  }];
+  bytes id = 1;
+  uint64 generation = 2;
+  repeated bytes component_spec_hashes = 3;
 }
 
 message ComponentOutputsRecordV1 {
-  bytes component_spec_hash = 1 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).bytes.len = 32
-  ];
+  bytes component_spec_hash = 1;
   bytes values_json = 2;
 }
 
 message RegistryStreamEnvelope {
-  uint32 format_version = 1 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).uint32.const = 1
-  ];
+  uint32 format_version = 1;
   oneof version {
     RegistryStreamRecordV1 v1 = 2;
   }
@@ -206,23 +121,11 @@ message RegistryStreamRecordV1 {
 }
 
 message RegistryGraphCreatedV1 {
-  bytes graph_id = 1 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).bytes.len = 16
-  ];
-  bytes request_id = 2 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).bytes.len = 16
-  ];
+  bytes graph_id = 1;
+  bytes request_id = 2;
 }
 
 message RegistryGraphRetiredV1 {
-  bytes graph_id = 1 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).bytes.len = 16
-  ];
-  bytes request_id = 2 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).bytes.len = 16
-  ];
+  bytes graph_id = 1;
+  bytes request_id = 2;
 }
