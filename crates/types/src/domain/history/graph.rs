@@ -444,7 +444,7 @@ impl GraphHistory {
         Some(DurableGraphState::new(
             graph,
             published_outputs,
-            GraphLifecycle::Active,
+            self.durable.as_ref()?.lifecycle(),
         ))
     }
 
