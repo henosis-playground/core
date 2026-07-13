@@ -139,7 +139,7 @@ pub(crate) fn validate_report(
         .diagnostics()
         .iter()
         .any(|item| item.severity() == DiagnosticSeverity::Error);
-    let publishable = all_ready && !has_errors;
+    let publishable = !owned.is_empty() && all_ready && !has_errors;
     if !publishable {
         if report.outputs().len() == 0 {
             return Ok(false);
@@ -158,4 +158,36 @@ pub(crate) fn validate_report(
         ]));
     }
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use types::domain::ConnectorKey;
+    use types::domain::GraphSlice;
+    use types::domain::GraphUuid;
+    use types::domain::NewSliceReport;
+    use types::domain::SliceReport;
+
+    use super::validate_report;
+
+    #[test]
+    fn empty_ready_slice_is_non_publishing() {
+        let graph_id = GraphUuid::from_bytes([1; 16]);
+        let connector = "test".parse::<ConnectorKey>().unwrap();
+        let slice =
+            GraphSlice::new(graph_id, 1, connector.clone(), Vec::new(), Vec::new(), 0).unwrap();
+        let report = SliceReport::new(NewSliceReport {
+            graph_id,
+            generation: 1,
+            connector,
+            dispositions: Vec::new(),
+            outputs: Vec::new(),
+            diagnostics: Vec::new(),
+            sequence: 0,
+            publication: None,
+        })
+        .unwrap();
+
+        assert_eq!(validate_report(&report, &slice), Ok(false));
+    }
 }
