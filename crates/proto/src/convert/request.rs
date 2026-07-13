@@ -1,10 +1,6 @@
 use henosis_types as domain;
 
 use super::ConversionError;
-use super::invalid;
-use super::missing;
-use super::spec_hash;
-use super::uuid;
 use crate::convert::register_component_spec;
 use crate::proto::henosis::v1::__buffa::view;
 
@@ -12,8 +8,8 @@ impl TryFrom<&view::RegisterComponentSpecRequestView<'_>> for domain::RegisterCo
     type Error = ConversionError;
 
     fn try_from(value: &view::RegisterComponentSpecRequestView<'_>) -> Result<Self, Self::Error> {
-        let spec = value.spec.as_option().ok_or_else(|| missing("spec"))?;
-        Ok(Self::new(register_component_spec(spec.try_into()?)))
+        let spec = wire_field!(value.spec).required()?.convert()?;
+        Ok(Self::new(register_component_spec(spec)))
     }
 }
 
@@ -22,13 +18,12 @@ impl TryFrom<&view::CreateGraphRequestView<'_>> for domain::CreateGraph {
 
     fn try_from(value: &view::CreateGraphRequestView<'_>) -> Result<Self, Self::Error> {
         Ok(Self::new(
-            uuid(value.graph_id, "graph_id")?,
-            value
-                .component_spec_hashes
+            wire_field!(value.graph_id).required()?.uuid()?,
+            wire_field!(value.component_spec_hashes)
                 .iter()
-                .map(|item| spec_hash(Some(item), "component_spec_hashes"))
+                .map(|item| item.spec_hash())
                 .collect::<Result<Vec<_>, _>>()?,
-            uuid(value.request_id, "request_id")?,
+            wire_field!(value.request_id).required()?.uuid()?,
         ))
     }
 }
@@ -38,14 +33,15 @@ impl TryFrom<&view::AddComponentsRequestView<'_>> for domain::AddComponents {
 
     fn try_from(value: &view::AddComponentsRequestView<'_>) -> Result<Self, Self::Error> {
         Ok(Self::new(
-            uuid(value.graph_id, "graph_id")?,
-            required_generation(value.expected_generation, "expected_generation")?,
-            value
-                .component_spec_hashes
+            wire_field!(value.graph_id).required()?.uuid()?,
+            wire_field!(value.expected_generation)
+                .required()?
+                .validate(|generation| *generation > 0, "must be greater than zero")?,
+            wire_field!(value.component_spec_hashes)
                 .iter()
-                .map(|item| spec_hash(Some(item), "component_spec_hashes"))
+                .map(|item| item.spec_hash())
                 .collect::<Result<Vec<_>, _>>()?,
-            uuid(value.request_id, "request_id")?,
+            wire_field!(value.request_id).required()?.uuid()?,
         ))
     }
 }
@@ -55,11 +51,12 @@ impl TryFrom<&view::ComponentReplacementView<'_>> for domain::ComponentReplaceme
 
     fn try_from(value: &view::ComponentReplacementView<'_>) -> Result<Self, Self::Error> {
         Ok(Self::new(
-            spec_hash(value.current_spec_hash, "replacement.current_spec_hash")?,
-            spec_hash(
-                value.replacement_spec_hash,
-                "replacement.replacement_spec_hash",
-            )?,
+            wire_field!(value.current_spec_hash)
+                .required()?
+                .spec_hash()?,
+            wire_field!(value.replacement_spec_hash)
+                .required()?
+                .spec_hash()?,
         ))
     }
 }
@@ -69,14 +66,15 @@ impl TryFrom<&view::UpdateComponentsRequestView<'_>> for domain::UpdateComponent
 
     fn try_from(value: &view::UpdateComponentsRequestView<'_>) -> Result<Self, Self::Error> {
         Ok(Self::new(
-            uuid(value.graph_id, "graph_id")?,
-            required_generation(value.expected_generation, "expected_generation")?,
-            value
-                .replacements
+            wire_field!(value.graph_id).required()?.uuid()?,
+            wire_field!(value.expected_generation)
+                .required()?
+                .validate(|generation| *generation > 0, "must be greater than zero")?,
+            wire_field!(value.replacements)
                 .iter()
-                .map(TryInto::try_into)
+                .map(|item| item.convert())
                 .collect::<Result<Vec<_>, _>>()?,
-            uuid(value.request_id, "request_id")?,
+            wire_field!(value.request_id).required()?.uuid()?,
         ))
     }
 }
@@ -86,14 +84,15 @@ impl TryFrom<&view::RemoveComponentsRequestView<'_>> for domain::RemoveComponent
 
     fn try_from(value: &view::RemoveComponentsRequestView<'_>) -> Result<Self, Self::Error> {
         Ok(Self::new(
-            uuid(value.graph_id, "graph_id")?,
-            required_generation(value.expected_generation, "expected_generation")?,
-            value
-                .component_spec_hashes
+            wire_field!(value.graph_id).required()?.uuid()?,
+            wire_field!(value.expected_generation)
+                .required()?
+                .validate(|generation| *generation > 0, "must be greater than zero")?,
+            wire_field!(value.component_spec_hashes)
                 .iter()
-                .map(|item| spec_hash(Some(item), "component_spec_hashes"))
+                .map(|item| item.spec_hash())
                 .collect::<Result<Vec<_>, _>>()?,
-            uuid(value.request_id, "request_id")?,
+            wire_field!(value.request_id).required()?.uuid()?,
         ))
     }
 }
@@ -103,9 +102,11 @@ impl TryFrom<&view::RetireGraphRequestView<'_>> for domain::RetireGraph {
 
     fn try_from(value: &view::RetireGraphRequestView<'_>) -> Result<Self, Self::Error> {
         Ok(Self::new(
-            uuid(value.graph_id, "graph_id")?,
-            required_generation(value.expected_generation, "expected_generation")?,
-            uuid(value.request_id, "request_id")?,
+            wire_field!(value.graph_id).required()?.uuid()?,
+            wire_field!(value.expected_generation)
+                .required()?
+                .validate(|generation| *generation > 0, "must be greater than zero")?,
+            wire_field!(value.request_id).required()?.uuid()?,
         ))
     }
 }
@@ -114,7 +115,7 @@ impl TryFrom<&view::GetGraphRequestView<'_>> for domain::GetGraph {
     type Error = ConversionError;
 
     fn try_from(value: &view::GetGraphRequestView<'_>) -> Result<Self, Self::Error> {
-        Ok(Self::new(uuid(value.graph_id, "graph_id")?))
+        Ok(Self::new(wire_field!(value.graph_id).required()?.uuid()?))
     }
 }
 
@@ -123,11 +124,10 @@ impl TryFrom<&view::GetGraphGenerationRequestView<'_>> for domain::GetGraphGener
 
     fn try_from(value: &view::GetGraphGenerationRequestView<'_>) -> Result<Self, Self::Error> {
         Ok(Self::new(
-            uuid(value.graph_id, "get_generation.graph_id")?,
-            value
-                .generation
-                .filter(|generation| *generation > 0)
-                .ok_or_else(|| missing("get_generation.generation"))?,
+            wire_field!(value.graph_id).required()?.uuid()?,
+            wire_field!(value.generation)
+                .required()?
+                .validate(|generation| *generation > 0, "must be greater than zero")?,
         ))
     }
 }
@@ -137,8 +137,10 @@ impl TryFrom<&view::WatchGraphRequestView<'_>> for domain::WatchGraph {
 
     fn try_from(value: &view::WatchGraphRequestView<'_>) -> Result<Self, Self::Error> {
         Ok(Self::new(
-            uuid(value.graph_id, "graph_id")?,
-            value.after_sequence,
+            wire_field!(value.graph_id).required()?.uuid()?,
+            wire_field!(value.after_sequence)
+                .optional()
+                .map(|value| value.into_inner()),
         ))
     }
 }
@@ -148,13 +150,9 @@ impl TryFrom<&view::FetchSliceRequestView<'_>> for domain::FetchSlice {
 
     fn try_from(value: &view::FetchSliceRequestView<'_>) -> Result<Self, Self::Error> {
         Ok(Self::new(
-            uuid(value.graph_id, "graph_id")?,
-            value
-                .connector
-                .ok_or_else(|| missing("connector"))?
-                .parse()
-                .map_err(|error| invalid("connector", error))?,
-            value.sequence.ok_or_else(|| missing("sequence"))?,
+            wire_field!(value.graph_id).required()?.uuid()?,
+            wire_field!(value.connector).required()?.parse()?,
+            wire_field!(value.sequence).required()?.into_inner(),
         ))
     }
 }
@@ -164,22 +162,12 @@ impl TryFrom<&view::ReportSliceRequestView<'_>> for domain::ReportSlice {
 
     fn try_from(value: &view::ReportSliceRequestView<'_>) -> Result<Self, Self::Error> {
         Ok(Self::new(
-            uuid(value.request_id, "request_id")?,
-            value
-                .report
-                .as_option()
-                .ok_or_else(|| missing("report"))?
-                .try_into()?,
-            value
-                .publication_id
-                .map(|item| uuid(Some(item), "publication_id"))
+            wire_field!(value.request_id).required()?.uuid()?,
+            wire_field!(value.report).required()?.convert()?,
+            wire_field!(value.publication_id)
+                .optional()
+                .map(|item| item.uuid())
                 .transpose()?,
         ))
     }
-}
-
-fn required_generation(value: Option<u64>, field: &'static str) -> Result<u64, ConversionError> {
-    value
-        .filter(|generation| *generation > 0)
-        .ok_or_else(|| invalid(field, "must be greater than zero"))
 }

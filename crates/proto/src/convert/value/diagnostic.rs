@@ -2,11 +2,7 @@ use buffa::EnumValue;
 use buffa::MessageField;
 use henosis_types as domain;
 
-use super::super::ConversionError;
-use super::super::invalid;
-use super::super::missing;
-use super::super::spec_hash;
-use super::output::normalize_json;
+use crate::convert::ConversionError;
 use crate::proto::henosis::v1 as pb;
 use crate::proto::henosis::v1::__buffa::view;
 
@@ -14,114 +10,90 @@ impl TryFrom<&view::DiagnosticView<'_>> for domain::Diagnostic {
     type Error = ConversionError;
 
     fn try_from(value: &view::DiagnosticView<'_>) -> Result<Self, Self::Error> {
-        let severity = match value.severity {
-            Some(EnumValue::Known(pb::DiagnosticSeverity::Error)) => {
-                domain::DiagnosticSeverity::Error
-            }
-            Some(EnumValue::Known(pb::DiagnosticSeverity::Warning)) => {
+        let severity = match wire_field!(value.severity).required()?.into_inner() {
+            EnumValue::Known(pb::DiagnosticSeverity::Error) => domain::DiagnosticSeverity::Error,
+            EnumValue::Known(pb::DiagnosticSeverity::Warning) => {
                 domain::DiagnosticSeverity::Warning
             }
-            Some(EnumValue::Known(pb::DiagnosticSeverity::Info)) => {
-                domain::DiagnosticSeverity::Info
-            }
-            _ => return Err(invalid("diagnostic.severity", "must be specified")),
+            EnumValue::Known(pb::DiagnosticSeverity::Info) => domain::DiagnosticSeverity::Info,
+            _ => return Err(wire_field!(value.severity).invalid("must be specified")),
         };
-        let contract_failure = value
-            .contract_failure
-            .as_option()
-            .map(contract_failure)
+        let contract_failure = wire_field!(value.contract_failure)
+            .optional()
+            .map(|detail| detail.convert())
             .transpose()?;
         Ok(domain::Diagnostic::new(
-            value
-                .code
-                .ok_or_else(|| missing("diagnostic.code"))?
-                .to_owned(),
-            value.message.unwrap_or_default().to_owned(),
-            value
-                .component_spec_hash
-                .map(|item| spec_hash(Some(item), "diagnostic.component_spec_hash"))
+            wire_field!(value.code).required()?.owned(),
+            wire_field!(value.message).or_default().owned(),
+            wire_field!(value.component_spec_hash)
+                .optional()
+                .map(|item| item.spec_hash())
                 .transpose()?,
-            value.pointer.unwrap_or_default().to_owned(),
-            value.help.unwrap_or_default().to_owned(),
+            wire_field!(value.pointer).or_default().owned(),
+            wire_field!(value.help).or_default().owned(),
             severity,
             contract_failure,
         ))
     }
 }
 
-fn contract_failure(
-    value: &view::ContractFailureDetailView<'_>,
-) -> Result<domain::ContractFailureDetail, ConversionError> {
-    let kind = match value.kind {
-        Some(EnumValue::Known(pb::ContractFailureKind::Compile)) => {
-            domain::ContractFailureKind::Compile
+impl TryFrom<&view::ContractFailureDetailView<'_>> for domain::ContractFailureDetail {
+    type Error = ConversionError;
+
+    fn try_from(value: &view::ContractFailureDetailView<'_>) -> Result<Self, Self::Error> {
+        let kind = match wire_field!(value.kind).required()?.into_inner() {
+            EnumValue::Known(pb::ContractFailureKind::Compile) => {
+                domain::ContractFailureKind::Compile
+            }
+            EnumValue::Known(pb::ContractFailureKind::Render) => {
+                domain::ContractFailureKind::Render
+            }
+            EnumValue::Known(pb::ContractFailureKind::Validate) => {
+                domain::ContractFailureKind::Validate
+            }
+            EnumValue::Known(pb::ContractFailureKind::Resolve) => {
+                domain::ContractFailureKind::Resolve
+            }
+            _ => return Err(wire_field!(value.kind).invalid("must be specified")),
+        };
+        let mut consumed_paths = wire_field!(value.consumed_paths)
+            .iter()
+            .map(|path| path.into_inner().to_string())
+            .collect::<Vec<_>>();
+        consumed_paths.sort();
+        if consumed_paths.windows(2).any(|pair| pair[0] == pair[1]) {
+            return Err(wire_field!(value.consumed_paths).invalid("must be unique"));
         }
-        Some(EnumValue::Known(pb::ContractFailureKind::Render)) => {
-            domain::ContractFailureKind::Render
-        }
-        Some(EnumValue::Known(pb::ContractFailureKind::Validate)) => {
-            domain::ContractFailureKind::Validate
-        }
-        Some(EnumValue::Known(pb::ContractFailureKind::Resolve)) => {
-            domain::ContractFailureKind::Resolve
-        }
-        _ => {
-            return Err(invalid(
-                "diagnostic.contract_failure.kind",
-                "must be specified",
-            ));
-        }
-    };
-    let mut consumed_paths = value
-        .consumed_paths
-        .iter()
-        .map(|path| path.to_string())
-        .collect::<Vec<_>>();
-    consumed_paths.sort();
-    if consumed_paths.windows(2).any(|pair| pair[0] == pair[1]) {
-        return Err(invalid(
-            "diagnostic.contract_failure.consumed_paths",
-            "must be unique",
-        ));
+        Ok(Self {
+            consumer: wire_field!(value.consumer).required()?.owned(),
+            producer: wire_field!(value.producer).required()?.owned(),
+            pinned_sha: wire_field!(value.pinned_sha)
+                .optional()
+                .filter(|value| !value.value().is_empty())
+                .map(|value| value.owned()),
+            resolved_sha: wire_field!(value.resolved_sha)
+                .optional()
+                .filter(|value| !value.value().is_empty())
+                .map(|value| value.owned()),
+            outputs_schema_at_pinned_json: wire_field!(value.outputs_schema_at_pinned_json)
+                .optional()
+                .filter(|value| !value.value().is_empty())
+                .map(|value| value.json())
+                .transpose()?,
+            outputs_schema_at_resolved_json: wire_field!(value.outputs_schema_at_resolved_json)
+                .optional()
+                .filter(|value| !value.value().is_empty())
+                .map(|value| value.json())
+                .transpose()?,
+            consumed_paths,
+            kind,
+            excerpt: wire_field!(value.excerpt).or_default().owned(),
+            source_url: wire_field!(value.source_url)
+                .optional()
+                .filter(|value| !value.value().is_empty())
+                .map(|value| value.owned()),
+        })
     }
-    Ok(domain::ContractFailureDetail {
-        consumer: value
-            .consumer
-            .ok_or_else(|| missing("diagnostic.contract_failure.consumer"))?
-            .to_owned(),
-        producer: value
-            .producer
-            .ok_or_else(|| missing("diagnostic.contract_failure.producer"))?
-            .to_owned(),
-        pinned_sha: nonempty(value.pinned_sha),
-        resolved_sha: nonempty(value.resolved_sha),
-        outputs_schema_at_pinned_json: optional_json(
-            value.outputs_schema_at_pinned_json,
-            "diagnostic.contract_failure.outputs_schema_at_pinned_json",
-        )?,
-        outputs_schema_at_resolved_json: optional_json(
-            value.outputs_schema_at_resolved_json,
-            "diagnostic.contract_failure.outputs_schema_at_resolved_json",
-        )?,
-        consumed_paths,
-        kind,
-        excerpt: value.excerpt.unwrap_or_default().to_owned(),
-        source_url: nonempty(value.source_url),
-    })
-}
-
-fn optional_json(
-    value: Option<&[u8]>,
-    field: &'static str,
-) -> Result<Option<Vec<u8>>, ConversionError> {
-    value
-        .filter(|value| !value.is_empty())
-        .map(|value| normalize_json(value, field))
-        .transpose()
-}
-
-fn nonempty(value: Option<&str>) -> Option<String> {
-    value.filter(|value| !value.is_empty()).map(str::to_owned)
 }
 
 impl From<&domain::Diagnostic> for pb::Diagnostic {

@@ -2,11 +2,7 @@ use buffa::EnumValue;
 use buffa::MessageField;
 use henosis_types as domain;
 
-use super::super::ConversionError;
-use super::super::invalid;
-use super::super::missing;
-use super::super::spec_hash;
-use super::super::uuid;
+use crate::convert::ConversionError;
 use crate::proto::henosis::v1 as pb;
 use crate::proto::henosis::v1::__buffa::view;
 
@@ -14,23 +10,25 @@ impl TryFrom<&view::ComponentDispositionView<'_>> for domain::ComponentDispositi
     type Error = ConversionError;
 
     fn try_from(value: &view::ComponentDispositionView<'_>) -> Result<Self, Self::Error> {
-        let kind = match value.kind {
-            Some(EnumValue::Known(pb::ComponentDispositionKind::Pending)) => {
+        let kind = match wire_field!(value.kind).required()?.into_inner() {
+            EnumValue::Known(pb::ComponentDispositionKind::Pending) => {
                 domain::ComponentDispositionKind::Pending
             }
-            Some(EnumValue::Known(pb::ComponentDispositionKind::Reconciling)) => {
+            EnumValue::Known(pb::ComponentDispositionKind::Reconciling) => {
                 domain::ComponentDispositionKind::Reconciling
             }
-            Some(EnumValue::Known(pb::ComponentDispositionKind::Ready)) => {
+            EnumValue::Known(pb::ComponentDispositionKind::Ready) => {
                 domain::ComponentDispositionKind::Ready
             }
-            Some(EnumValue::Known(pb::ComponentDispositionKind::Failed)) => {
+            EnumValue::Known(pb::ComponentDispositionKind::Failed) => {
                 domain::ComponentDispositionKind::Failed
             }
-            _ => return Err(invalid("disposition.kind", "must be specified")),
+            _ => return Err(wire_field!(value.kind).invalid("must be specified")),
         };
         Ok(Self::new(
-            spec_hash(value.component_spec_hash, "disposition.component_spec_hash")?,
+            wire_field!(value.component_spec_hash)
+                .required()?
+                .spec_hash()?,
             kind,
         ))
     }
@@ -59,49 +57,44 @@ impl TryFrom<&view::SliceReportView<'_>> for domain::SliceReport {
 
     fn try_from(value: &view::SliceReportView<'_>) -> Result<Self, Self::Error> {
         domain::SliceReport::new(domain::NewSliceReport {
-            graph_id: uuid(value.graph_id, "report.graph_id")?,
-            generation: value
-                .generation
-                .ok_or_else(|| missing("report.generation"))?,
-            connector: value
-                .connector
-                .ok_or_else(|| missing("report.connector"))?
-                .parse()
-                .map_err(|error| invalid("report.connector", error))?,
-            dispositions: value
-                .dispositions
+            graph_id: wire_field!(value.graph_id).required()?.uuid()?,
+            generation: wire_field!(value.generation)
+                .required()?
+                .validate(|generation| *generation > 0, "must be greater than zero")?,
+            connector: wire_field!(value.connector).required()?.parse()?,
+            dispositions: wire_field!(value.dispositions)
                 .iter()
-                .map(TryInto::try_into)
+                .map(|item| item.convert())
                 .collect::<Result<Vec<_>, _>>()?,
-            outputs: value
-                .outputs
+            outputs: wire_field!(value.outputs)
                 .iter()
-                .map(TryInto::try_into)
+                .map(|item| item.convert())
                 .collect::<Result<Vec<_>, _>>()?,
-            diagnostics: value
-                .diagnostics
+            diagnostics: wire_field!(value.diagnostics)
                 .iter()
-                .map(TryInto::try_into)
+                .map(|item| item.convert())
                 .collect::<Result<Vec<_>, _>>()?,
-            sequence: value.sequence.ok_or_else(|| missing("report.sequence"))?,
-            publication: value
-                .publication
-                .as_option()
+            sequence: wire_field!(value.sequence).required()?.into_inner(),
+            publication: wire_field!(value.publication)
+                .optional()
                 .map(|publication| {
+                    let publication = publication.into_inner();
                     Ok(domain::PublicationEvidence {
-                        revision: publication
-                            .revision
-                            .ok_or_else(|| missing("report.publication.revision"))?
-                            .to_owned(),
-                        uri: publication
-                            .uri
-                            .ok_or_else(|| missing("report.publication.uri"))?
-                            .to_owned(),
+                        revision: wire_field!(publication.revision).required()?.owned(),
+                        uri: wire_field!(publication.uri).required()?.owned(),
                     })
                 })
                 .transpose()?,
         })
-        .map_err(|error| invalid("report", error))
+        .map_err(|error| match error {
+            domain::SliceReportError::InvalidGeneration => {
+                wire_field!(value.generation).invalid(error)
+            }
+            domain::SliceReportError::DuplicateDisposition => {
+                wire_field!(value.dispositions).invalid(error)
+            }
+            domain::SliceReportError::DuplicateOutput => wire_field!(value.outputs).invalid(error),
+        })
     }
 }
 

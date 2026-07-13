@@ -3,10 +3,7 @@ use buffa::Message;
 use buffa::MessageField;
 use henosis_types as domain;
 
-use super::super::ConversionError;
-use super::super::invalid;
-use super::super::missing;
-use super::super::spec_hash;
+use crate::convert::ConversionError;
 use crate::proto::henosis::v1 as pb;
 use crate::proto::henosis::v1::__buffa::view;
 
@@ -15,21 +12,21 @@ impl TryFrom<&view::ComponentSpecView<'_>> for domain::ComponentSpec {
 
     fn try_from(value: &view::ComponentSpecView<'_>) -> Result<Self, Self::Error> {
         domain::ComponentSpec::new(domain::NewComponentSpec {
-            name: value.name.ok_or_else(|| missing("spec.name"))?.to_owned(),
-            connector: value
-                .connector
-                .ok_or_else(|| missing("spec.connector"))?
-                .parse()
-                .map_err(|error| invalid("spec.connector", error))?,
-            outputs_schema: value.outputs_schema.unwrap_or_default().to_vec(),
-            depends_on: value
-                .depends_on
+            name: wire_field!(value.name).required()?.owned(),
+            connector: wire_field!(value.connector).required()?.parse()?,
+            outputs_schema: wire_field!(value.outputs_schema).or_default().owned(),
+            depends_on: wire_field!(value.depends_on)
                 .iter()
-                .map(|item| spec_hash(Some(item), "spec.depends_on"))
+                .map(|item| item.spec_hash())
                 .collect::<Result<Vec<_>, _>>()?,
-            connector_context: value.connector_context.unwrap_or_default().to_vec(),
+            connector_context: wire_field!(value.connector_context).or_default().owned(),
         })
-        .map_err(|error| invalid("spec", error))
+        .map_err(|error| match error {
+            domain::ComponentSpecError::EmptyName => wire_field!(value.name).invalid(error),
+            domain::ComponentSpecError::DuplicateDependency => {
+                wire_field!(value.depends_on).invalid(error)
+            }
+        })
     }
 }
 
@@ -38,21 +35,21 @@ impl TryFrom<&view::ComponentSpecRecordV1View<'_>> for domain::ComponentSpec {
 
     fn try_from(value: &view::ComponentSpecRecordV1View<'_>) -> Result<Self, Self::Error> {
         domain::ComponentSpec::new(domain::NewComponentSpec {
-            name: value.name.ok_or_else(|| missing("spec.name"))?.to_owned(),
-            connector: value
-                .connector
-                .ok_or_else(|| missing("spec.connector"))?
-                .parse()
-                .map_err(|error| invalid("spec.connector", error))?,
-            outputs_schema: value.outputs_schema.unwrap_or_default().to_vec(),
-            depends_on: value
-                .depends_on
+            name: wire_field!(value.name).required()?.owned(),
+            connector: wire_field!(value.connector).required()?.parse()?,
+            outputs_schema: wire_field!(value.outputs_schema).or_default().owned(),
+            depends_on: wire_field!(value.depends_on)
                 .iter()
-                .map(|item| spec_hash(Some(item), "spec.depends_on"))
+                .map(|item| item.spec_hash())
                 .collect::<Result<Vec<_>, _>>()?,
-            connector_context: value.connector_context.unwrap_or_default().to_vec(),
+            connector_context: wire_field!(value.connector_context).or_default().owned(),
         })
-        .map_err(|error| invalid("spec", error))
+        .map_err(|error| match error {
+            domain::ComponentSpecError::EmptyName => wire_field!(value.name).invalid(error),
+            domain::ComponentSpecError::DuplicateDependency => {
+                wire_field!(value.depends_on).invalid(error)
+            }
+        })
     }
 }
 
@@ -86,18 +83,11 @@ impl TryFrom<&view::RegisteredComponentSpecView<'_>> for domain::RegisteredCompo
     type Error = ConversionError;
 
     fn try_from(value: &view::RegisteredComponentSpecView<'_>) -> Result<Self, Self::Error> {
-        let expected = spec_hash(value.hash, "component.hash")?;
-        let spec = value
-            .spec
-            .as_option()
-            .ok_or_else(|| missing("component.spec"))?
-            .try_into()?;
+        let expected = wire_field!(value.hash).required()?.spec_hash()?;
+        let spec = wire_field!(value.spec).required()?.convert()?;
         let registered = register_component_spec(spec);
         if registered.hash() != expected {
-            return Err(invalid(
-                "component.hash",
-                "does not match canonical spec content",
-            ));
+            return Err(wire_field!(value.hash).invalid("does not match canonical spec content"));
         }
         Ok(registered)
     }

@@ -7,11 +7,8 @@ use thiserror::Error;
 
 use super::WireRecord;
 use crate::ConversionError;
-use crate::convert::fingerprint;
-use crate::convert::invalid;
 use crate::convert::register_component_spec;
-use crate::convert::spec_hash;
-use crate::convert::uuid;
+use crate::convert::wire_field;
 use crate::proto::henosis::v1 as pb;
 use crate::proto::henosis::v1::__buffa::view;
 use crate::proto::henosis::v1::__buffa::view::oneof;
@@ -30,6 +27,12 @@ pub enum JournalDecodeError {
     InvalidDomain(ConversionError),
     #[error("component spec hash does not match its canonical content")]
     SpecHashMismatch,
+}
+
+impl From<ConversionError> for JournalDecodeError {
+    fn from(error: ConversionError) -> Self {
+        Self::InvalidDomain(error)
+    }
 }
 
 #[derive(Debug)]
@@ -97,127 +100,87 @@ pub fn decode_graph_record(
         .ok_or(JournalDecodeError::Missing("graph event"))?
     {
         oneof::graph_stream_record_v1::Event::GraphCreated(value) => domain::GraphEvent::Created {
-            graph: value
-                .graph
-                .as_option()
-                .ok_or(JournalDecodeError::Missing("created graph"))?
-                .try_into()
-                .map_err(JournalDecodeError::InvalidDomain)?,
-            request_id: uuid(value.request_id, "created.request_id")
-                .map_err(JournalDecodeError::InvalidDomain)?,
-            request_fingerprint: fingerprint(
-                value.request_fingerprint,
-                "created.request_fingerprint",
-            )
-            .map_err(JournalDecodeError::InvalidDomain)?,
+            graph: wire_field!(value.graph).required()?.convert()?,
+            request_id: wire_field!(value.request_id).required()?.uuid()?,
+            request_fingerprint: wire_field!(value.request_fingerprint)
+                .required()?
+                .fingerprint()?,
         },
         oneof::graph_stream_record_v1::Event::GenerationAccepted(value) => {
-            let mutation_kind = match value.mutation_kind {
-                Some(EnumValue::Known(pb::GraphMutationKindV1::AddComponents)) => {
+            let mutation_kind = match wire_field!(value.mutation_kind).required()?.into_inner() {
+                EnumValue::Known(pb::GraphMutationKindV1::AddComponents) => {
                     domain::MutationKind::AddComponents
                 }
-                Some(EnumValue::Known(pb::GraphMutationKindV1::UpdateComponents)) => {
+                EnumValue::Known(pb::GraphMutationKindV1::UpdateComponents) => {
                     domain::MutationKind::UpdateComponents
                 }
-                Some(EnumValue::Known(pb::GraphMutationKindV1::RemoveComponents)) => {
+                EnumValue::Known(pb::GraphMutationKindV1::RemoveComponents) => {
                     domain::MutationKind::RemoveComponents
                 }
-                _ => return Err(JournalDecodeError::Missing("mutation kind")),
+                _ => {
+                    return Err(wire_field!(value.mutation_kind)
+                        .invalid("must be specified")
+                        .into());
+                }
             };
             domain::GraphEvent::GenerationAccepted {
-                graph: value
-                    .graph
-                    .as_option()
-                    .ok_or(JournalDecodeError::Missing("accepted graph"))?
-                    .try_into()
-                    .map_err(JournalDecodeError::InvalidDomain)?,
-                request_id: uuid(value.request_id, "accepted.request_id")
-                    .map_err(JournalDecodeError::InvalidDomain)?,
+                graph: wire_field!(value.graph).required()?.convert()?,
+                request_id: wire_field!(value.request_id).required()?.uuid()?,
                 mutation_kind,
-                request_fingerprint: fingerprint(
-                    value.request_fingerprint,
-                    "accepted.request_fingerprint",
-                )
-                .map_err(JournalDecodeError::InvalidDomain)?,
+                request_fingerprint: wire_field!(value.request_fingerprint)
+                    .required()?
+                    .fingerprint()?,
             }
         }
         oneof::graph_stream_record_v1::Event::OutputsPublished(value) => {
             domain::GraphEvent::OutputsPublished(domain::OutputPublication {
-                generation: value
-                    .generation
-                    .ok_or(JournalDecodeError::Missing("output generation"))?,
-                input_sequence: value
-                    .input_sequence
-                    .ok_or(JournalDecodeError::Missing("output input sequence"))?,
-                connector: value
-                    .connector
-                    .ok_or(JournalDecodeError::Missing("output connector"))?
-                    .parse()
-                    .map_err(|error| {
-                        JournalDecodeError::InvalidDomain(invalid("output connector", error))
-                    })?,
-                outputs: value
-                    .outputs
+                generation: wire_field!(value.generation)
+                    .required()?
+                    .validate(|generation| *generation > 0, "must be greater than zero")?,
+                input_sequence: wire_field!(value.input_sequence).required()?.into_inner(),
+                connector: wire_field!(value.connector).required()?.parse()?,
+                outputs: wire_field!(value.outputs)
                     .iter()
-                    .map(TryInto::try_into)
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(JournalDecodeError::InvalidDomain)?,
-                request_id: uuid(value.request_id, "output.request_id")
-                    .map_err(JournalDecodeError::InvalidDomain)?,
-                request_fingerprint: fingerprint(
-                    value.request_fingerprint,
-                    "output.request_fingerprint",
-                )
-                .map_err(JournalDecodeError::InvalidDomain)?,
-                publication_id: uuid(value.publication_id, "output.publication_id")
-                    .map_err(JournalDecodeError::InvalidDomain)?,
-                publication_fingerprint: fingerprint(
-                    value.publication_fingerprint,
-                    "output.publication_fingerprint",
-                )
-                .map_err(JournalDecodeError::InvalidDomain)?,
+                    .map(|item| item.convert())
+                    .collect::<Result<Vec<_>, _>>()?,
+                request_id: wire_field!(value.request_id).required()?.uuid()?,
+                request_fingerprint: wire_field!(value.request_fingerprint)
+                    .required()?
+                    .fingerprint()?,
+                publication_id: wire_field!(value.publication_id).required()?.uuid()?,
+                publication_fingerprint: wire_field!(value.publication_fingerprint)
+                    .required()?
+                    .fingerprint()?,
             })
         }
         oneof::graph_stream_record_v1::Event::SliceReported(value) => {
             domain::GraphEvent::SliceReported(domain::RecordedSliceReport {
-                report: value
-                    .report
-                    .as_option()
-                    .ok_or(JournalDecodeError::Missing("slice report"))?
-                    .try_into()
-                    .map_err(JournalDecodeError::InvalidDomain)?,
-                request_id: uuid(value.request_id, "report.request_id")
-                    .map_err(JournalDecodeError::InvalidDomain)?,
-                request_fingerprint: fingerprint(
-                    value.request_fingerprint,
-                    "report.request_fingerprint",
-                )
-                .map_err(JournalDecodeError::InvalidDomain)?,
-                publication_id: value
-                    .publication_id
-                    .map(|value| uuid(Some(value), "report.publication_id"))
+                report: wire_field!(value.report).required()?.convert()?,
+                request_id: wire_field!(value.request_id).required()?.uuid()?,
+                request_fingerprint: wire_field!(value.request_fingerprint)
+                    .required()?
+                    .fingerprint()?,
+                publication_id: wire_field!(value.publication_id)
+                    .optional()
+                    .map(|value| value.uuid())
                     .transpose()
                     .map_err(JournalDecodeError::InvalidDomain)?,
-                publication_fingerprint: value
-                    .publication_fingerprint
-                    .map(|value| fingerprint(Some(value), "report.publication_fingerprint"))
+                publication_fingerprint: wire_field!(value.publication_fingerprint)
+                    .optional()
+                    .map(|value| value.fingerprint())
                     .transpose()
                     .map_err(JournalDecodeError::InvalidDomain)?,
             })
         }
         oneof::graph_stream_record_v1::Event::GraphRetired(value) => domain::GraphEvent::Retired {
-            graph_id: uuid(value.graph_id, "retired.graph_id")
-                .map_err(JournalDecodeError::InvalidDomain)?,
-            last_generation: value
-                .last_generation
-                .ok_or(JournalDecodeError::Missing("retired generation"))?,
-            request_id: uuid(value.request_id, "retired.request_id")
-                .map_err(JournalDecodeError::InvalidDomain)?,
-            request_fingerprint: fingerprint(
-                value.request_fingerprint,
-                "retired.request_fingerprint",
-            )
-            .map_err(JournalDecodeError::InvalidDomain)?,
+            graph_id: wire_field!(value.graph_id).required()?.uuid()?,
+            last_generation: wire_field!(value.last_generation)
+                .required()?
+                .validate(|generation| *generation > 0, "must be greater than zero")?,
+            request_id: wire_field!(value.request_id).required()?.uuid()?,
+            request_fingerprint: wire_field!(value.request_fingerprint)
+                .required()?
+                .fingerprint()?,
         },
     };
     Ok(domain::SequencedGraphEvent::new(record.sequence(), event))
@@ -240,18 +203,14 @@ pub fn decode_registry_record(
     {
         oneof::registry_stream_record_v1::Event::GraphCreated(value) => {
             domain::RegistryEvent::Created {
-                graph_id: uuid(value.graph_id, "registry.graph_id")
-                    .map_err(JournalDecodeError::InvalidDomain)?,
-                request_id: uuid(value.request_id, "registry.request_id")
-                    .map_err(JournalDecodeError::InvalidDomain)?,
+                graph_id: wire_field!(value.graph_id).required()?.uuid()?,
+                request_id: wire_field!(value.request_id).required()?.uuid()?,
             }
         }
         oneof::registry_stream_record_v1::Event::GraphRetired(value) => {
             domain::RegistryEvent::Retired {
-                graph_id: uuid(value.graph_id, "registry.graph_id")
-                    .map_err(JournalDecodeError::InvalidDomain)?,
-                request_id: uuid(value.request_id, "registry.request_id")
-                    .map_err(JournalDecodeError::InvalidDomain)?,
+                graph_id: wire_field!(value.graph_id).required()?.uuid()?,
+                request_id: wire_field!(value.request_id).required()?.uuid()?,
             }
         }
     };
@@ -275,14 +234,8 @@ pub fn decode_spec_record(
         .event
         .as_ref()
         .ok_or(JournalDecodeError::Missing("spec event"))?;
-    let expected =
-        spec_hash(value.hash, "registered spec hash").map_err(JournalDecodeError::InvalidDomain)?;
-    let spec = value
-        .spec
-        .as_option()
-        .ok_or(JournalDecodeError::Missing("registered spec"))?
-        .try_into()
-        .map_err(JournalDecodeError::InvalidDomain)?;
+    let expected = wire_field!(value.hash).required()?.spec_hash()?;
+    let spec = wire_field!(value.spec).required()?.convert()?;
     let registered = register_component_spec(spec);
     if registered.hash() != expected {
         return Err(JournalDecodeError::SpecHashMismatch);
