@@ -300,7 +300,9 @@ impl Core {
             ));
         }
         if let Some(publication_id) = report.publication_id()
-            && graph.publications.contains(&publication_id)
+            && graph
+                .publications
+                .contains(&(report.generation(), publication_id))
         {
             return Ok(Transition::default());
         }
@@ -363,7 +365,9 @@ impl Core {
                 .reports
                 .insert_overwrite(LatestControllerReport(report.clone()));
             if let Some(publication_id) = report.publication_id() {
-                graph.publications.insert(publication_id);
+                graph
+                    .publications
+                    .insert((report.generation(), publication_id));
             }
             for output in published {
                 graph.outputs.insert_overwrite(output);
@@ -1081,7 +1085,9 @@ impl MaterializedCore {
                     publication.generation(),
                     "generation fencing must hold while folding"
                 );
-                graph.publications.insert(publication.publication_id());
+                graph
+                    .publications
+                    .insert((publication.generation(), publication.publication_id()));
                 for output in publication.outputs() {
                     graph.outputs.insert_overwrite(output.clone());
                 }
@@ -1122,7 +1128,7 @@ pub struct GraphState {
     plan: Option<Plan>,
     outputs: IdOrdMap<OutputRecord>,
     reports: IdOrdMap<LatestControllerReport>,
-    publications: BTreeSet<PublicationId>,
+    publications: BTreeSet<(Generation, PublicationId)>,
     stall: Option<Stall>,
     retired: bool,
 }
