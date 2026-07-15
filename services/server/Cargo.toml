@@ -18,8 +18,10 @@ henosis-controller-cloudflare = { path = "../../crates/controller-cloudflare" }
 henosis-controller-k8s = { path = "../../crates/controller-k8s" }
 henosis-controller-runtime.workspace = true
 henosis-evaluation-engine.workspace = true
+henosis-journal.workspace = true
 henosis-orchestrator.workspace = true
 henosis-proto.workspace = true
+henosis-storage.workspace = true
 henosis-types.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

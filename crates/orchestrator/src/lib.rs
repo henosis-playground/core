@@ -148,6 +148,7 @@ pub enum CommandError {
 
 // === Live state machine ===
 
+#[derive(Clone)]
 pub struct Core {
     evaluator: Arc<dyn Evaluator>,
     state: MaterializedCore,
@@ -157,9 +158,14 @@ pub struct Core {
 impl Core {
     #[must_use]
     pub fn new(evaluator: Arc<dyn Evaluator>) -> Self {
+        Self::from_materialized(evaluator, MaterializedCore::default())
+    }
+
+    #[must_use]
+    pub fn from_materialized(evaluator: Arc<dyn Evaluator>, state: MaterializedCore) -> Self {
         Self {
             evaluator,
-            state: MaterializedCore::default(),
+            state,
             runtime: BTreeMap::new(),
         }
     }
@@ -199,6 +205,40 @@ impl Core {
                 expected_generation,
             } => self.retire_graph(graph_id, expected_generation),
         }
+    }
+
+    /// Rebuilds ephemeral evaluation bindings after replay and returns the
+    /// level-triggered controller work needed to resume a live graph.
+    pub async fn resume_graph(
+        &mut self,
+        graph_id: GraphId,
+    ) -> Result<Transition, Error<CommandError, Never, anyhow::Error>> {
+        if self.graph(graph_id)?.retired {
+            return Ok(Transition::default());
+        }
+        self.runtime.insert(graph_id, GraphRuntime::default());
+        let mut transition = self.evaluate_graph(graph_id).await?;
+        if transition.effects.is_empty() {
+            let graph = self.graph(graph_id)?;
+            let plan = graph.plan.as_ref().ok_or_else(|| {
+                Error::<CommandError, Never, anyhow::Error>::Invariant(anyhow::anyhow!(
+                    "replayed live graph has no accepted plan"
+                ))
+            })?;
+            transition.effects = dispatch_effects(graph_id, None, plan);
+            self.runtime
+                .get_mut(&graph_id)
+                .expect("runtime was rebuilt for the graph")
+                .pending = transition
+                .effects
+                .iter()
+                .filter_map(|effect| match effect.command() {
+                    ControllerCommand::Reconcile(_) => Some(effect.controller().clone()),
+                    ControllerCommand::Supersede(_) | ControllerCommand::Retire(_) => None,
+                })
+                .collect();
+        }
+        Ok(transition)
     }
 
     async fn create_graph(
@@ -408,6 +448,9 @@ impl Core {
             && let Some(cycle) = blocked_cycle(plan)
         {
             let stall = Stall::new(graph_id, plan.generation(), cycle);
+            if graph.stall.as_ref() == Some(&stall) {
+                return Ok(Transition::default());
+            }
             self.graph_mut(graph_id)?.stall = Some(stall.clone());
             return Ok(Transition {
                 events: vec![CoreEvent::StallDetected(stall)],

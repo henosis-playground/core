@@ -1,5 +1,7 @@
 //! `ConnectRPC` service process for the Henosis graph orchestrator.
 
+mod materialization;
+
 use std::collections::BTreeMap;
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -39,9 +41,10 @@ use henosis_evaluation_engine::EvaluationEngine;
 use henosis_evaluation_engine::ResourceContract;
 use henosis_evaluation_engine::ResourceRegistry;
 use henosis_evaluation_engine::inspect_bundle;
+use henosis_journal::Journal;
+use henosis_journal::S2Storage;
 use henosis_orchestrator::Command;
 use henosis_orchestrator::ControllerEffect;
-use henosis_orchestrator::Core;
 use henosis_proto::connect::henosis::v1::GraphService;
 use henosis_proto::connect::henosis::v1::GraphServiceExt;
 use henosis_proto::proto::henosis::v1 as proto;
@@ -70,6 +73,7 @@ use henosis_types::Resource;
 use henosis_types::ResourceDispositionKind;
 use henosis_types::ResourceId;
 use henosis_types::SourceProvenance;
+use materialization::MaterializedGraphs;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
 use tracing::error;
@@ -97,7 +101,7 @@ async fn main() -> anyhow::Result<()> {
         root: bundle_root.clone(),
     });
     let config = EngineConfig::default();
-    let evaluator = Arc::new(EvaluationEngine::new(
+    let evaluator: Arc<dyn henosis_types::Evaluator> = Arc::new(EvaluationEngine::new(
         source,
         Arc::new(DemoResourceRegistry),
         config.clone(),
@@ -128,13 +132,29 @@ async fn main() -> anyhow::Result<()> {
     let supabase: Arc<dyn Controller> = Arc::new(DemoSupabaseController::new());
     controllers.insert(supabase.name().clone(), supabase);
 
+    let s2 = S2Storage::connect(
+        required_env("S2_ACCESS_TOKEN")?,
+        &required_env("S2_ACCOUNT_ENDPOINT")?,
+        &required_env("S2_BASIN_ENDPOINT")?,
+        &required_env("S2_BASIN")?,
+    )?;
+    let (materialized, resume_effects) =
+        MaterializedGraphs::boot(Arc::clone(&evaluator), Journal::new(Arc::new(s2))).await?;
     let service = Arc::new(CoreService {
-        core: Arc::new(Mutex::new(Core::new(evaluator))),
+        materialized,
         bundle_root,
         engine_config: config,
         controllers: Arc::new(controllers),
         watches: Arc::new(Mutex::new(BTreeMap::new())),
     });
+    if !resume_effects.is_empty() {
+        let service = Arc::clone(&service);
+        tokio::spawn(async move {
+            if let Err(error) = service.drive(resume_effects).await {
+                error!(%error, "controller resume after journal replay failed");
+            }
+        });
+    }
     let router = service.register(Router::new());
     info!(%bind, "Henosis core demo server listening");
     connectrpc::server::Server::new(router)
@@ -146,7 +166,7 @@ async fn main() -> anyhow::Result<()> {
 
 #[derive(Clone)]
 struct CoreService {
-    core: Arc<Mutex<Core>>,
+    materialized: MaterializedGraphs,
     bundle_root: PathBuf,
     engine_config: EngineConfig,
     controllers: Arc<BTreeMap<ControllerName, Arc<dyn Controller>>>,
@@ -212,20 +232,14 @@ impl CoreService {
     }
 
     async fn apply(&self, command: Command) -> Result<proto::GraphStatus, ConnectError> {
-        let (graph_id, transition, status) = {
-            let mut core = self.core.lock().await;
-            let transition = core
-                .handle(command)
-                .await
-                .map_err(|error| invalid(error.to_string()))?;
-            let graph_id = transition
-                .events()
-                .iter()
-                .find_map(event_graph_id)
-                .ok_or_else(|| invalid("core transition omitted graph identity"))?;
-            let status = graph_status(core.state(), graph_id)?;
-            (graph_id, transition, status)
-        };
+        let applied = self
+            .materialized
+            .apply(command)
+            .await
+            .map_err(|error| invalid(error.to_string()))?;
+        let graph_id = applied.graph_id;
+        let transition = applied.transition;
+        let status = graph_status(&applied.state, graph_id)?;
         self.publish(graph_id, status.clone()).await;
         if !transition.effects().is_empty() {
             let service = self.clone();
@@ -252,14 +266,14 @@ impl CoreService {
             let Some(report) = controller.execute(effect.command()).await? else {
                 continue;
             };
-            let graph_id = report.graph_id();
-            let (transition, status) = {
-                let mut core = self.core.lock().await;
-                let transition = core.handle(Command::ReportController(report)).await?;
-                let status = graph_status(core.state(), graph_id)
-                    .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-                (transition, status)
-            };
+            let applied = self
+                .materialized
+                .apply(Command::ReportController(report))
+                .await?;
+            let graph_id = applied.graph_id;
+            let transition = applied.transition;
+            let status = graph_status(&applied.state, graph_id)
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
             self.publish(graph_id, status).await;
             if !transition.effects().is_empty() {
                 queue = VecDeque::from(transition.effects().to_vec());
@@ -279,8 +293,12 @@ impl CoreService {
     }
 
     async fn current(&self, graph_id: GraphId) -> Result<proto::GraphStatus, ConnectError> {
-        let core = self.core.lock().await;
-        graph_status(core.state(), graph_id)
+        let state = self
+            .materialized
+            .snapshot(graph_id)
+            .await
+            .ok_or_else(|| ConnectError::new(ErrorCode::NotFound, "graph does not exist"))?;
+        graph_status(&state, graph_id)
     }
 }
 
@@ -383,9 +401,15 @@ impl GraphService for CoreService {
             .to_owned_message()
             .include_retired
             .unwrap_or_default();
-        let core = self.core.lock().await;
+        let graphs = self
+            .materialized
+            .snapshots()
+            .await
+            .iter()
+            .flat_map(|state| graph_summaries(state, include_retired))
+            .collect();
         Ok(proto::ListGraphsResponse {
-            graphs: graph_summaries(core.state(), include_retired),
+            graphs,
             ..Default::default()
         }
         .into())
@@ -408,6 +432,10 @@ impl GraphService for CoreService {
                 .or_insert_with(|| watch::channel(current.clone()).0)
                 .subscribe()
         };
+        // Watch sequence numbers are connection-local cursors, not durable journal
+        // offsets. A reconnect (including after a server crash) receives the current
+        // replayed snapshot immediately, numbered after the caller's supplied cursor,
+        // and then level-triggered replacements for changes observed on this process.
         let stream = try_stream! {
             let mut sequence = request.after_sequence.unwrap_or_default();
             loop {
@@ -746,17 +774,8 @@ fn invalid(message: impl Into<String>) -> ConnectError {
     ConnectError::new(ErrorCode::InvalidArgument, message)
 }
 
-fn event_graph_id(event: &henosis_types::CoreEvent) -> Option<GraphId> {
-    match event {
-        henosis_types::CoreEvent::GraphCreated(intent)
-        | henosis_types::CoreEvent::GraphUpdated(intent) => Some(intent.id()),
-        henosis_types::CoreEvent::PlanAccepted { graph_id, .. }
-        | henosis_types::CoreEvent::GraphRetired { graph_id, .. } => Some(*graph_id),
-        henosis_types::CoreEvent::ControllerReported(report) => Some(report.graph_id()),
-        henosis_types::CoreEvent::ComponentOutputsReplaced(outputs) => Some(outputs.graph_id()),
-        henosis_types::CoreEvent::OutputsPublished(outputs) => Some(outputs.graph_id()),
-        henosis_types::CoreEvent::StallDetected(stall) => Some(stall.graph_id()),
-    }
+fn required_env(name: &str) -> anyhow::Result<String> {
+    std::env::var(name).map_err(|_| anyhow::anyhow!("{name} is required"))
 }
 
 fn graph_summaries(

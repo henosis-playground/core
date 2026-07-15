@@ -1,5 +1,14 @@
 //! Durable core-event journal plus the S2 implementation of the storage
 //! boundary.
+//!
+//! One graph stream carries facts whose value is their history: accepted graph
+//! generations and plans, component/static-output replacements, observed-output
+//! publications, stalls, and retirement. The root registry stream carries graph
+//! registration and retirement so graph streams can be discovered after a cold
+//! start. Controller dispositions are level reports, not log-shaped facts: a
+//! controller re-observes and re-reports them on every pass, so they deliberately
+//! remain memory-only. When a report includes an output publication, only the
+//! generation-fenced `OutputsPublished` fact is durable.
 
 use std::sync::Arc;
 
@@ -15,7 +24,9 @@ use henosis_storage::StoredRecord;
 use henosis_storage::StreamName;
 use henosis_storage::StreamPosition;
 use henosis_types::CoreEvent;
+use henosis_types::Generation;
 use henosis_types::GraphId;
+use henosis_types::GraphIntent;
 use s2_sdk::S2;
 use s2_sdk::S2Basin;
 use s2_sdk::types::AccountEndpoint;
@@ -36,6 +47,17 @@ use s2_sdk::types::S2Error;
 use serde::Deserialize;
 use serde::Serialize;
 
+const REGISTRY_STREAM: &str = "registry";
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum RegistryEvent {
+    GraphRegistered(GraphIntent),
+    GraphRetired {
+        graph_id: GraphId,
+        last_generation: Generation,
+    },
+}
+
 #[derive(Clone)]
 pub struct Journal {
     storage: Arc<dyn StorageEngine>,
@@ -53,21 +75,26 @@ impl Journal {
         expected: StreamPosition,
         event: &CoreEvent,
     ) -> Result<AppendAck, Error<StorageDomainError, anyhow::Error, anyhow::Error>> {
-        let body = serde_json::to_vec(&JournalRecord {
-            schema: 1,
-            event: event.clone(),
-        })
-        .map_err(|error| {
-            Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Invariant(
-                anyhow::Error::new(error),
-            )
-        })?;
-        self.storage
-            .append(
-                &graph_stream(graph_id),
-                expected,
-                vec![AppendRecord::new(body)],
-            )
+        self.append_all(graph_id, expected, std::slice::from_ref(event))
+            .await
+    }
+
+    pub async fn append_all(
+        &self,
+        graph_id: GraphId,
+        expected: StreamPosition,
+        events: &[CoreEvent],
+    ) -> Result<AppendAck, Error<StorageDomainError, anyhow::Error, anyhow::Error>> {
+        self.append_records(&graph_stream(graph_id), expected, events.iter().map(EventRecord::Core))
+            .await
+    }
+
+    pub async fn append_registry(
+        &self,
+        expected: StreamPosition,
+        event: &RegistryEvent,
+    ) -> Result<AppendAck, Error<StorageDomainError, anyhow::Error, anyhow::Error>> {
+        self.append_records(&registry_stream(), expected, std::iter::once(EventRecord::Registry(event)))
             .await
     }
 
@@ -75,13 +102,31 @@ impl Journal {
         &self,
         graph_id: GraphId,
     ) -> Result<Vec<CoreEvent>, Error<StorageDomainError, anyhow::Error, anyhow::Error>> {
+        self.load_with_tail(graph_id).await.map(|(events, _)| events)
+    }
+
+    pub async fn load_with_tail(
+        &self,
+        graph_id: GraphId,
+    ) -> Result<(Vec<CoreEvent>, StreamPosition), Error<StorageDomainError, anyhow::Error, anyhow::Error>> {
         let stream = graph_stream(graph_id);
-        let tail = self.storage.tail(&stream).await?;
-        let records = self
-            .storage
-            .read(&stream, StreamPosition::default(), tail.sequence() as usize)
-            .await?;
-        records.into_iter().map(decode_record).collect()
+        let (records, tail) = self.load_records(&stream).await?;
+        let events = records
+            .into_iter()
+            .map(decode_graph_record)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((events, tail))
+    }
+
+    pub async fn load_registry(
+        &self,
+    ) -> Result<(Vec<RegistryEvent>, StreamPosition), Error<StorageDomainError, anyhow::Error, anyhow::Error>> {
+        let (records, tail) = self.load_records(&registry_stream()).await?;
+        let events = records
+            .into_iter()
+            .map(decode_registry_record)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((events, tail))
     }
 
     pub fn follow(
@@ -95,21 +140,81 @@ impl Journal {
         Box::pin(
             self.storage
                 .follow(graph_stream(graph_id), from)
-                .map(|record| record.and_then(decode_record)),
+                .map(|record| record.and_then(decode_graph_record)),
         )
+    }
+
+    async fn append_records<'a>(
+        &self,
+        stream: &StreamName,
+        expected: StreamPosition,
+        records: impl Iterator<Item = EventRecord<'a>>,
+    ) -> Result<AppendAck, Error<StorageDomainError, anyhow::Error, anyhow::Error>> {
+        let records = records
+            .map(encode_record)
+            .collect::<Result<Vec<_>, _>>()?;
+        if records.is_empty() {
+            return Ok(AppendAck::new(expected, expected));
+        }
+        self.storage.append(stream, expected, records).await
+    }
+
+    async fn load_records(
+        &self,
+        stream: &StreamName,
+    ) -> Result<(Vec<StoredRecord>, StreamPosition), Error<StorageDomainError, anyhow::Error, anyhow::Error>> {
+        let tail = self.storage.tail(stream).await?;
+        if tail.sequence() == 0 {
+            return Ok((Vec::new(), tail));
+        }
+        let records = self
+            .storage
+            .read(stream, StreamPosition::default(), tail.sequence() as usize)
+            .await?;
+        Ok((records, tail))
     }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-struct JournalRecord {
+struct JournalRecord<T> {
     schema: u32,
-    event: CoreEvent,
+    event: T,
 }
 
-fn decode_record(
+enum EventRecord<'a> {
+    Core(&'a CoreEvent),
+    Registry(&'a RegistryEvent),
+}
+
+fn encode_record(
+    record: EventRecord<'_>,
+) -> Result<AppendRecord, Error<StorageDomainError, anyhow::Error, anyhow::Error>> {
+    let body = match record {
+        EventRecord::Core(event) => serde_json::to_vec(&JournalRecord { schema: 1, event }),
+        EventRecord::Registry(event) => serde_json::to_vec(&JournalRecord { schema: 1, event }),
+    }
+    .map_err(|error| {
+        Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Invariant(anyhow::Error::new(error))
+    })?;
+    Ok(AppendRecord::new(body))
+}
+
+fn decode_graph_record(
     record: StoredRecord,
 ) -> Result<CoreEvent, Error<StorageDomainError, anyhow::Error, anyhow::Error>> {
-    let decoded: JournalRecord = serde_json::from_slice(record.body()).map_err(|error| {
+    decode_record(record)
+}
+
+fn decode_registry_record(
+    record: StoredRecord,
+) -> Result<RegistryEvent, Error<StorageDomainError, anyhow::Error, anyhow::Error>> {
+    decode_record(record)
+}
+
+fn decode_record<T: for<'de> Deserialize<'de>>(
+    record: StoredRecord,
+) -> Result<T, Error<StorageDomainError, anyhow::Error, anyhow::Error>> {
+    let decoded: JournalRecord<T> = serde_json::from_slice(record.body()).map_err(|error| {
         Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Invariant(anyhow::anyhow!(
             "invalid durable record on {} at sequence {}: {error}",
             record.stream(),
@@ -117,20 +222,29 @@ fn decode_record(
         ))
     })?;
     if decoded.schema != 1 {
-        return Err(
-            Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Invariant(anyhow::anyhow!(
+        return Err(Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Invariant(
+            anyhow::anyhow!(
                 "unsupported journal schema {} on {} at sequence {}",
                 decoded.schema,
                 record.stream(),
                 record.sequence()
-            )),
-        );
+            ),
+        ));
     }
     Ok(decoded.event)
 }
 
+#[must_use]
+pub const fn is_durable(event: &CoreEvent) -> bool {
+    !matches!(event, CoreEvent::ControllerReported(_))
+}
+
 fn graph_stream(graph_id: GraphId) -> StreamName {
     StreamName::new(format!("graph-{graph_id}")).expect("TypeID forms a valid stream name")
+}
+
+fn registry_stream() -> StreamName {
+    StreamName::new(REGISTRY_STREAM).expect("registry is a valid stream name")
 }
 
 #[derive(Clone)]
@@ -196,20 +310,16 @@ impl StorageEngine for S2Storage {
                 StreamPosition::new(ack.tail.seq_num),
             )),
             Err(S2Error::AppendConditionFailed(AppendConditionFailed::SeqNumMismatch(actual))) => {
-                Err(
-                    Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Domain(
-                        StorageDomainError::CasConflict {
-                            expected: expected.sequence(),
-                            actual,
-                        },
-                    ),
-                )
+                Err(Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Domain(
+                    StorageDomainError::CasConflict {
+                        expected: expected.sequence(),
+                        actual,
+                    },
+                ))
             }
-            Err(error) => Err(
-                Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Transient(
-                    anyhow::Error::new(error),
-                ),
-            ),
+            Err(error) => Err(Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Transient(
+                anyhow::Error::new(error),
+            )),
         }
     }
 
