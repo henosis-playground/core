@@ -31,7 +31,9 @@ use thiserror::Error;
 
 mod live;
 
+pub use live::ComponentBundleResolver;
 pub use live::LiveCloudflareConfig;
+pub use live::LiveCloudflareTransport;
 
 const CONTROLLER_NAME: &str = "cloudflare";
 
@@ -90,25 +92,29 @@ pub struct RouteObservation {
 }
 
 pub trait CloudflareTransport: Send + Sync {
-    fn apply_worker(
+    fn apply_worker<'a>(
+        &'a self,
+        graph: GraphId,
+        resource: &'a Resource,
+        body: &'a WorkerBody,
+    ) -> BoxFuture<'a, Result<WorkerObservation, CloudflareError>>;
+    fn apply_tunnel<'a>(
+        &'a self,
+        graph: GraphId,
+        resource: &'a Resource,
+        body: &'a TunnelBody,
+    ) -> BoxFuture<'a, Result<TunnelObservation, CloudflareError>>;
+    fn apply_route<'a>(
+        &'a self,
+        graph: GraphId,
+        resource: &'a Resource,
+        body: &'a RouteBody,
+    ) -> BoxFuture<'a, Result<RouteObservation, CloudflareError>>;
+    fn delete(
         &self,
         graph: GraphId,
-        resource: &Resource,
-        body: &WorkerBody,
-    ) -> Result<WorkerObservation, CloudflareError>;
-    fn apply_tunnel(
-        &self,
-        graph: GraphId,
-        resource: &Resource,
-        body: &TunnelBody,
-    ) -> Result<TunnelObservation, CloudflareError>;
-    fn apply_route(
-        &self,
-        graph: GraphId,
-        resource: &Resource,
-        body: &RouteBody,
-    ) -> Result<RouteObservation, CloudflareError>;
-    fn delete(&self, graph: GraphId, resource: ResourceId) -> Result<(), CloudflareError>;
+        resource: ResourceId,
+    ) -> BoxFuture<'_, Result<(), CloudflareError>>;
 }
 
 pub struct CloudflareController<T> {
@@ -130,8 +136,11 @@ where
         }
     }
 
-    fn reconcile(&self, slice: &ControllerSlice) -> Result<ControllerReport, ControllerError> {
-        let result = self.apply_slice(slice);
+    async fn reconcile(
+        &self,
+        slice: &ControllerSlice,
+    ) -> Result<ControllerReport, ControllerError> {
+        let result = self.apply_slice(slice).await;
         let (outputs, evidence) = match result {
             Ok(value) => value,
             Err(error) => {
@@ -153,7 +162,7 @@ where
             .map_err(|error| ControllerError::new(error.to_string()))
     }
 
-    fn apply_slice(
+    async fn apply_slice(
         &self,
         slice: &ControllerSlice,
     ) -> Result<(Vec<henosis_types::ObservedOutput>, String), CloudflareError> {
@@ -170,7 +179,8 @@ where
                     let body: WorkerBody = decode(resource)?;
                     let observed =
                         self.transport
-                            .apply_worker(slice.graph_id(), resource, &body)?;
+                            .apply_worker(slice.graph_id(), resource, &body)
+                            .await?;
                     push_if_declared(
                         resource,
                         "url",
@@ -201,7 +211,8 @@ where
                     let body: TunnelBody = decode(resource)?;
                     let observed =
                         self.transport
-                            .apply_tunnel(slice.graph_id(), resource, &body)?;
+                            .apply_tunnel(slice.graph_id(), resource, &body)
+                            .await?;
                     push_if_declared(
                         resource,
                         "tunnelId",
@@ -232,7 +243,8 @@ where
                     let body: RouteBody = decode(resource)?;
                     let observed = self
                         .transport
-                        .apply_route(slice.graph_id(), resource, &body)?;
+                        .apply_route(slice.graph_id(), resource, &body)
+                        .await?;
                     push_if_declared(
                         resource,
                         "hostname",
@@ -253,10 +265,15 @@ where
         Ok((outputs, evidence))
     }
 
-    fn remove(&self, graph: GraphId, resources: &[ResourceId]) -> Result<(), ControllerError> {
+    async fn remove(
+        &self,
+        graph: GraphId,
+        resources: &[ResourceId],
+    ) -> Result<(), ControllerError> {
         for resource in resources {
             self.transport
                 .delete(graph, *resource)
+                .await
                 .map_err(|error| ControllerError::new(error.to_string()))?;
         }
         if let Some(current) = self
@@ -287,13 +304,15 @@ where
     ) -> BoxFuture<'a, Result<Option<ControllerReport>, ControllerError>> {
         async move {
             match command {
-                ControllerCommand::Reconcile(slice) => self.reconcile(slice).map(Some),
+                ControllerCommand::Reconcile(slice) => self.reconcile(slice).await.map(Some),
                 ControllerCommand::Supersede(supersession) => {
-                    self.remove(supersession.graph_id, &supersession.resources)?;
+                    self.remove(supersession.graph_id, &supersession.resources)
+                        .await?;
                     Ok(None)
                 }
                 ControllerCommand::Retire(retirement) => {
-                    self.remove(retirement.graph_id, &retirement.resources)?;
+                    self.remove(retirement.graph_id, &retirement.resources)
+                        .await?;
                     self.state
                         .lock()
                         .expect("cloudflare controller state lock is not poisoned")
@@ -387,43 +406,53 @@ mod tests {
     }
 
     impl CloudflareTransport for RecordedTransport {
-        fn apply_worker(
-            &self,
+        fn apply_worker<'a>(
+            &'a self,
             _graph: GraphId,
-            resource: &Resource,
-            _body: &WorkerBody,
-        ) -> Result<WorkerObservation, CloudflareError> {
-            self.record(resource);
-            Ok(WorkerObservation {
-                url: "https://api.example.workers.dev".into(),
-                worker_name: "api".into(),
-                deployment_id: "deployment-1".into(),
-                version_id: "version-1".into(),
-            })
+            resource: &'a Resource,
+            _body: &'a WorkerBody,
+        ) -> BoxFuture<'a, Result<WorkerObservation, CloudflareError>> {
+            async move {
+                self.record(resource);
+                Ok(WorkerObservation {
+                    url: "https://api.example.workers.dev".into(),
+                    worker_name: "api".into(),
+                    deployment_id: "deployment-1".into(),
+                    version_id: "version-1".into(),
+                })
+            }
+            .boxed()
         }
 
-        fn apply_tunnel(
-            &self,
+        fn apply_tunnel<'a>(
+            &'a self,
             _graph: GraphId,
-            _resource: &Resource,
-            _body: &TunnelBody,
-        ) -> Result<TunnelObservation, CloudflareError> {
-            unreachable!()
+            _resource: &'a Resource,
+            _body: &'a TunnelBody,
+        ) -> BoxFuture<'a, Result<TunnelObservation, CloudflareError>> {
+            async { unreachable!() }.boxed()
         }
 
-        fn apply_route(
-            &self,
+        fn apply_route<'a>(
+            &'a self,
             _graph: GraphId,
-            _resource: &Resource,
-            _body: &RouteBody,
-        ) -> Result<RouteObservation, CloudflareError> {
-            unreachable!()
+            _resource: &'a Resource,
+            _body: &'a RouteBody,
+        ) -> BoxFuture<'a, Result<RouteObservation, CloudflareError>> {
+            async { unreachable!() }.boxed()
         }
 
-        fn delete(&self, _graph: GraphId, resource: ResourceId) -> Result<(), CloudflareError> {
-            self.digests.lock().unwrap().remove(&resource);
-            self.deletions.lock().unwrap().push(resource);
-            Ok(())
+        fn delete(
+            &self,
+            _graph: GraphId,
+            resource: ResourceId,
+        ) -> BoxFuture<'_, Result<(), CloudflareError>> {
+            async move {
+                self.digests.lock().unwrap().remove(&resource);
+                self.deletions.lock().unwrap().push(resource);
+                Ok(())
+            }
+            .boxed()
         }
     }
 

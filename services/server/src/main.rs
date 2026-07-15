@@ -14,6 +14,7 @@ use connectrpc::Router;
 use connectrpc::ServiceRequest;
 use connectrpc::ServiceResult;
 use connectrpc::ServiceStream;
+use futures::FutureExt as _;
 use futures::future::BoxFuture;
 use henosis_controller_cloudflare::CloudflareError;
 use henosis_controller_cloudflare::CloudflareTransport;
@@ -540,50 +541,63 @@ impl Controller for DemoSupabaseController {
 struct RecordedCloudflareTransport;
 
 impl CloudflareTransport for RecordedCloudflareTransport {
-    fn apply_worker(
-        &self,
+    fn apply_worker<'a>(
+        &'a self,
         _graph: GraphId,
-        resource: &Resource,
-        _body: &WorkerBody,
-    ) -> Result<WorkerObservation, CloudflareError> {
-        Ok(WorkerObservation {
-            url: format!(
-                "https://{}.workers.demo.invalid",
-                resource.path().address().name()
-            ),
-            worker_name: resource.path().address().name().to_string(),
-            deployment_id: format!("recorded-{}", resource.id()),
-            version_id: "recorded-v1".into(),
-        })
+        resource: &'a Resource,
+        _body: &'a WorkerBody,
+    ) -> BoxFuture<'a, Result<WorkerObservation, CloudflareError>> {
+        async move {
+            Ok(WorkerObservation {
+                url: format!(
+                    "https://{}.workers.demo.invalid",
+                    resource.path().address().name()
+                ),
+                worker_name: resource.path().address().name().to_string(),
+                deployment_id: format!("recorded-{}", resource.id()),
+                version_id: "recorded-v1".into(),
+            })
+        }
+        .boxed()
     }
 
-    fn apply_tunnel(
-        &self,
+    fn apply_tunnel<'a>(
+        &'a self,
         _graph: GraphId,
-        resource: &Resource,
-        _body: &TunnelBody,
-    ) -> Result<TunnelObservation, CloudflareError> {
-        Ok(TunnelObservation {
-            tunnel_id: format!("recorded-{}", resource.id()),
-            tunnel_name: resource.path().address().name().to_string(),
-            private_hostname: "supabase.internal.demo.invalid".into(),
-            token_ref: "demo-fake://cloudflare/tunnel-token".into(),
-        })
+        resource: &'a Resource,
+        _body: &'a TunnelBody,
+    ) -> BoxFuture<'a, Result<TunnelObservation, CloudflareError>> {
+        async move {
+            Ok(TunnelObservation {
+                tunnel_id: format!("recorded-{}", resource.id()),
+                tunnel_name: resource.path().address().name().to_string(),
+                private_hostname: "supabase.internal.demo.invalid".into(),
+                token_ref: "demo-fake://cloudflare/tunnel-token".into(),
+            })
+        }
+        .boxed()
     }
 
-    fn apply_route(
-        &self,
+    fn apply_route<'a>(
+        &'a self,
         _graph: GraphId,
-        _resource: &Resource,
-        body: &RouteBody,
-    ) -> Result<RouteObservation, CloudflareError> {
-        Ok(RouteObservation {
-            hostname: body.pattern.clone(),
-        })
+        _resource: &'a Resource,
+        body: &'a RouteBody,
+    ) -> BoxFuture<'a, Result<RouteObservation, CloudflareError>> {
+        async move {
+            Ok(RouteObservation {
+                hostname: body.pattern.clone(),
+            })
+        }
+        .boxed()
     }
 
-    fn delete(&self, _graph: GraphId, _resource: ResourceId) -> Result<(), CloudflareError> {
-        Ok(())
+    fn delete(
+        &self,
+        _graph: GraphId,
+        _resource: ResourceId,
+    ) -> BoxFuture<'_, Result<(), CloudflareError>> {
+        async { Ok(()) }.boxed()
     }
 }
 
