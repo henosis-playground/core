@@ -1,21 +1,28 @@
 //! Cloudflare resource controller with a replaceable API transport.
 //!
-//! The transport seam is deliberately provider-shaped and is exercised with a
-//! recorded/in-memory implementation. Worker source and asset archives are
-//! content-addressed workload artifacts. The transport fetches them by digest
-//! and never reads workload bytes from component configuration bundles.
+//! Workers carry graph/resource/digest tags in Cloudflare's script metadata.
+//! Tunnels use an opaque deterministic target identity derived from the graph
+//! and resource TypeIDs because Cloudflare exposes tunnel metadata read-only.
+//! Routes are scoped by their exact zone/pattern and may only reference a
+//! Worker whose ownership tags match the graph.
 
 use std::collections::BTreeMap;
-use std::sync::Mutex;
 
 use futures::FutureExt as _;
 use futures::future::BoxFuture;
+use henosis_controller_runtime::PerResourceReconciler;
+use henosis_controller_runtime::ReconcileDecision;
+use henosis_controller_runtime::ResourceConvergence;
+use henosis_controller_runtime::ResourceGoal;
 use henosis_controller_runtime::controller_name;
 use henosis_controller_runtime::failed_report;
 use henosis_controller_runtime::output;
 use henosis_controller_runtime::publication_id;
 use henosis_controller_runtime::ready_report;
+use henosis_controller_runtime::reconcile_absent;
+use henosis_controller_runtime::reconcile_slice;
 use henosis_types::ArtifactDigest;
+use henosis_types::ContentDigest;
 use henosis_types::Controller;
 use henosis_types::ControllerCommand;
 use henosis_types::ControllerError;
@@ -23,8 +30,8 @@ use henosis_types::ControllerName;
 use henosis_types::ControllerReport;
 use henosis_types::ControllerSlice;
 use henosis_types::GraphId;
+use henosis_types::ObservedOutput;
 use henosis_types::Resource;
-use henosis_types::ResourceId;
 use serde::Deserialize;
 use serde::Serialize;
 use thiserror::Error;
@@ -107,36 +114,52 @@ pub struct RouteObservation {
     pub hostname: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CloudflareObservation {
+    Missing,
+    Foreign,
+    Worker {
+        digest: ContentDigest,
+        subdomain_enabled: bool,
+        observation: WorkerObservation,
+    },
+    Tunnel {
+        configured: bool,
+        observation: TunnelObservation,
+    },
+    Route {
+        matches: bool,
+        observation: RouteObservation,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CloudflareAction {
+    UploadWorker(WorkerBody),
+    EnableWorkerSubdomain,
+    CreateTunnel,
+    ConfigureTunnel(TunnelBody),
+    WriteRoute(RouteBody),
+    Delete,
+}
+
 pub trait CloudflareTransport: Send + Sync {
-    fn apply_worker<'a>(
+    fn observe<'a>(
         &'a self,
         graph: GraphId,
         resource: &'a Resource,
-        body: &'a WorkerBody,
-    ) -> BoxFuture<'a, Result<WorkerObservation, CloudflareError>>;
-    fn apply_tunnel<'a>(
+    ) -> BoxFuture<'a, Result<CloudflareObservation, CloudflareError>>;
+    fn act<'a>(
         &'a self,
         graph: GraphId,
         resource: &'a Resource,
-        body: &'a TunnelBody,
-    ) -> BoxFuture<'a, Result<TunnelObservation, CloudflareError>>;
-    fn apply_route<'a>(
-        &'a self,
-        graph: GraphId,
-        resource: &'a Resource,
-        body: &'a RouteBody,
-    ) -> BoxFuture<'a, Result<RouteObservation, CloudflareError>>;
-    fn delete(
-        &self,
-        graph: GraphId,
-        resource: ResourceId,
-    ) -> BoxFuture<'_, Result<(), CloudflareError>>;
+        action: CloudflareAction,
+    ) -> BoxFuture<'a, Result<(), CloudflareError>>;
 }
 
 pub struct CloudflareController<T> {
     name: ControllerName,
     transport: T,
-    state: Mutex<BTreeMap<GraphId, BTreeMap<ResourceId, Resource>>>,
 }
 
 impl<T> CloudflareController<T>
@@ -148,7 +171,6 @@ where
         Self {
             name: controller_name(CONTROLLER_NAME),
             transport,
-            state: Mutex::new(BTreeMap::new()),
         }
     }
 
@@ -156,168 +178,135 @@ where
         &self,
         slice: &ControllerSlice,
     ) -> Result<ControllerReport, ControllerError> {
-        let result = self.apply_slice(slice).await;
-        let (outputs, evidence) = match result {
-            Ok(value) => value,
+        let convergence = match reconcile_slice(self, slice).await {
+            Ok(convergence) => convergence,
             Err(error) => {
                 return failed_report(slice, error.to_string())
                     .map_err(|report_error| ControllerError::new(report_error.to_string()));
             }
         };
-        let desired = slice
-            .resources()
-            .iter()
-            .cloned()
-            .map(|resource| (resource.id(), resource))
-            .collect();
-        self.state
-            .lock()
-            .expect("cloudflare controller state lock is not poisoned")
-            .insert(slice.graph_id(), desired);
-        ready_report(slice, Some(publication_id(evidence.as_bytes())), outputs)
-            .map_err(|error| ControllerError::new(error.to_string()))
+        ready_report(
+            slice,
+            Some(publication_id(&convergence.evidence)),
+            convergence.outputs,
+        )
+        .map_err(|error| ControllerError::new(error.to_string()))
+    }
+}
+
+impl<T> PerResourceReconciler for CloudflareController<T>
+where
+    T: CloudflareTransport,
+{
+    type Observation = CloudflareObservation;
+    type Action = CloudflareAction;
+    type Error = CloudflareError;
+
+    fn observe<'a>(
+        &'a self,
+        graph_id: GraphId,
+        resource: &'a Resource,
+    ) -> BoxFuture<'a, Result<Self::Observation, Self::Error>> {
+        self.transport.observe(graph_id, resource)
     }
 
-    async fn apply_slice(
+    fn diff(
         &self,
-        slice: &ControllerSlice,
-    ) -> Result<(Vec<henosis_types::ObservedOutput>, String), CloudflareError> {
-        let mut outputs = Vec::new();
-        let mut evidence = String::new();
-        let mut resources = slice.resources().iter().collect::<Vec<_>>();
-        resources.sort_by_key(|resource| cloudflare_rank(resource));
-        for resource in resources {
-            match (
-                resource.kind().name().as_str(),
-                resource.kind().version().get(),
-            ) {
-                ("cloudflare/worker", 1) => {
-                    let body: WorkerBody = decode(resource)?;
-                    let observed = self
-                        .transport
-                        .apply_worker(slice.graph_id(), resource, &body)
-                        .await?;
-                    push_if_declared(
-                        resource,
-                        "url",
-                        serde_json::json!(observed.url),
-                        &mut outputs,
-                    )?;
-                    push_if_declared(
-                        resource,
-                        "workerName",
-                        serde_json::json!(observed.worker_name),
-                        &mut outputs,
-                    )?;
-                    push_if_declared(
-                        resource,
-                        "deploymentId",
-                        serde_json::json!(observed.deployment_id),
-                        &mut outputs,
-                    )?;
-                    push_if_declared(
-                        resource,
-                        "versionId",
-                        serde_json::json!(observed.version_id),
-                        &mut outputs,
-                    )?;
-                    evidence.push_str(&format!("{}:{};", resource.id(), observed.deployment_id));
-                }
-                ("cloudflare/tunnel", 1) => {
-                    let body: TunnelBody = decode(resource)?;
-                    let observed = self
-                        .transport
-                        .apply_tunnel(slice.graph_id(), resource, &body)
-                        .await?;
-                    push_if_declared(
-                        resource,
-                        "tunnelId",
-                        serde_json::json!(observed.tunnel_id),
-                        &mut outputs,
-                    )?;
-                    push_if_declared(
-                        resource,
-                        "tunnelName",
-                        serde_json::json!(observed.tunnel_name),
-                        &mut outputs,
-                    )?;
-                    push_if_declared(
-                        resource,
-                        "privateHostname",
-                        serde_json::json!(observed.private_hostname),
-                        &mut outputs,
-                    )?;
-                    push_if_declared(
-                        resource,
-                        "tokenRef",
-                        serde_json::json!(observed.token_ref),
-                        &mut outputs,
-                    )?;
-                    evidence.push_str(&format!("{}:{};", resource.id(), observed.tunnel_id));
-                }
-                ("cloudflare/route", 1) => {
-                    let body: RouteBody = decode(resource)?;
-                    let observed = self
-                        .transport
-                        .apply_route(slice.graph_id(), resource, &body)
-                        .await?;
-                    push_if_declared(
-                        resource,
-                        "hostname",
-                        serde_json::json!(observed.hostname),
-                        &mut outputs,
-                    )?;
-                    evidence.push_str(&format!("{}:{};", resource.id(), observed.hostname));
-                }
-                _ => {
-                    return Err(CloudflareError::Contract(format!(
-                        "error[cloudflare.kind.unsupported]: {} has unsupported kind {}",
-                        resource.path(),
-                        resource.kind()
-                    )));
-                }
-            }
+        _graph_id: GraphId,
+        _desired: &[Resource],
+        resource: &Resource,
+        goal: ResourceGoal,
+        observed: &Self::Observation,
+    ) -> Result<ReconcileDecision<Self::Action>, Self::Error> {
+        if observed == &CloudflareObservation::Foreign {
+            return Err(CloudflareError::Provider(format!(
+                "refusing to mutate {} because target ownership metadata/identity does not match",
+                resource.path()
+            )));
         }
-        Ok((outputs, evidence))
+        if goal == ResourceGoal::Absent {
+            return if observed == &CloudflareObservation::Missing {
+                Ok(ReconcileDecision::Converged(ResourceConvergence::default()))
+            } else {
+                Ok(ReconcileDecision::Act(CloudflareAction::Delete))
+            };
+        }
+        match (
+            resource.kind().name().as_str(),
+            resource.kind().version().get(),
+            observed,
+        ) {
+            ("cloudflare/worker", 1, CloudflareObservation::Missing) => {
+                Ok(ReconcileDecision::Act(CloudflareAction::UploadWorker(decode(resource)?)))
+            }
+            (
+                "cloudflare/worker",
+                1,
+                CloudflareObservation::Worker { digest, .. },
+            ) if *digest != resource.digest() => {
+                Ok(ReconcileDecision::Act(CloudflareAction::UploadWorker(decode(resource)?)))
+            }
+            (
+                "cloudflare/worker",
+                1,
+                CloudflareObservation::Worker {
+                    subdomain_enabled: false,
+                    ..
+                },
+            ) => Ok(ReconcileDecision::Act(
+                CloudflareAction::EnableWorkerSubdomain,
+            )),
+            (
+                "cloudflare/worker",
+                1,
+                CloudflareObservation::Worker { observation, .. },
+            ) => converged_worker(resource, observation),
+            ("cloudflare/tunnel", 1, CloudflareObservation::Missing) => {
+                Ok(ReconcileDecision::Act(CloudflareAction::CreateTunnel))
+            }
+            (
+                "cloudflare/tunnel",
+                1,
+                CloudflareObservation::Tunnel {
+                    configured: false,
+                    ..
+                },
+            ) => Ok(ReconcileDecision::Act(CloudflareAction::ConfigureTunnel(
+                decode(resource)?,
+            ))),
+            (
+                "cloudflare/tunnel",
+                1,
+                CloudflareObservation::Tunnel { observation, .. },
+            ) => converged_tunnel(resource, observation),
+            ("cloudflare/route", 1, CloudflareObservation::Missing) => {
+                Ok(ReconcileDecision::Act(CloudflareAction::WriteRoute(decode(resource)?)))
+            }
+            (
+                "cloudflare/route",
+                1,
+                CloudflareObservation::Route { matches: false, .. },
+            ) => Ok(ReconcileDecision::Act(CloudflareAction::WriteRoute(decode(resource)?))),
+            (
+                "cloudflare/route",
+                1,
+                CloudflareObservation::Route { observation, .. },
+            ) => converged_route(resource, observation),
+            (_, _, CloudflareObservation::Missing) => Err(unsupported(resource)),
+            _ => Err(CloudflareError::Provider(format!(
+                "Cloudflare returned an observation incompatible with {}",
+                resource.path()
+            ))),
+        }
     }
 
-    async fn remove(
-        &self,
-        graph: GraphId,
-        resources: &[Resource],
-    ) -> Result<(), ControllerError> {
-        let mut ordered = resources.iter().map(Resource::id).collect::<Vec<_>>();
-        {
-            let state = self
-                .state
-                .lock()
-                .expect("cloudflare controller state lock is not poisoned");
-            if let Some(current) = state.get(&graph) {
-                ordered.sort_by_key(|resource| {
-                    current
-                        .get(resource)
-                        .map(cloudflare_delete_rank)
-                        .unwrap_or(u8::MAX)
-                });
-            }
-        }
-        for resource in ordered {
-            self.transport
-                .delete(graph, resource)
-                .await
-                .map_err(|error| ControllerError::new(error.to_string()))?;
-        }
-        if let Some(current) = self
-            .state
-            .lock()
-            .expect("cloudflare controller state lock is not poisoned")
-            .get_mut(&graph)
-        {
-            for resource in resources {
-                current.remove(&resource.id());
-            }
-        }
-        Ok(())
+    fn act<'a>(
+        &'a self,
+        graph_id: GraphId,
+        resource: &'a Resource,
+        action: Self::Action,
+    ) -> BoxFuture<'a, Result<(), Self::Error>> {
+        self.transport.act(graph_id, resource, action)
     }
 }
 
@@ -337,17 +326,15 @@ where
             match command {
                 ControllerCommand::Reconcile(slice) => self.reconcile(slice).await.map(Some),
                 ControllerCommand::Supersede(supersession) => {
-                    self.remove(supersession.graph_id, &supersession.resources)
-                        .await?;
+                    reconcile_absent(self, supersession.graph_id, &supersession.resources)
+                        .await
+                        .map_err(|error| ControllerError::new(error.to_string()))?;
                     Ok(None)
                 }
                 ControllerCommand::Retire(retirement) => {
-                    self.remove(retirement.graph_id, &retirement.resources)
-                        .await?;
-                    self.state
-                        .lock()
-                        .expect("cloudflare controller state lock is not poisoned")
-                        .remove(&retirement.graph_id);
+                    reconcile_absent(self, retirement.graph_id, &retirement.resources)
+                        .await
+                        .map_err(|error| ControllerError::new(error.to_string()))?;
                     Ok(None)
                 }
             }
@@ -356,32 +343,59 @@ where
     }
 }
 
-fn cloudflare_rank(resource: &Resource) -> u8 {
-    match resource.kind().name().as_str() {
-        "cloudflare/worker" => 0,
-        "cloudflare/tunnel" => 1,
-        "cloudflare/route" => 2,
-        _ => 3,
+fn converged_worker(
+    resource: &Resource,
+    observed: &WorkerObservation,
+) -> Result<ReconcileDecision<CloudflareAction>, CloudflareError> {
+    let mut outputs = Vec::new();
+    for (name, value) in [
+        ("url", serde_json::json!(observed.url)),
+        ("workerName", serde_json::json!(observed.worker_name)),
+        ("deploymentId", serde_json::json!(observed.deployment_id)),
+        ("versionId", serde_json::json!(observed.version_id)),
+    ] {
+        push_if_declared(resource, name, value, &mut outputs)?;
     }
+    Ok(ReconcileDecision::Converged(ResourceConvergence {
+        outputs,
+        evidence: observed.deployment_id.as_bytes().to_vec(),
+    }))
 }
 
-fn cloudflare_delete_rank(resource: &Resource) -> u8 {
-    match resource.kind().name().as_str() {
-        "cloudflare/route" => 0,
-        "cloudflare/worker"
-            if resource
-                .body()
-                .as_json()
-                .get("services")
-                .and_then(serde_json::Value::as_object)
-                .is_some_and(|services| !services.is_empty()) =>
-        {
-            1
-        }
-        "cloudflare/worker" => 2,
-        "cloudflare/tunnel" => 3,
-        _ => 4,
+fn converged_tunnel(
+    resource: &Resource,
+    observed: &TunnelObservation,
+) -> Result<ReconcileDecision<CloudflareAction>, CloudflareError> {
+    let mut outputs = Vec::new();
+    for (name, value) in [
+        ("tunnelId", serde_json::json!(observed.tunnel_id)),
+        ("tunnelName", serde_json::json!(observed.tunnel_name)),
+        ("privateHostname", serde_json::json!(observed.private_hostname)),
+        ("tokenRef", serde_json::json!(observed.token_ref)),
+    ] {
+        push_if_declared(resource, name, value, &mut outputs)?;
     }
+    Ok(ReconcileDecision::Converged(ResourceConvergence {
+        outputs,
+        evidence: observed.tunnel_id.as_bytes().to_vec(),
+    }))
+}
+
+fn converged_route(
+    resource: &Resource,
+    observed: &RouteObservation,
+) -> Result<ReconcileDecision<CloudflareAction>, CloudflareError> {
+    let mut outputs = Vec::new();
+    push_if_declared(
+        resource,
+        "hostname",
+        serde_json::json!(observed.hostname),
+        &mut outputs,
+    )?;
+    Ok(ReconcileDecision::Converged(ResourceConvergence {
+        outputs,
+        evidence: observed.hostname.as_bytes().to_vec(),
+    }))
 }
 
 fn decode<T>(resource: &Resource) -> Result<T, CloudflareError>
@@ -396,11 +410,19 @@ where
     })
 }
 
+fn unsupported(resource: &Resource) -> CloudflareError {
+    CloudflareError::Contract(format!(
+        "error[cloudflare.kind.unsupported]: {} has unsupported kind {}",
+        resource.path(),
+        resource.kind()
+    ))
+}
+
 fn push_if_declared(
     resource: &Resource,
     name: &str,
     value: serde_json::Value,
-    outputs: &mut Vec<henosis_types::ObservedOutput>,
+    outputs: &mut Vec<ObservedOutput>,
 ) -> Result<(), CloudflareError> {
     if resource
         .outputs()
@@ -429,11 +451,10 @@ pub enum CloudflareError {
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroU32;
+    use std::sync::Arc;
     use std::sync::Mutex;
 
     use henosis_types::ComponentName;
-    use henosis_types::ContentDigest;
-    use henosis_types::ControllerSlice;
     use henosis_types::Generation;
     use henosis_types::KindName;
     use henosis_types::KindVersion;
@@ -442,6 +463,7 @@ mod tests {
     use henosis_types::OutputDeclaration;
     use henosis_types::OutputName;
     use henosis_types::ResourceAddress;
+    use henosis_types::ResourceId;
     use henosis_types::ResourceName;
     use henosis_types::ResourcePath;
     use henosis_types::Retirement;
@@ -449,102 +471,144 @@ mod tests {
     use super::*;
 
     #[derive(Default)]
+    struct FakeState {
+        resources: BTreeMap<(GraphId, ResourceId), CloudflareObservation>,
+        foreign: BTreeMap<ResourceId, CloudflareObservation>,
+    }
+
     struct RecordedTransport {
-        digests: Mutex<BTreeMap<ResourceId, ContentDigest>>,
-        mutations: Mutex<usize>,
-        deletions: Mutex<Vec<ResourceId>>,
+        state: Arc<Mutex<FakeState>>,
+        actions: Arc<Mutex<Vec<CloudflareAction>>>,
     }
 
     impl CloudflareTransport for RecordedTransport {
-        fn apply_worker<'a>(
+        fn observe<'a>(
             &'a self,
-            _graph: GraphId,
+            graph: GraphId,
             resource: &'a Resource,
-            _body: &'a WorkerBody,
-        ) -> BoxFuture<'a, Result<WorkerObservation, CloudflareError>> {
+        ) -> BoxFuture<'a, Result<CloudflareObservation, CloudflareError>> {
             async move {
-                self.record(resource);
-                Ok(WorkerObservation {
-                    url: "https://api.example.workers.dev".into(),
-                    worker_name: "api".into(),
-                    deployment_id: "deployment-1".into(),
-                    version_id: "version-1".into(),
-                })
+                let state = self.state.lock().unwrap();
+                Ok(state
+                    .foreign
+                    .get(&resource.id())
+                    .or_else(|| state.resources.get(&(graph, resource.id())))
+                    .cloned()
+                    .unwrap_or(CloudflareObservation::Missing))
             }
             .boxed()
         }
 
-        fn apply_tunnel<'a>(
+        fn act<'a>(
             &'a self,
-            _graph: GraphId,
-            _resource: &'a Resource,
-            _body: &'a TunnelBody,
-        ) -> BoxFuture<'a, Result<TunnelObservation, CloudflareError>> {
-            async { unreachable!() }.boxed()
-        }
-
-        fn apply_route<'a>(
-            &'a self,
-            _graph: GraphId,
-            _resource: &'a Resource,
-            _body: &'a RouteBody,
-        ) -> BoxFuture<'a, Result<RouteObservation, CloudflareError>> {
-            async { unreachable!() }.boxed()
-        }
-
-        fn delete(
-            &self,
-            _graph: GraphId,
-            resource: ResourceId,
-        ) -> BoxFuture<'_, Result<(), CloudflareError>> {
+            graph: GraphId,
+            resource: &'a Resource,
+            action: CloudflareAction,
+        ) -> BoxFuture<'a, Result<(), CloudflareError>> {
             async move {
-                self.digests.lock().unwrap().remove(&resource);
-                self.deletions.lock().unwrap().push(resource);
+                self.actions.lock().unwrap().push(action.clone());
+                let mut state = self.state.lock().unwrap();
+                match action {
+                    CloudflareAction::UploadWorker(_) => {
+                        state.resources.insert(
+                            (graph, resource.id()),
+                            CloudflareObservation::Worker {
+                                digest: resource.digest(),
+                                subdomain_enabled: false,
+                                observation: WorkerObservation {
+                                    url: "https://api.example.workers.dev".into(),
+                                    worker_name: "api".into(),
+                                    deployment_id: "deployment-1".into(),
+                                    version_id: "version-1".into(),
+                                },
+                            },
+                        );
+                    }
+                    CloudflareAction::EnableWorkerSubdomain => {
+                        let CloudflareObservation::Worker {
+                            subdomain_enabled, ..
+                        } = state.resources.get_mut(&(graph, resource.id())).unwrap()
+                        else {
+                            unreachable!()
+                        };
+                        *subdomain_enabled = true;
+                    }
+                    CloudflareAction::Delete => {
+                        state.resources.remove(&(graph, resource.id()));
+                    }
+                    _ => unreachable!(),
+                }
                 Ok(())
             }
             .boxed()
         }
     }
 
-    impl RecordedTransport {
-        fn record(&self, resource: &Resource) {
-            let mut digests = self.digests.lock().unwrap();
-            if digests.get(&resource.id()) != Some(&resource.digest()) {
-                *self.mutations.lock().unwrap() += 1;
-                digests.insert(resource.id(), resource.digest());
-            }
-        }
+    #[tokio::test]
+    async fn converges_one_action_per_pass_without_flapping() {
+        let (controller, actions, _) = controller();
+        let slice = slice();
+        let first = reconcile_slice(&controller, &slice).await.unwrap();
+        assert_eq!((first.actions, first.passes), (2, 3));
+        assert!(matches!(actions.lock().unwrap()[0], CloudflareAction::UploadWorker(_)));
+        assert_eq!(actions.lock().unwrap()[1], CloudflareAction::EnableWorkerSubdomain);
+        let second = reconcile_slice(&controller, &slice).await.unwrap();
+        assert_eq!((second.actions, second.passes), (0, 1));
     }
 
     #[tokio::test]
-    async fn reports_outputs_atomically_without_recreate_flapping_and_retires() {
-        let controller = CloudflareController::new(RecordedTransport::default());
+    async fn fresh_controller_retires_from_target_observation() {
+        let (controller, actions, state) = controller();
         let slice = slice();
-        let report = controller
-            .execute(&ControllerCommand::Reconcile(slice.clone()))
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(report.dispositions().len(), 1);
-        assert_eq!(report.outputs().len(), 4);
         controller
             .execute(&ControllerCommand::Reconcile(slice.clone()))
             .await
             .unwrap();
-        assert_eq!(*controller.transport.mutations.lock().unwrap(), 1);
-        controller
+        let restarted = CloudflareController::new(RecordedTransport {
+            state: Arc::clone(&state),
+            actions,
+        });
+        restarted
             .execute(&ControllerCommand::Retire(Retirement {
                 graph_id: slice.graph_id(),
                 last_generation: slice.generation(),
-                controller: controller.name().clone(),
-                resources: vec![slice.resources()[0].clone()],
+                controller: restarted.name().clone(),
+                resources: slice.resources().to_vec(),
             }))
             .await
             .unwrap();
-        assert_eq!(
-            controller.transport.deletions.lock().unwrap().as_slice(),
-            &[slice.resources()[0].id()]
-        );
+        assert!(state.lock().unwrap().resources.is_empty());
+    }
+
+    #[tokio::test]
+    async fn refuses_right_identity_with_wrong_ownership_metadata() {
+        let (controller, actions, state) = controller();
+        let slice = slice();
+        state
+            .lock()
+            .unwrap()
+            .foreign
+            .insert(slice.resources()[0].id(), CloudflareObservation::Foreign);
+        let error = reconcile_slice(&controller, &slice).await.unwrap_err();
+        assert!(error.to_string().contains("ownership metadata/identity does not match"));
+        assert!(actions.lock().unwrap().is_empty());
+    }
+
+    fn controller() -> (
+        CloudflareController<RecordedTransport>,
+        Arc<Mutex<Vec<CloudflareAction>>>,
+        Arc<Mutex<FakeState>>,
+    ) {
+        let actions = Arc::new(Mutex::new(Vec::new()));
+        let state = Arc::new(Mutex::new(FakeState::default()));
+        (
+            CloudflareController::new(RecordedTransport {
+                state: Arc::clone(&state),
+                actions: Arc::clone(&actions),
+            }),
+            actions,
+            state,
+        )
     }
 
     fn slice() -> ControllerSlice {

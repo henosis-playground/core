@@ -5,13 +5,13 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
-use std::sync::Mutex;
 
 use base64::Engine as _;
 use futures::FutureExt as _;
 use futures::future::BoxFuture;
 use henosis_types::ArtifactDigest;
 use henosis_types::ArtifactStore;
+use henosis_types::ContentDigest;
 use henosis_types::GraphId;
 use henosis_types::Resource;
 use henosis_types::ResourceId;
@@ -26,7 +26,9 @@ use sha2::Sha256;
 use uuid::Uuid;
 
 use crate::ArtifactKind;
+use crate::CloudflareAction;
 use crate::CloudflareError;
+use crate::CloudflareObservation;
 use crate::CloudflareTransport;
 use crate::RouteBody;
 use crate::RouteObservation;
@@ -65,7 +67,6 @@ impl Default for LiveCloudflareConfig {
 pub struct LiveCloudflareTransport {
     session: CloudflareSession,
     artifacts: Arc<dyn ArtifactStore>,
-    managed: Mutex<BTreeMap<ResourceId, ManagedResource>>,
 }
 
 #[derive(Clone, Debug)]
@@ -74,13 +75,6 @@ struct CloudflareSession {
     api_base: String,
     client: Client,
     token: String,
-}
-
-#[derive(Clone, Debug)]
-enum ManagedResource {
-    Worker { name: String },
-    Tunnel { id: String, name: String },
-    Route { zone_id: String, route_id: String },
 }
 
 #[derive(Deserialize)]
@@ -121,6 +115,28 @@ struct Subdomain {
 #[derive(Deserialize)]
 struct ScriptSubdomain {
     enabled: bool,
+}
+
+#[derive(Deserialize)]
+struct ScriptSettings {
+    #[serde(default)]
+    tags: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct TunnelConfiguration {
+    config: TunnelConfigurationBody,
+}
+
+#[derive(Deserialize)]
+struct TunnelConfigurationBody {
+    #[serde(default)]
+    ingress: Vec<TunnelIngress>,
+}
+
+#[derive(Deserialize)]
+struct TunnelIngress {
+    service: String,
 }
 
 #[derive(Deserialize)]
@@ -212,20 +228,16 @@ impl LiveCloudflareTransport {
             ));
         }
         let session = CloudflareSession::connect(config)?;
-        Ok(Self {
-            session,
-            artifacts,
-            managed: Mutex::new(BTreeMap::new()),
-        })
+        Ok(Self { session, artifacts })
     }
 
     async fn upload_worker(
         &self,
+        graph: GraphId,
         resource: &Resource,
         body: &WorkerBody,
-    ) -> Result<WorkerObservation, CloudflareError> {
-        let name = managed_name(resource.path().address().name().as_str(), resource.id());
-        require_owned_name(&name)?;
+    ) -> Result<(), CloudflareError> {
+        let name = worker_name(resource);
         if body.source.entry.kind != ArtifactKind::CloudflareWorker {
             return Err(CloudflareError::Contract(
                 "Worker source entry must reference a cloudflare-worker artifact".into(),
@@ -272,7 +284,7 @@ impl LiveCloudflareTransport {
                     "Worker service binding {name} conflicts with another binding"
                 )));
             }
-            require_owned_name(service)?;
+            self.require_owned_worker(graph, service).await?;
             bindings.push(serde_json::json!({
                 "type": "service",
                 "name": name,
@@ -282,6 +294,7 @@ impl LiveCloudflareTransport {
         let mut metadata = serde_json::json!({
             "main_module": "worker.mjs",
             "bindings": bindings,
+            "tags": ownership_tags(graph, resource),
         });
         if let Some(date) = &body.compatibility_date {
             metadata["compatibility_date"] = serde_json::Value::String(date.clone());
@@ -314,47 +327,7 @@ impl LiveCloudflareTransport {
                 "Worker module upload",
             )
             .await?;
-        let subdomain = self.session.workers_subdomain().await?;
-        self.session.enable_worker_subdomain(&name).await?;
-        let deployments: DeploymentList = self
-            .session
-            .request(
-                self.session.client.get(
-                    self.session
-                        .account_url(&format!("workers/scripts/{name}/deployments")),
-                ),
-                "Worker deployment observation",
-            )
-            .await?;
-        let deployment = deployments.deployments.first().ok_or_else(|| {
-            CloudflareError::Provider(
-                "Worker upload succeeded but Cloudflare reported no active deployment".into(),
-            )
-        })?;
-        let version = deployment.versions.first().ok_or_else(|| {
-            CloudflareError::Provider(
-                "Worker upload succeeded but its active deployment has no version".into(),
-            )
-        })?;
-        if deployment.id.is_empty() || version.version_id.is_empty() {
-            return Err(CloudflareError::Provider(
-                "Worker upload succeeded but Cloudflare returned empty deployment identities"
-                    .into(),
-            ));
-        }
-        self.managed
-            .lock()
-            .expect("live Cloudflare resource lock is not poisoned")
-            .insert(
-                resource.id(),
-                ManagedResource::Worker { name: name.clone() },
-            );
-        Ok(WorkerObservation {
-            url: format!("https://{name}.{subdomain}.workers.dev"),
-            worker_name: name,
-            deployment_id: deployment.id.clone(),
-            version_id: version.version_id.clone(),
-        })
+        Ok(())
     }
 
     async fn upload_assets(
@@ -447,13 +420,105 @@ impl LiveCloudflareTransport {
         Ok(completion_jwt)
     }
 
-    async fn create_tunnel(
+    async fn observe_worker(
         &self,
+        graph: GraphId,
+        resource: &Resource,
+    ) -> Result<CloudflareObservation, CloudflareError> {
+        let name = worker_name(resource);
+        let Some(settings): Option<ScriptSettings> = self
+            .session
+            .request_optional(
+                self.session
+                    .client
+                    .get(self.session.account_url(&format!("workers/scripts/{name}/settings"))),
+                "Worker settings observation",
+            )
+            .await?
+        else {
+            return Ok(CloudflareObservation::Missing);
+        };
+        if !tags_match_owner(&settings.tags, graph, resource.id()) {
+            return Ok(CloudflareObservation::Foreign);
+        }
+        let digest = tagged_digest(&settings.tags).ok_or_else(|| {
+            CloudflareError::Provider(format!(
+                "Worker {name:?} has ownership tags but no valid desired-state digest tag"
+            ))
+        })?;
+        let subdomain: ScriptSubdomain = self
+            .session
+            .request(
+                self.session
+                    .client
+                    .get(self.session.account_url(&format!("workers/scripts/{name}/subdomain"))),
+                "Worker subdomain observation",
+            )
+            .await?;
+        let deployments: DeploymentList = self
+            .session
+            .request(
+                self.session.client.get(
+                    self.session
+                        .account_url(&format!("workers/scripts/{name}/deployments")),
+                ),
+                "Worker deployment observation",
+            )
+            .await?;
+        let deployment = deployments.deployments.first().ok_or_else(|| {
+            CloudflareError::Provider(format!("Worker {name:?} has no active deployment"))
+        })?;
+        let version = deployment.versions.first().ok_or_else(|| {
+            CloudflareError::Provider(format!("Worker {name:?} deployment has no version"))
+        })?;
+        let subdomain_name = self.session.workers_subdomain().await?;
+        Ok(CloudflareObservation::Worker {
+            digest,
+            subdomain_enabled: subdomain.enabled,
+            observation: WorkerObservation {
+                url: format!("https://{name}.{subdomain_name}.workers.dev"),
+                worker_name: name,
+                deployment_id: deployment.id.clone(),
+                version_id: version.version_id.clone(),
+            },
+        })
+    }
+
+    async fn require_owned_worker(
+        &self,
+        graph: GraphId,
+        name: &str,
+    ) -> Result<(), CloudflareError> {
+        let Some(settings): Option<ScriptSettings> = self
+            .session
+            .request_optional(
+                self.session
+                    .client
+                    .get(self.session.account_url(&format!("workers/scripts/{name}/settings"))),
+                "Worker ownership observation",
+            )
+            .await?
+        else {
+            return Err(CloudflareError::Provider(format!(
+                "referenced Worker {name:?} does not exist"
+            )));
+        };
+        if settings.tags.iter().any(|tag| tag == &graph_tag(graph)) {
+            Ok(())
+        } else {
+            Err(CloudflareError::Provider(format!(
+                "refusing to use Worker {name:?}; its graph ownership tag does not match {graph}"
+            )))
+        }
+    }
+
+    async fn observe_tunnel(
+        &self,
+        graph: GraphId,
         resource: &Resource,
         body: &TunnelBody,
-    ) -> Result<TunnelObservation, CloudflareError> {
-        let name = managed_name(resource.path().address().name().as_str(), resource.id());
-        require_owned_name(&name)?;
+    ) -> Result<CloudflareObservation, CloudflareError> {
+        let name = tunnel_identity(graph, resource.id());
         let tunnels: Vec<Tunnel> = self
             .session
             .request(
@@ -464,24 +529,84 @@ impl LiveCloudflareTransport {
                 "Cloudflare Tunnel observation",
             )
             .await?;
-        let tunnel = if let Some(existing) = tunnels.into_iter().find(|item| item.name == name) {
-            existing
-        } else {
-            let secret = uuid_pair_base64();
-            self.session
-                .request(
-                    self.session
-                        .client
-                        .post(self.session.account_url("cfd_tunnel"))
-                        .json(&TunnelCreate {
-                            name: &name,
-                            tunnel_secret: secret,
-                            config_src: "cloudflare",
-                        }),
-                    "Cloudflare Tunnel create",
-                )
-                .await?
+        let Some(tunnel) = tunnels.into_iter().find(|item| item.name == name) else {
+            return Ok(CloudflareObservation::Missing);
         };
+        let configuration: TunnelConfiguration = self
+            .session
+            .request(
+                self.session.client.get(
+                    self.session
+                        .account_url(&format!("cfd_tunnel/{}/configurations", tunnel.id)),
+                ),
+                "Cloudflare Tunnel configuration observation",
+            )
+            .await?;
+        let expected = [
+            format!("http://{}:{}", body.origin.host, body.origin.port),
+            "http_status:404".into(),
+        ];
+        let actual = configuration
+            .config
+            .ingress
+            .into_iter()
+            .map(|entry| entry.service)
+            .collect::<Vec<_>>();
+        Ok(CloudflareObservation::Tunnel {
+            configured: actual == expected,
+            observation: TunnelObservation {
+                tunnel_id: tunnel.id.clone(),
+                tunnel_name: name,
+                private_hostname: format!("{}.cfargotunnel.com", tunnel.id),
+                token_ref: format!("cloudflare://tunnels/{}/token", tunnel.id),
+            },
+        })
+    }
+
+    async fn create_tunnel(
+        &self,
+        graph: GraphId,
+        resource: &Resource,
+    ) -> Result<(), CloudflareError> {
+        let name = tunnel_identity(graph, resource.id());
+        let _: Tunnel = self
+            .session
+            .request(
+                self.session
+                    .client
+                    .post(self.session.account_url("cfd_tunnel"))
+                    .json(&TunnelCreate {
+                        name: &name,
+                        tunnel_secret: uuid_pair_base64(),
+                        config_src: "cloudflare",
+                    }),
+                "Cloudflare Tunnel create",
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn configure_tunnel(
+        &self,
+        graph: GraphId,
+        resource: &Resource,
+        body: &TunnelBody,
+    ) -> Result<(), CloudflareError> {
+        let name = tunnel_identity(graph, resource.id());
+        let tunnels: Vec<Tunnel> = self
+            .session
+            .request(
+                self.session
+                    .client
+                    .get(self.session.account_url("cfd_tunnel"))
+                    .query(&[("name", name.as_str()), ("is_deleted", "false")]),
+                "Cloudflare Tunnel observation",
+            )
+            .await?;
+        let tunnel = tunnels
+            .into_iter()
+            .find(|item| item.name == name)
+            .ok_or_else(|| CloudflareError::Unavailable("Tunnel disappeared before configuration".into()))?;
         let config = serde_json::json!({
             "config": {
                 "ingress": [
@@ -495,38 +620,23 @@ impl LiveCloudflareTransport {
             .request(
                 self.session
                     .client
-                    .put(
-                        self.session
-                            .account_url(&format!("cfd_tunnel/{}/configurations", tunnel.id)),
-                    )
+                    .put(self.session.account_url(&format!(
+                        "cfd_tunnel/{}/configurations",
+                        tunnel.id
+                    )))
                     .json(&config),
                 "Cloudflare Tunnel configuration",
             )
             .await?;
-        self.managed
-            .lock()
-            .expect("live Cloudflare resource lock is not poisoned")
-            .insert(
-                resource.id(),
-                ManagedResource::Tunnel {
-                    id: tunnel.id.clone(),
-                    name: name.clone(),
-                },
-            );
-        Ok(TunnelObservation {
-            tunnel_id: tunnel.id.clone(),
-            tunnel_name: name,
-            private_hostname: format!("{}.cfargotunnel.com", tunnel.id),
-            token_ref: format!("cloudflare://tunnels/{}/token", tunnel.id),
-        })
+        Ok(())
     }
 
-    async fn write_route(
+    async fn observe_route(
         &self,
-        resource: &Resource,
+        graph: GraphId,
         body: &RouteBody,
-    ) -> Result<RouteObservation, CloudflareError> {
-        require_owned_name(&body.worker_name)?;
+    ) -> Result<CloudflareObservation, CloudflareError> {
+        self.require_owned_worker(graph, &body.worker_name).await?;
         let zone = self.session.resolve_zone(&body.zone).await?;
         let routes: Vec<WorkerRoute> = self
             .session
@@ -538,9 +648,38 @@ impl LiveCloudflareTransport {
                 "Worker route observation",
             )
             .await?;
-        let existing = routes
-            .into_iter()
-            .find(|route| route.pattern == body.pattern);
+        let Some(route) = routes.into_iter().find(|route| route.pattern == body.pattern) else {
+            return Ok(CloudflareObservation::Missing);
+        };
+        if route.script != body.worker_name {
+            return Ok(CloudflareObservation::Foreign);
+        }
+        Ok(CloudflareObservation::Route {
+            matches: true,
+            observation: RouteObservation {
+                hostname: hostname_from_pattern(&body.pattern),
+            },
+        })
+    }
+
+    async fn write_route(
+        &self,
+        graph: GraphId,
+        body: &RouteBody,
+    ) -> Result<(), CloudflareError> {
+        self.require_owned_worker(graph, &body.worker_name).await?;
+        let zone = self.session.resolve_zone(&body.zone).await?;
+        let routes: Vec<WorkerRoute> = self
+            .session
+            .request(
+                self.session.client.get(
+                    self.session
+                        .url(&format!("zones/{}/workers/routes", zone.id)),
+                ),
+                "Worker route observation",
+            )
+            .await?;
+        let existing = routes.into_iter().find(|route| route.pattern == body.pattern);
         if let Some(route) = &existing
             && route.script != body.worker_name
         {
@@ -553,125 +692,192 @@ impl LiveCloudflareTransport {
             pattern: &body.pattern,
             script: &body.worker_name,
         };
-        let route: WorkerRoute = match existing {
+        match existing {
             Some(route) => {
-                self.session
+                let _: WorkerRoute = self
+                    .session
                     .request(
                         self.session
                             .client
-                            .put(
-                                self.session
-                                    .url(&format!("zones/{}/workers/routes/{}", zone.id, route.id)),
-                            )
+                            .put(self.session.url(&format!(
+                                "zones/{}/workers/routes/{}",
+                                zone.id, route.id
+                            )))
                             .json(&request),
                         "Worker route update",
                     )
-                    .await?
+                    .await?;
             }
             None => {
-                self.session
+                let _: WorkerRoute = self
+                    .session
                     .request(
                         self.session
                             .client
-                            .post(
-                                self.session
-                                    .url(&format!("zones/{}/workers/routes", zone.id)),
-                            )
+                            .post(self.session.url(&format!(
+                                "zones/{}/workers/routes",
+                                zone.id
+                            )))
                             .json(&request),
                         "Worker route create",
                     )
-                    .await?
+                    .await?;
             }
-        };
-        self.managed
-            .lock()
-            .expect("live Cloudflare resource lock is not poisoned")
-            .insert(
-                resource.id(),
-                ManagedResource::Route {
-                    zone_id: zone.id,
-                    route_id: route.id,
-                },
-            );
-        Ok(RouteObservation {
-            hostname: hostname_from_pattern(&body.pattern),
-        })
+        }
+        Ok(())
     }
 
-    async fn delete_managed(&self, resource: ResourceId) -> Result<(), CloudflareError> {
-        let managed = self
-            .managed
-            .lock()
-            .expect("live Cloudflare resource lock is not poisoned")
-            .get(&resource)
-            .cloned();
-        let Some(managed) = managed else {
-            return Ok(());
-        };
-        let request = match &managed {
-            ManagedResource::Worker { name } => {
-                require_owned_name(name)?;
+    async fn delete_resource(
+        &self,
+        graph: GraphId,
+        resource: &Resource,
+    ) -> Result<(), CloudflareError> {
+        match resource.kind().name().as_str() {
+            "cloudflare/worker" => {
+                let name = worker_name(resource);
+                let Some(settings): Option<ScriptSettings> = self
+                    .session
+                    .request_optional(
+                        self.session.client.get(
+                            self.session
+                                .account_url(&format!("workers/scripts/{name}/settings")),
+                        ),
+                        "Worker retirement ownership observation",
+                    )
+                    .await?
+                else {
+                    return Ok(());
+                };
+                if !tags_match_owner(&settings.tags, graph, resource.id()) {
+                    return Err(CloudflareError::Provider(format!(
+                        "refusing to delete Worker {name:?}; ownership tags do not match"
+                    )));
+                }
                 self.session
-                    .client
-                    .delete(self.session.account_url(&format!("workers/scripts/{name}")))
+                    .request_empty(
+                        self.session.client.delete(
+                            self.session
+                                .account_url(&format!("workers/scripts/{name}")),
+                        ),
+                        "Worker retirement",
+                    )
+                    .await
             }
-            ManagedResource::Tunnel { id, name } => {
-                require_owned_name(name)?;
+            "cloudflare/tunnel" => {
+                let name = tunnel_identity(graph, resource.id());
+                let tunnels: Vec<Tunnel> = self
+                    .session
+                    .request(
+                        self.session
+                            .client
+                            .get(self.session.account_url("cfd_tunnel"))
+                            .query(&[("name", name.as_str()), ("is_deleted", "false")]),
+                        "Cloudflare Tunnel retirement observation",
+                    )
+                    .await?;
+                let Some(tunnel) = tunnels.into_iter().find(|item| item.name == name) else {
+                    return Ok(());
+                };
                 self.session
-                    .client
-                    .delete(self.session.account_url(&format!("cfd_tunnel/{id}")))
-                    .query(&[("cascade", "true")])
+                    .request_empty(
+                        self.session
+                            .client
+                            .delete(self.session.account_url(&format!("cfd_tunnel/{}", tunnel.id)))
+                            .query(&[("cascade", "true")]),
+                        "Cloudflare Tunnel retirement",
+                    )
+                    .await
             }
-            ManagedResource::Route { zone_id, route_id } => self.session.client.delete(
+            "cloudflare/route" => {
+                let body: RouteBody = serde_json::from_value(resource.body().as_json().clone())
+                    .map_err(|error| CloudflareError::Contract(error.to_string()))?;
+                self.require_owned_worker(graph, &body.worker_name).await?;
+                let zone = self.session.resolve_zone(&body.zone).await?;
+                let routes: Vec<WorkerRoute> = self
+                    .session
+                    .request(
+                        self.session.client.get(
+                            self.session
+                                .url(&format!("zones/{}/workers/routes", zone.id)),
+                        ),
+                        "Worker route retirement observation",
+                    )
+                    .await?;
+                let Some(route) = routes
+                    .into_iter()
+                    .find(|route| route.pattern == body.pattern && route.script == body.worker_name)
+                else {
+                    return Ok(());
+                };
                 self.session
-                    .url(&format!("zones/{zone_id}/workers/routes/{route_id}")),
-            ),
-        };
-        self.session
-            .request_empty(request, "resource retirement")
-            .await?;
-        self.managed
-            .lock()
-            .expect("live Cloudflare resource lock is not poisoned")
-            .remove(&resource);
-        Ok(())
+                    .request_empty(
+                        self.session.client.delete(self.session.url(&format!(
+                            "zones/{}/workers/routes/{}",
+                            zone.id, route.id
+                        ))),
+                        "Worker route retirement",
+                    )
+                    .await
+            }
+            _ => Err(CloudflareError::Contract(format!(
+                "unsupported Cloudflare resource kind {}",
+                resource.kind()
+            ))),
+        }
     }
 }
 
 impl CloudflareTransport for LiveCloudflareTransport {
-    fn apply_worker<'a>(
+    fn observe<'a>(
         &'a self,
-        _graph: GraphId,
+        graph: GraphId,
         resource: &'a Resource,
-        body: &'a WorkerBody,
-    ) -> BoxFuture<'a, Result<WorkerObservation, CloudflareError>> {
-        self.upload_worker(resource, body).boxed()
+    ) -> BoxFuture<'a, Result<CloudflareObservation, CloudflareError>> {
+        async move {
+            match resource.kind().name().as_str() {
+                "cloudflare/worker" => self.observe_worker(graph, resource).await,
+                "cloudflare/tunnel" => {
+                    let body: TunnelBody = serde_json::from_value(resource.body().as_json().clone())
+                        .map_err(|error| CloudflareError::Contract(error.to_string()))?;
+                    self.observe_tunnel(graph, resource, &body).await
+                }
+                "cloudflare/route" => {
+                    let body: RouteBody = serde_json::from_value(resource.body().as_json().clone())
+                        .map_err(|error| CloudflareError::Contract(error.to_string()))?;
+                    self.observe_route(graph, &body).await
+                }
+                _ => Err(CloudflareError::Contract(format!(
+                    "unsupported Cloudflare resource kind {}",
+                    resource.kind()
+                ))),
+            }
+        }
+        .boxed()
     }
 
-    fn apply_tunnel<'a>(
+    fn act<'a>(
         &'a self,
-        _graph: GraphId,
+        graph: GraphId,
         resource: &'a Resource,
-        body: &'a TunnelBody,
-    ) -> BoxFuture<'a, Result<TunnelObservation, CloudflareError>> {
-        self.create_tunnel(resource, body).boxed()
-    }
-
-    fn apply_route<'a>(
-        &'a self,
-        _graph: GraphId,
-        resource: &'a Resource,
-        body: &'a RouteBody,
-    ) -> BoxFuture<'a, Result<RouteObservation, CloudflareError>> {
-        self.write_route(resource, body).boxed()
-    }
-
-    fn delete(
-        &self,
-        _graph: GraphId,
-        resource: ResourceId,
-    ) -> BoxFuture<'_, Result<(), CloudflareError>> {
-        self.delete_managed(resource).boxed()
+        action: CloudflareAction,
+    ) -> BoxFuture<'a, Result<(), CloudflareError>> {
+        async move {
+            match action {
+                CloudflareAction::UploadWorker(body) => {
+                    self.upload_worker(graph, resource, &body).await
+                }
+                CloudflareAction::EnableWorkerSubdomain => {
+                    self.session.enable_worker_subdomain(&worker_name(resource)).await
+                }
+                CloudflareAction::CreateTunnel => self.create_tunnel(graph, resource).await,
+                CloudflareAction::ConfigureTunnel(body) => {
+                    self.configure_tunnel(graph, resource, &body).await
+                }
+                CloudflareAction::WriteRoute(body) => self.write_route(graph, &body).await,
+                CloudflareAction::Delete => self.delete_resource(graph, resource).await,
+            }
+        }
+        .boxed()
     }
 }
 
@@ -739,6 +945,35 @@ impl CloudflareSession {
     {
         self.request_with_bearer(request, &self.token, operation)
             .await
+    }
+
+    async fn request_optional<T>(
+        &self,
+        request: reqwest::RequestBuilder,
+        operation: &str,
+    ) -> Result<Option<T>, CloudflareError>
+    where
+        T: for<'de> Deserialize<'de>,
+    {
+        let response = request
+            .bearer_auth(&self.token)
+            .send()
+            .await
+            .map_err(|error| CloudflareError::Unavailable(error.to_string()))?;
+        if response.status() == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        let status = response.status();
+        let envelope: ApiEnvelope<T> = response.json().await.map_err(|error| {
+            CloudflareError::Provider(format!("{operation} returned invalid JSON: {error}"))
+        })?;
+        if !status.is_success() || !envelope.success {
+            return Err(CloudflareError::Provider(format!(
+                "{operation} returned {status}: {}",
+                api_errors(envelope.errors.as_deref().unwrap_or_default())
+            )));
+        }
+        Ok(envelope.result)
     }
 
     async fn request_with_bearer<T>(
@@ -927,15 +1162,31 @@ fn looks_like_cloudflare_id(value: &str) -> bool {
     value.len() == 32 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
-fn require_owned_name(name: &str) -> Result<(), CloudflareError> {
-    if name.starts_with("henosis-") {
-        Ok(())
-    } else {
-        Err(CloudflareError::Config(format!(
-            "refusing to mutate unmanaged Cloudflare resource {name:?}; managed names start with \
-             henosis-"
-        )))
-    }
+fn ownership_tags(graph: GraphId, resource: &Resource) -> Vec<String> {
+    vec![
+        graph_tag(graph),
+        resource_tag(resource.id()),
+        format!("digest={}", resource.digest()),
+    ]
+}
+
+fn graph_tag(graph: GraphId) -> String {
+    format!("graph={graph}")
+}
+
+fn resource_tag(resource: ResourceId) -> String {
+    format!("resource={resource}")
+}
+
+fn tags_match_owner(tags: &[String], graph: GraphId, resource: ResourceId) -> bool {
+    tags.iter().any(|tag| tag == &graph_tag(graph))
+        && tags.iter().any(|tag| tag == &resource_tag(resource))
+}
+
+fn tagged_digest(tags: &[String]) -> Option<ContentDigest> {
+    let value = tags.iter().find_map(|tag| tag.strip_prefix("digest="))?;
+    let bytes = hex::decode(value).ok()?;
+    Some(ContentDigest::from_bytes(bytes.try_into().ok()?))
 }
 
 fn api_errors(errors: &[ApiError]) -> String {
@@ -1021,8 +1272,12 @@ fn asset_hash(path: &str, encoded: &str) -> String {
         .collect()
 }
 
-fn managed_name(resource_name: &str, resource_id: ResourceId) -> String {
-    let safe = resource_name
+fn worker_name(resource: &Resource) -> String {
+    let safe = resource
+        .path()
+        .address()
+        .name()
+        .as_str()
         .chars()
         .map(|character| {
             if character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-' {
@@ -1032,12 +1287,12 @@ fn managed_name(resource_name: &str, resource_id: ResourceId) -> String {
             }
         })
         .collect::<String>();
-    let suffix = resource_id.to_string();
-    let suffix = &suffix[suffix.len().saturating_sub(8)..];
-    let maximum_base = 63_usize.saturating_sub("henosis--".len() + suffix.len());
-    let safe = safe.trim_matches('-');
-    let safe = &safe[..safe.len().min(maximum_base)];
-    format!("henosis-{safe}-{suffix}")
+    safe.trim_matches('-').chars().take(63).collect()
+}
+
+fn tunnel_identity(graph: GraphId, resource: ResourceId) -> String {
+    let digest = Sha256::digest(format!("{graph}/{resource}").as_bytes());
+    hex::encode(&digest[..16])
 }
 
 #[cfg(test)]
@@ -1081,14 +1336,14 @@ mod tests {
     }
 
     #[test]
-    fn managed_names_are_provider_safe_and_owned() {
-        let name = managed_name("Front_end/Production", ResourceId::from_bytes([7; 16]));
-        assert!(name.starts_with("henosis-"));
-        assert!(name.len() <= 63);
-        assert!(
-            name.bytes()
-                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+    fn tunnel_identity_is_an_opaque_id_without_a_vanity_prefix() {
+        let identity = tunnel_identity(
+            GraphId::from_bytes([3; 16]),
+            ResourceId::from_bytes([7; 16]),
         );
+        assert_eq!(identity.len(), 32);
+        assert!(identity.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert!(!identity.starts_with("henosis-"));
     }
 
     #[test]
@@ -1274,13 +1529,12 @@ mod tests {
         println!("LIVE curl url={frontend_url} response={served:?}");
         assert!(served.contains("Henosis benchmark frontend"));
         for resource_id in resource_ids {
-            let managed = managed_name(
-                if resource_id == resource_ids[0] {
-                    "backend"
-                } else {
-                    "frontend"
-                },
-                resource_id,
+            let managed = worker_name(
+                slice
+                    .resources()
+                    .iter()
+                    .find(|resource| resource.id() == resource_id)
+                    .unwrap(),
             );
             let status = controller
                 .transport
