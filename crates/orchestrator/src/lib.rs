@@ -281,9 +281,10 @@ impl Core {
         })?;
         if report.generation() != graph.intent.generation() || report.plan_digest() != plan.digest()
         {
-            return Err(Error::<CommandError, Never, anyhow::Error>::Domain(
-                CommandError::StaleControllerReport,
-            ));
+            // Re-evaluation can replace a plan while controller work for its predecessor is
+            // already in flight. The late level report is expected and has no current
+            // effect.
+            return Ok(Transition::default());
         }
         let expected = plan
             .resources()

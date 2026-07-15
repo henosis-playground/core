@@ -1053,11 +1053,20 @@ mod tests {
         })
         .await
         .expect("generation update succeeds");
-        let stale_error = core
+        let stale = core
             .handle(Command::ReportController(stale_report))
             .await
-            .expect_err("old plan report is fenced");
-        insta::assert_snapshot!(stale_error.to_string(), @"Terminal error: controller report targets a stale plan");
+            .expect("old plan report is ignored");
+        assert_eq!(stale, henosis_orchestrator::Transition::default());
+        assert_eq!(
+            core.state()
+                .graph(graph_id())
+                .expect("graph exists")
+                .outputs()
+                .count(),
+            0,
+            "a stale report must not publish outputs"
+        );
 
         let invalid = component("broken", 99, Vec::new(), Vec::new());
         let mut invalid_core = Core::new(Arc::new(FakeEvaluator));
