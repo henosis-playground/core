@@ -29,6 +29,10 @@ use serde::Deserialize;
 use serde::Serialize;
 use thiserror::Error;
 
+mod live;
+
+pub use live::LiveCloudflareConfig;
+
 const CONTROLLER_NAME: &str = "cloudflare";
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -343,6 +347,8 @@ fn push_if_declared(
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum CloudflareError {
+    #[error("Cloudflare configuration: {0}")]
+    Config(String),
     #[error("{0}")]
     Contract(String),
     #[error("Cloudflare API unavailable: {0}")]

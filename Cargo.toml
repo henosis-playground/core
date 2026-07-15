@@ -44,6 +44,7 @@ proptest = "1"
 proptest-state-machine = "0.8"
 rand = "0.9"
 rand_chacha = "0.9"
+reqwest = { version = "0.12", features = ["blocking", "json", "multipart"] }
 ryu-js = "1.0.3"
 s2-sdk = "=0.31.9"
 serde = { version = "1", features = ["derive"] }
