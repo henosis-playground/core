@@ -3,14 +3,26 @@
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::num::NonZeroU32;
     use std::sync::Arc;
 
+    use async_trait::async_trait;
+    use faultline::Error;
+    use futures::StreamExt;
     use futures::future::BoxFuture;
+    use henosis_journal::Journal;
+    use henosis_multi_stream_merge::StreamCatalog;
     use henosis_orchestrator::Command;
     use henosis_orchestrator::ControllerEffect;
     use henosis_orchestrator::Core;
     use henosis_orchestrator::MaterializedCore;
+    use henosis_storage::AppendRecord;
+    use henosis_storage::MemoryStorage;
+    use henosis_storage::StorageDomainError;
+    use henosis_storage::StorageEngine;
+    use henosis_storage::StreamName;
+    use henosis_storage::StreamPosition;
     use henosis_types::BlockedDetail;
     use henosis_types::BundleRef;
     use henosis_types::ComponentInput;
@@ -54,7 +66,21 @@ mod tests {
     use henosis_types::ResourceDispositionKind;
     use henosis_types::ResourceId;
     use henosis_types::ResourceName;
+    use henosis_types::StaticOutput;
     use proptest::prelude::*;
+
+    #[derive(Debug)]
+    struct FixedCatalog(Vec<StreamName>);
+
+    #[async_trait]
+    impl StreamCatalog for FixedCatalog {
+        async fn streams(
+            &self,
+        ) -> Result<Vec<StreamName>, Error<faultline::Never, anyhow::Error, anyhow::Error>>
+        {
+            Ok(self.0.clone())
+        }
+    }
 
     #[derive(Debug, Default)]
     struct FakeEvaluator;
@@ -138,7 +164,10 @@ mod tests {
                     body,
                     Vec::new(),
                 )],
-                outputs: Vec::new(),
+                outputs: vec![StaticOutput::new(
+                    output_name("summary"),
+                    NativeValue::new(serde_json::json!("ready")).expect("fixture output is JSON"),
+                )],
                 observed_outputs: Vec::new(),
                 reads: request
                     .snapshot()
@@ -240,6 +269,10 @@ mod tests {
         ComponentOutput::new(output_name(name), OutputAvailability::Observed, false)
     }
 
+    fn static_component_output(name: &str) -> ComponentOutput {
+        ComponentOutput::new(output_name(name), OutputAvailability::Static, false)
+    }
+
     fn input(name: &str, producer: &str, output: &str) -> ComponentInput {
         ComponentInput::new(
             InputName::new(name).expect("valid input"),
@@ -337,7 +370,7 @@ mod tests {
             "web",
             3,
             vec![input("databaseUrl", "database", "url")],
-            Vec::new(),
+            vec![static_component_output("summary")],
         );
         let mut core = Core::new(Arc::new(FakeEvaluator));
 
@@ -367,6 +400,14 @@ mod tests {
         assert!(final_plan.is_complete());
         assert_eq!(final_plan.resources().len(), 2);
         assert!(!after_output.effects().is_empty());
+
+        let events = initial
+            .events()
+            .iter()
+            .chain(after_output.events())
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(MaterializedCore::fold(&events), core.state().clone());
     }
 
     async fn converge(order: [usize; 2]) -> Plan {
@@ -386,7 +427,7 @@ mod tests {
             "consumer",
             3,
             vec![input("a", "first", "url"), input("b", "second", "host")],
-            Vec::new(),
+            vec![static_component_output("summary")],
         );
         let mut core = Core::new(Arc::new(FakeEvaluator));
         let initial = core
@@ -507,6 +548,88 @@ mod tests {
             prop_assert_eq!(full.clone(), MaterializedCore::fold(&events));
             prop_assert_eq!(full, resumed);
         }
+    }
+
+    #[tokio::test]
+    async fn storage_cas_journal_replay_and_virtual_merge_hold() {
+        let storage = MemoryStorage::default();
+        let first = StreamName::new("first").expect("valid stream name");
+        let second = StreamName::new("second").expect("valid stream name");
+        storage
+            .append(
+                &first,
+                StreamPosition::default(),
+                vec![AppendRecord::new(b"one".to_vec())],
+            )
+            .await
+            .expect("initial append succeeds");
+        let conflict = storage
+            .append(
+                &first,
+                StreamPosition::default(),
+                vec![AppendRecord::new(b"stale".to_vec())],
+            )
+            .await
+            .expect_err("stale compare-and-set is rejected");
+        assert!(matches!(
+            conflict,
+            Error::Domain(StorageDomainError::CasConflict {
+                expected: 0,
+                actual: 1
+            })
+        ));
+        storage
+            .append(
+                &second,
+                StreamPosition::default(),
+                vec![AppendRecord::new(b"two".to_vec())],
+            )
+            .await
+            .expect("independent stream append succeeds");
+
+        let storage: Arc<dyn StorageEngine> = Arc::new(storage);
+        let catalog = FixedCatalog(vec![second.clone(), first.clone(), first]);
+        let mut merged =
+            henosis_multi_stream_merge::subscribe(Arc::clone(&storage), &catalog, &BTreeMap::new())
+                .await
+                .expect("catalog subscription succeeds");
+        let left = merged
+            .next()
+            .await
+            .expect("first virtual record arrives")
+            .expect("first source read succeeds");
+        let right = merged
+            .next()
+            .await
+            .expect("second virtual record arrives")
+            .expect("second source read succeeds");
+        assert_eq!(left.virtual_offset(), 0);
+        assert_eq!(right.virtual_offset(), 1);
+        assert_ne!(left.record().stream(), right.record().stream());
+
+        let journal = Journal::new(storage);
+        let intent = henosis_types::GraphIntent::new(graph(vec![component(
+            "only",
+            1,
+            Vec::new(),
+            vec![observed_component_output("url")],
+        )]))
+        .expect("journal fixture graph is valid");
+        journal
+            .append(
+                graph_id(),
+                StreamPosition::default(),
+                &henosis_types::CoreEvent::GraphCreated(intent.clone()),
+            )
+            .await
+            .expect("journal append succeeds");
+        assert_eq!(
+            journal
+                .load(graph_id())
+                .await
+                .expect("journal load succeeds"),
+            vec![henosis_types::CoreEvent::GraphCreated(intent)]
+        );
     }
 
     #[test]

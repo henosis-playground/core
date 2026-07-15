@@ -1,5 +1,8 @@
+use std::collections::BTreeSet;
+
 use serde::Deserialize;
 use serde::Serialize;
+use thiserror::Error;
 
 use crate::ComponentName;
 use crate::ControllerName;
@@ -65,6 +68,72 @@ impl OutputPublication {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct NewComponentOutputs {
+    pub graph_id: GraphId,
+    pub generation: Generation,
+    pub component: ComponentName,
+    pub outputs: Vec<OutputRecord>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ComponentOutputs {
+    graph_id: GraphId,
+    generation: Generation,
+    component: ComponentName,
+    outputs: Vec<OutputRecord>,
+}
+
+impl ComponentOutputs {
+    pub fn new(new: NewComponentOutputs) -> Result<Self, ComponentOutputsError> {
+        let mut keys = BTreeSet::new();
+        for output in &new.outputs {
+            if output.key_value().generation() != new.generation
+                || output.key_value().reference().component() != &new.component
+            {
+                return Err(ComponentOutputsError::ForeignOutput);
+            }
+            if !keys.insert(output.key_value().clone()) {
+                return Err(ComponentOutputsError::DuplicateOutput);
+            }
+        }
+        Ok(Self {
+            graph_id: new.graph_id,
+            generation: new.generation,
+            component: new.component,
+            outputs: new.outputs,
+        })
+    }
+
+    #[must_use]
+    pub const fn graph_id(&self) -> GraphId {
+        self.graph_id
+    }
+
+    #[must_use]
+    pub const fn generation(&self) -> Generation {
+        self.generation
+    }
+
+    #[must_use]
+    pub const fn component(&self) -> &ComponentName {
+        &self.component
+    }
+
+    #[must_use]
+    pub fn outputs(&self) -> &[OutputRecord] {
+        &self.outputs
+    }
+}
+
+#[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
+pub enum ComponentOutputsError {
+    #[error("component output replacement contains an output for another component or generation")]
+    ForeignOutput,
+    #[error("component output replacement contains the same output more than once")]
+    DuplicateOutput,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Stall {
     graph_id: GraphId,
     generation: Generation,
@@ -106,6 +175,7 @@ pub enum CoreEvent {
         plan: Plan,
     },
     ControllerReported(ControllerReport),
+    ComponentOutputsReplaced(ComponentOutputs),
     OutputsPublished(OutputPublication),
     StallDetected(Stall),
     GraphRetired {

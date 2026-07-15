@@ -11,7 +11,12 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+faultline.workspace = true
 futures.workspace = true
+henosis-journal.workspace = true
+henosis-multi-stream-merge.workspace = true
 henosis-orchestrator.workspace = true
 henosis-storage.workspace = true
 henosis-types.workspace = true

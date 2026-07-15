@@ -17,6 +17,7 @@ use tracing::instrument;
 use henosis_types::BlockedMarker;
 use henosis_types::ComponentIntent;
 use henosis_types::ComponentName;
+use henosis_types::ComponentOutputs;
 use henosis_types::ControllerCommand;
 use henosis_types::ControllerName;
 use henosis_types::ControllerReport;
@@ -31,6 +32,7 @@ use henosis_types::GraphId;
 use henosis_types::GraphIntent;
 use henosis_types::InputCell;
 use henosis_types::InputCellState;
+use henosis_types::NewComponentOutputs;
 use henosis_types::NewGraphIntent;
 use henosis_types::NewPlan;
 use henosis_types::ObservedOutputBinding;
@@ -477,6 +479,7 @@ impl Core {
         let generation = intent.generation();
         let max_rounds = intent.components().len().saturating_add(1);
         let mut final_plan = None;
+        let mut evaluation_events = Vec::new();
 
         for _ in 0..max_rounds {
             let before = self
@@ -502,7 +505,9 @@ impl Core {
                             CommandError::Evaluation(error.to_string()),
                         )
                     })?;
-                self.accept_interpretation(graph_id, component, attempt)?;
+                if let Some(outputs) = self.accept_interpretation(graph_id, component, attempt)? {
+                    evaluation_events.push(CoreEvent::ComponentOutputsReplaced(outputs));
+                }
             }
             let plan = self.plan_from_interpretations(graph_id, generation)?;
             final_plan = Some(plan);
@@ -522,7 +527,12 @@ impl Core {
             .as_ref()
             .is_some_and(|old| old.generation() == generation && old.digest() == plan.digest())
         {
-            return self.check_quiescence(graph_id);
+            let mut transition = Transition {
+                events: evaluation_events,
+                effects: Vec::new(),
+            };
+            transition.extend(self.check_quiescence(graph_id)?);
+            return Ok(transition);
         }
         let effects = dispatch_effects(graph_id, previous.as_ref(), &plan);
         let pending = effects
@@ -541,8 +551,9 @@ impl Core {
             graph.plan = Some(plan.clone());
             graph.stall = None;
         }
+        evaluation_events.push(CoreEvent::PlanAccepted { graph_id, plan });
         let mut transition = Transition {
-            events: vec![CoreEvent::PlanAccepted { graph_id, plan }],
+            events: evaluation_events,
             effects,
         };
         transition.extend(self.check_quiescence(graph_id)?);
@@ -612,7 +623,7 @@ impl Core {
         graph_id: GraphId,
         component: &ComponentIntent,
         attempt: EvaluationAttempt,
-    ) -> Result<(), Error<CommandError, Never, anyhow::Error>> {
+    ) -> Result<Option<ComponentOutputs>, Error<CommandError, Never, anyhow::Error>> {
         if attempt
             .resources()
             .iter()
@@ -640,6 +651,18 @@ impl Core {
         };
 
         let generation = self.graph(graph_id)?.intent.generation();
+        let old_outputs = self
+            .graph(graph_id)?
+            .outputs
+            .iter()
+            .filter(|record| {
+                record.key_value().generation() == generation
+                    && record.key_value().reference().component() == component.name()
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut replacement_outputs = Vec::new();
+
         if let Some(complete) = attempt.complete_result() {
             for output in complete.outputs() {
                 let declaration = component.output(output.name()).ok_or_else(|| {
@@ -661,6 +684,14 @@ impl Core {
                 interpretation
                     .declared_outputs
                     .insert(output.name().clone());
+                replacement_outputs.push(OutputRecord::new(
+                    OutputKey::new(
+                        generation,
+                        OutputRef::new(component.name().clone(), output.name().clone()),
+                    ),
+                    output.value().clone(),
+                    OutputSource::Static,
+                ));
             }
             for binding in complete.observed_outputs() {
                 self.validate_binding(component, &interpretation.resources, binding)?;
@@ -689,31 +720,34 @@ impl Core {
                     ));
                 }
             }
+            for output in &old_outputs {
+                if let OutputSource::Observed {
+                    resource_id,
+                    resource_output,
+                } = output.source()
+                {
+                    let observation = ObservedOutputKey::new(*resource_id, resource_output.clone());
+                    if interpretation.bindings.get(&observation)
+                        == Some(output.key_value().reference())
+                    {
+                        replacement_outputs.push(output.clone());
+                    }
+                }
+            }
+        }
 
-            let output_keys = self
-                .graph(graph_id)?
-                .outputs
+        replacement_outputs.sort_by(|left, right| left.key_value().cmp(right.key_value()));
+        {
+            let keys = old_outputs
                 .iter()
-                .filter(|record| {
-                    record.key_value().generation() == generation
-                        && record.key_value().reference().component() == component.name()
-                        && matches!(record.source(), OutputSource::Static)
-                })
-                .map(|record| record.key_value().clone())
+                .map(|output| output.key_value().clone())
                 .collect::<Vec<_>>();
             let mut graph = self.graph_mut(graph_id)?;
-            for key in output_keys {
+            for key in keys {
                 graph.outputs.remove(&key);
             }
-            for output in complete.outputs() {
-                graph.outputs.insert_overwrite(OutputRecord::new(
-                    OutputKey::new(
-                        generation,
-                        OutputRef::new(component.name().clone(), output.name().clone()),
-                    ),
-                    output.value().clone(),
-                    OutputSource::Static,
-                ));
+            for output in &replacement_outputs {
+                graph.outputs.insert_overwrite(output.clone());
             }
         }
 
@@ -729,7 +763,21 @@ impl Core {
             .values()
             .flat_map(|value| value.bindings.clone())
             .collect();
-        Ok(())
+
+        if old_outputs == replacement_outputs {
+            Ok(None)
+        } else {
+            ComponentOutputs::new(NewComponentOutputs {
+                graph_id,
+                generation,
+                component: component.name().clone(),
+                outputs: replacement_outputs,
+            })
+            .map(Some)
+            .map_err(|error| {
+                Error::<CommandError, Never, anyhow::Error>::Invariant(anyhow::Error::new(error))
+            })
+        }
     }
 
     fn validate_binding(
@@ -1000,6 +1048,28 @@ impl MaterializedCore {
                     .expect("reported graph must already exist")
                     .reports
                     .insert_overwrite(LatestControllerReport(report.clone()));
+            }
+            CoreEvent::ComponentOutputsReplaced(replacement) => {
+                let mut graph = self
+                    .graphs
+                    .get_mut(&replacement.graph_id())
+                    .expect("output graph must already exist");
+                assert_eq!(graph.intent.generation(), replacement.generation());
+                let keys = graph
+                    .outputs
+                    .iter()
+                    .filter(|output| {
+                        output.key_value().generation() == replacement.generation()
+                            && output.key_value().reference().component() == replacement.component()
+                    })
+                    .map(|output| output.key_value().clone())
+                    .collect::<Vec<_>>();
+                for key in keys {
+                    graph.outputs.remove(&key);
+                }
+                for output in replacement.outputs() {
+                    graph.outputs.insert_overwrite(output.clone());
+                }
             }
             CoreEvent::OutputsPublished(publication) => {
                 let mut graph = self

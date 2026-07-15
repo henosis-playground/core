@@ -769,7 +769,12 @@ dependencies = [
 name = "henosis-core-simulation-tests"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
+ "async-trait",
+ "faultline",
  "futures",
+ "henosis-journal",
+ "henosis-multi-stream-merge",
  "henosis-orchestrator",
  "henosis-storage",
  "henosis-types",
