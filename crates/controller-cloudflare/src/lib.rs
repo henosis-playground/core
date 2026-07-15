@@ -42,7 +42,11 @@ pub struct WorkerBody {
     pub source: SourceRef,
     pub compatibility_date: Option<String>,
     #[serde(default)]
+    pub compatibility_flags: Vec<String>,
+    #[serde(default)]
     pub vars: BTreeMap<String, serde_json::Value>,
+    #[serde(default)]
+    pub services: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -282,9 +286,24 @@ where
         graph: GraphId,
         resources: &[ResourceId],
     ) -> Result<(), ControllerError> {
-        for resource in resources {
+        let mut ordered = resources.to_vec();
+        {
+            let state = self
+                .state
+                .lock()
+                .expect("cloudflare controller state lock is not poisoned");
+            if let Some(current) = state.get(&graph) {
+                ordered.sort_by_key(|resource| {
+                    current
+                        .get(resource)
+                        .map(cloudflare_delete_rank)
+                        .unwrap_or(u8::MAX)
+                });
+            }
+        }
+        for resource in ordered {
             self.transport
-                .delete(graph, *resource)
+                .delete(graph, resource)
                 .await
                 .map_err(|error| ControllerError::new(error.to_string()))?;
         }
@@ -343,6 +362,25 @@ fn cloudflare_rank(resource: &Resource) -> u8 {
         "cloudflare/tunnel" => 1,
         "cloudflare/route" => 2,
         _ => 3,
+    }
+}
+
+fn cloudflare_delete_rank(resource: &Resource) -> u8 {
+    match resource.kind().name().as_str() {
+        "cloudflare/route" => 0,
+        "cloudflare/worker"
+            if resource
+                .body()
+                .as_json()
+                .get("services")
+                .and_then(serde_json::Value::as_object)
+                .is_some_and(|services| !services.is_empty()) =>
+        {
+            1
+        }
+        "cloudflare/worker" => 2,
+        "cloudflare/tunnel" => 3,
+        _ => 4,
     }
 }
 

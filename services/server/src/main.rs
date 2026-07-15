@@ -18,6 +18,8 @@ use futures::FutureExt as _;
 use futures::future::BoxFuture;
 use henosis_controller_cloudflare::CloudflareError;
 use henosis_controller_cloudflare::CloudflareTransport;
+use henosis_controller_cloudflare::LiveCloudflareConfig;
+use henosis_controller_cloudflare::LiveCloudflareTransport;
 use henosis_controller_cloudflare::RouteBody;
 use henosis_controller_cloudflare::RouteObservation;
 use henosis_controller_cloudflare::TunnelBody;
@@ -25,6 +27,7 @@ use henosis_controller_cloudflare::TunnelObservation;
 use henosis_controller_cloudflare::WorkerBody;
 use henosis_controller_cloudflare::WorkerObservation;
 use henosis_controller_k8s::K8sController;
+use henosis_controller_runtime::DirectoryArtifactStore;
 use henosis_controller_runtime::GitRepository;
 use henosis_controller_runtime::controller_name;
 use henosis_controller_runtime::output;
@@ -103,9 +106,24 @@ async fn main() -> anyhow::Result<()> {
     let mut controllers: BTreeMap<ControllerName, Arc<dyn Controller>> = BTreeMap::new();
     let k8s: Arc<dyn Controller> = Arc::new(K8sController::new(GitRepository::new(deploy_remote)));
     controllers.insert(k8s.name().clone(), k8s);
-    let cloudflare: Arc<dyn Controller> = Arc::new(
-        henosis_controller_cloudflare::CloudflareController::new(RecordedCloudflareTransport),
-    );
+    let cloudflare: Arc<dyn Controller> =
+        if std::env::var("HENOSIS_CLOUDFLARE_LIVE").as_deref() == Ok("1") {
+            let artifact_root = std::env::var("HENOSIS_ARTIFACT_ROOT").map_err(|_| {
+                anyhow::anyhow!("HENOSIS_ARTIFACT_ROOT is required for live Cloudflare")
+            })?;
+            let transport = LiveCloudflareTransport::connect(
+                &LiveCloudflareConfig::default(),
+                Arc::new(DirectoryArtifactStore::new(artifact_root)),
+            )?;
+            info!("Cloudflare controller uses LIVE transport (henosis-* safety rail enforced)");
+            Arc::new(henosis_controller_cloudflare::CloudflareController::new(
+                transport,
+            ))
+        } else {
+            Arc::new(henosis_controller_cloudflare::CloudflareController::new(
+                RecordedCloudflareTransport,
+            ))
+        };
     controllers.insert(cloudflare.name().clone(), cloudflare);
     let supabase: Arc<dyn Controller> = Arc::new(DemoSupabaseController::new());
     controllers.insert(supabase.name().clone(), supabase);

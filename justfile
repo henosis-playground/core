@@ -42,6 +42,14 @@ demo-d26:
 demo-d26-live:
     ./demo/d26.sh --live
 
+# Runs the live D26 showcase and leaves the graph, Workers, core, and s2-lite up.
+showcase:
+    ./demo/showcase.sh up
+
+# Retires the showcase graph, verifies Cloudflare cleanup, and stops local services.
+showcase-down:
+    ./demo/showcase.sh down
+
 [private]
 _assert-clean:
     {{ if `test -z "$(git status --porcelain --untracked-files=no)" && echo clean || echo dirty` == "dirty" {

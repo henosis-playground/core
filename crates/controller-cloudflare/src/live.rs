@@ -266,12 +266,28 @@ impl LiveCloudflareTransport {
         if assets_jwt.is_some() {
             bindings.push(serde_json::json!({"type": "assets", "name": "ASSETS"}));
         }
+        for (name, service) in &body.services {
+            if body.vars.contains_key(name) || (assets_jwt.is_some() && name == "ASSETS") {
+                return Err(CloudflareError::Contract(format!(
+                    "Worker service binding {name} conflicts with another binding"
+                )));
+            }
+            require_owned_name(service)?;
+            bindings.push(serde_json::json!({
+                "type": "service",
+                "name": name,
+                "service": service,
+            }));
+        }
         let mut metadata = serde_json::json!({
             "main_module": "worker.mjs",
             "bindings": bindings,
         });
         if let Some(date) = &body.compatibility_date {
             metadata["compatibility_date"] = serde_json::Value::String(date.clone());
+        }
+        if !body.compatibility_flags.is_empty() {
+            metadata["compatibility_flags"] = serde_json::json!(body.compatibility_flags);
         }
         if let Some(jwt) = assets_jwt {
             metadata["assets"] = serde_json::json!({"jwt": jwt});
@@ -1323,7 +1339,9 @@ mod tests {
                 serde_json::to_value(WorkerBody {
                     source,
                     compatibility_date: Some("2026-07-15".into()),
+                    compatibility_flags: Vec::new(),
                     vars,
+                    services: BTreeMap::new(),
                 })
                 .unwrap(),
             )
