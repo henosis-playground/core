@@ -47,6 +47,7 @@ mod tests {
     use henosis_types::Generation;
     use henosis_types::GraphId;
     use henosis_types::GraphName;
+    use henosis_types::InputCell;
     use henosis_types::InputCellState;
     use henosis_types::InputName;
     use henosis_types::KindName;
@@ -124,6 +125,50 @@ mod tests {
                 vec![output_name("result")],
             ))
         }
+    }
+
+    fn real_evaluation_engine() -> (BundleRef, BundleRef, EvaluationEngine) {
+        let producer_bundle =
+            BundleRef::new(ContentDigest::digest(REAL_PRODUCER_BUNDLE.as_bytes()));
+        let consumer_bundle =
+            BundleRef::new(ContentDigest::digest(REAL_CONSUMER_BUNDLE.as_bytes()));
+        let source = Arc::new(FixtureBundleSource {
+            bundles: BTreeMap::from([
+                (producer_bundle, Arc::from(REAL_PRODUCER_BUNDLE.as_bytes())),
+                (consumer_bundle, Arc::from(REAL_CONSUMER_BUNDLE.as_bytes())),
+            ]),
+        });
+        let engine = EvaluationEngine::new(
+            source,
+            Arc::new(TestResourceRegistry),
+            EngineConfig {
+                workers: 1,
+                ..EngineConfig::default()
+            },
+        )
+        .expect("real evaluator starts");
+        (producer_bundle, consumer_bundle, engine)
+    }
+
+    fn real_consumer_request(
+        consumer_bundle: BundleRef,
+        state: InputCellState,
+    ) -> EvaluationRequest {
+        let cell = InputCell::new(
+            InputName::new("source").expect("fixture input name is valid"),
+            OutputRef::new(component_name("producer"), output_name("value")),
+            false,
+            state,
+        )
+        .expect("fixture input cell matches its required declaration");
+        EvaluationRequest::new(
+            graph_id(),
+            Generation::new(1).expect("one is valid"),
+            component_name("consumer"),
+            consumer_bundle,
+            henosis_types::EvaluationSnapshot::new(vec![cell])
+                .expect("fixture snapshot has one unique input"),
+        )
     }
 
     #[derive(Debug, Default)]
@@ -419,25 +464,7 @@ mod tests {
 
     #[tokio::test]
     async fn core_loop_accepts_the_real_isolate_evaluator() {
-        let producer_bundle =
-            BundleRef::new(ContentDigest::digest(REAL_PRODUCER_BUNDLE.as_bytes()));
-        let consumer_bundle =
-            BundleRef::new(ContentDigest::digest(REAL_CONSUMER_BUNDLE.as_bytes()));
-        let source = Arc::new(FixtureBundleSource {
-            bundles: BTreeMap::from([
-                (producer_bundle, Arc::from(REAL_PRODUCER_BUNDLE.as_bytes())),
-                (consumer_bundle, Arc::from(REAL_CONSUMER_BUNDLE.as_bytes())),
-            ]),
-        });
-        let engine = EvaluationEngine::new(
-            source,
-            Arc::new(TestResourceRegistry),
-            EngineConfig {
-                workers: 1,
-                ..EngineConfig::default()
-            },
-        )
-        .expect("real evaluator starts");
+        let (producer_bundle, consumer_bundle, engine) = real_evaluation_engine();
         let producer = component_bundle(
             "producer",
             producer_bundle,
@@ -476,6 +503,41 @@ mod tests {
             "test/item@1/main"
         );
         assert_eq!(transition.effects().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn real_engine_under_specification_is_monotone() {
+        let (_, consumer_bundle, engine) = real_evaluation_engine();
+        let partial = engine
+            .evaluate(real_consumer_request(
+                consumer_bundle,
+                InputCellState::Blocked,
+            ))
+            .await
+            .expect("blocked real evaluation succeeds");
+        let fuller = engine
+            .evaluate(real_consumer_request(
+                consumer_bundle,
+                InputCellState::Available(
+                    NativeValue::new(serde_json::json!("ready"))
+                        .expect("fixture value is finite JSON"),
+                ),
+            ))
+            .await
+            .expect("available real evaluation succeeds");
+        let resources = |attempt: &EvaluationAttempt| {
+            attempt
+                .resources()
+                .iter()
+                .map(|resource| resource.resource().body().canonical().to_owned())
+                .collect::<BTreeSet<_>>()
+        };
+        let partial = resources(&partial);
+        let fuller = resources(&fuller);
+
+        assert!(partial.is_subset(&fuller));
+        assert!(partial.is_empty());
+        assert_eq!(fuller.len(), 1);
     }
 
     #[tokio::test]

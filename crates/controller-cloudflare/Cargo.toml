@@ -13,6 +13,7 @@ henosis-types.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [dev-dependencies]
 tokio.workspace = true

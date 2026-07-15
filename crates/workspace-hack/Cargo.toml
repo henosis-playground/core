@@ -9,51 +9,86 @@ description = "workspace-hack package, managed by hakari"
 
 ### BEGIN HAKARI SECTION
 [dependencies]
+allocator-api2 = { version = "0.2" }
 bytes = { version = "1", features = ["serde"] }
-either = { version = "1", default-features = false, features = [
-  "serde",
-  "use_std",
-] }
+compact_str = { version = "0.9", features = ["serde"] }
+either = { version = "1", features = ["serde", "use_std"] }
+fastrand = { version = "2" }
 flate2 = { version = "1", features = ["zlib-rs"] }
+form_urlencoded = { version = "1" }
 futures-channel = { version = "0.3", features = ["sink"] }
 futures-core = { version = "0.3" }
 futures-sink = { version = "0.3" }
 futures-util = { version = "0.3", features = ["channel", "io", "sink"] }
+hashbrown = { version = "0.17", default-features = false, features = [
+  "allocator-api2",
+  "inline-more",
+] }
 hyper = { version = "1", features = ["client", "http1", "http2", "server"] }
 hyper-util = { version = "0.1", features = [
   "client-legacy",
   "server-auto",
   "server-graceful",
 ] }
+indexmap = { version = "2", features = ["serde"] }
+insta = { version = "1", features = ["yaml"] }
+libc = { version = "0.2" }
+memchr = { version = "2" }
+miniz_oxide = { version = "0.8", features = ["simd"] }
+once_cell = { version = "1" }
 percent-encoding = { version = "2" }
+phf = { version = "0.14", features = ["macros"] }
+phf_shared = { version = "0.14", default-features = false, features = ["std"] }
+regex-syntax = { version = "0.8" }
 serde = { version = "1", features = ["alloc", "derive"] }
 serde_core = { version = "1", features = ["alloc"] }
-serde_json = { version = "1", features = ["alloc"] }
-slab = { version = "0.4" }
-tokio = { version = "1", features = [
-  "io-util",
-  "macros",
-  "net",
-  "rt-multi-thread",
-  "signal",
-  "sync",
-  "time",
+serde_json = { version = "1", features = [
+  "alloc",
+  "float_roundtrip",
+  "preserve_order",
+  "raw_value",
 ] }
+slab = { version = "0.4" }
+smallvec = { version = "1", default-features = false, features = [
+  "const_new",
+  "serde",
+  "union",
+] }
+tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["codec", "io", "rt"] }
 tracing = { version = "0.1" }
 uuid = { version = "1", features = ["fast-rng", "serde", "v4", "v7"] }
 
 [build-dependencies]
+allocator-api2 = { version = "0.2" }
 cc = { version = "1", default-features = false, features = ["parallel"] }
-either = { version = "1", default-features = false, features = [
-  "serde",
-  "use_std",
+either = { version = "1", features = ["serde", "use_std"] }
+fastrand = { version = "2" }
+hashbrown = { version = "0.17", default-features = false, features = [
+  "allocator-api2",
+  "inline-more",
 ] }
-proc-macro2 = { version = "1" }
-quote = { version = "1" }
+indexmap = { version = "2", features = ["serde"] }
+libc = { version = "0.2" }
+memchr = { version = "2" }
+miniz_oxide = { version = "0.8", features = ["simd"] }
+phf = { version = "0.14", features = ["macros"] }
+phf_shared = { version = "0.14", default-features = false, features = ["std"] }
+regex-syntax = { version = "0.8" }
 serde = { version = "1", features = ["alloc", "derive"] }
 serde_core = { version = "1", features = ["alloc"] }
-syn = { version = "2", features = ["extra-traits", "full", "visit-mut"] }
+smallvec = { version = "1", default-features = false, features = [
+  "const_new",
+  "serde",
+  "union",
+] }
+syn = { version = "2", features = [
+  "extra-traits",
+  "fold",
+  "full",
+  "visit",
+  "visit-mut",
+] }
 
 [target.x86_64-unknown-linux-gnu.dependencies]
 bitflags = { version = "2", default-features = false, features = ["std"] }
@@ -61,10 +96,9 @@ getrandom = { version = "0.4", default-features = false, features = [
   "std",
   "sys_rng",
 ] }
-libc = { version = "0.2" }
 
 [target.x86_64-unknown-linux-gnu.build-dependencies]
-libc = { version = "0.2" }
+bitflags = { version = "2", default-features = false, features = ["std"] }
 
 [target.x86_64-unknown-linux-musl.dependencies]
 bitflags = { version = "2", default-features = false, features = ["std"] }
@@ -72,10 +106,9 @@ getrandom = { version = "0.4", default-features = false, features = [
   "std",
   "sys_rng",
 ] }
-libc = { version = "0.2" }
 
 [target.x86_64-unknown-linux-musl.build-dependencies]
-libc = { version = "0.2" }
+bitflags = { version = "2", default-features = false, features = ["std"] }
 
 [target.aarch64-unknown-linux-gnu.dependencies]
 bitflags = { version = "2", default-features = false, features = ["std"] }
@@ -83,10 +116,9 @@ getrandom = { version = "0.4", default-features = false, features = [
   "std",
   "sys_rng",
 ] }
-libc = { version = "0.2" }
 
 [target.aarch64-unknown-linux-gnu.build-dependencies]
-libc = { version = "0.2" }
+bitflags = { version = "2", default-features = false, features = ["std"] }
 
 [target.aarch64-unknown-linux-musl.dependencies]
 bitflags = { version = "2", default-features = false, features = ["std"] }
@@ -94,21 +126,27 @@ getrandom = { version = "0.4", default-features = false, features = [
   "std",
   "sys_rng",
 ] }
-libc = { version = "0.2" }
 
 [target.aarch64-unknown-linux-musl.build-dependencies]
-libc = { version = "0.2" }
+bitflags = { version = "2", default-features = false, features = ["std"] }
 
 [target.aarch64-apple-darwin.dependencies]
 bitflags = { version = "2", default-features = false, features = ["std"] }
+errno = { version = "0.3" }
 getrandom = { version = "0.4", default-features = false, features = [
   "std",
   "sys_rng",
 ] }
-libc = { version = "0.2" }
+libc = { version = "0.2", default-features = false, features = [
+  "extra_traits",
+] }
 
 [target.aarch64-apple-darwin.build-dependencies]
-libc = { version = "0.2" }
+bitflags = { version = "2", default-features = false, features = ["std"] }
+errno = { version = "0.3" }
+libc = { version = "0.2", default-features = false, features = [
+  "extra_traits",
+] }
 
 ### END HAKARI SECTION
 

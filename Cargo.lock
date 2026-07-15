@@ -1192,6 +1192,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1205,6 +1206,7 @@ dependencies = [
  "thiserror",
  "toml",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1219,6 +1221,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1231,6 +1234,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1249,6 +1253,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4196,26 +4201,39 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 name = "workspace-hack"
 version = "0.0.0"
 dependencies = [
+ "allocator-api2",
  "bitflags",
  "bytes",
  "cc",
+ "compact_str",
  "either",
+ "errno",
+ "fastrand",
  "flate2",
+ "form_urlencoded",
  "futures-channel",
  "futures-core",
  "futures-sink",
  "futures-util",
  "getrandom 0.4.3",
+ "hashbrown 0.17.1",
  "hyper",
  "hyper-util",
+ "indexmap",
+ "insta",
  "libc",
+ "memchr",
+ "miniz_oxide",
+ "once_cell",
  "percent-encoding",
- "proc-macro2",
- "quote",
+ "phf 0.14.0",
+ "phf_shared 0.14.0",
+ "regex-syntax",
  "serde",
  "serde_core",
  "serde_json",
  "slab",
+ "smallvec",
  "syn",
  "tokio",
  "tokio-util",
