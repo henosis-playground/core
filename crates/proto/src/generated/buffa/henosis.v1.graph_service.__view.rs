@@ -5,8 +5,6 @@
 pub struct CreateGraphRequestView<'a> {
     /// Field 1: `graph_id`
     pub graph_id: ::core::option::Option<&'a str>,
-    /// Field 2: `name`
-    pub name: ::core::option::Option<&'a str>,
     /// Field 3: `components`
     pub components: ::buffa::RepeatedView<
         'a,
@@ -51,13 +49,6 @@ impl<'a> ::buffa::MessageView<'a> for CreateGraphRequestView<'a> {
                     ::buffa::encoding::WireType::LengthDelimited,
                 )?;
                 view.graph_id = Some(::buffa::types::borrow_str(&mut cur)?);
-            }
-            2u32 => {
-                ::buffa::encoding::check_wire_type(
-                    tag,
-                    ::buffa::encoding::WireType::LengthDelimited,
-                )?;
-                view.name = Some(::buffa::types::borrow_str(&mut cur)?);
             }
             4u32 => {
                 ::buffa::encoding::check_wire_type(
@@ -106,7 +97,6 @@ impl<'a> ::buffa::MessageView<'a> for CreateGraphRequestView<'a> {
         let _ = __buffa_src;
         ::core::result::Result::Ok(super::super::CreateGraphRequest {
             graph_id: self.graph_id.map(|s| s.to_string()),
-            name: self.name.map(|s| s.to_string()),
             components: self
                 .components
                 .iter()
@@ -125,9 +115,6 @@ impl<'a> ::buffa::ViewEncode<'a> for CreateGraphRequestView<'a> {
         use ::buffa::Enumeration as _;
         let mut size = 0u32;
         if let Some(ref v) = self.graph_id {
-            size += 1u32 + ::buffa::types::string_encoded_len(v) as u32;
-        }
-        if let Some(ref v) = self.name {
             size += 1u32 + ::buffa::types::string_encoded_len(v) as u32;
         }
         for v in &self.components {
@@ -154,9 +141,6 @@ impl<'a> ::buffa::ViewEncode<'a> for CreateGraphRequestView<'a> {
         use ::buffa::Enumeration as _;
         if let Some(ref v) = self.graph_id {
             ::buffa::types::put_string_field(1u32, v, buf);
-        }
-        if let Some(ref v) = self.name {
-            ::buffa::types::put_string_field(2u32, v, buf);
         }
         for v in &self.components {
             ::buffa::types::put_len_delimited_header(3u32, __cache.consume_next(), buf);
@@ -188,9 +172,6 @@ impl<'__a> ::serde::Serialize for CreateGraphRequestView<'__a> {
         let mut __map = __s.serialize_map(::core::option::Option::None)?;
         if let ::core::option::Option::Some(__v) = self.graph_id {
             __map.serialize_entry("graphId", __v)?;
-        }
-        if let ::core::option::Option::Some(__v) = self.name {
-            __map.serialize_entry("name", __v)?;
         }
         if !self.components.is_empty() {
             __map.serialize_entry("components", &*self.components)?;
@@ -295,11 +276,6 @@ impl CreateGraphRequestOwnedView {
     #[must_use]
     pub fn graph_id(&self) -> ::core::option::Option<&'_ str> {
         self.0.reborrow().graph_id
-    }
-    /// Field 2: `name`
-    #[must_use]
-    pub fn name(&self) -> ::core::option::Option<&'_ str> {
-        self.0.reborrow().name
     }
     /// Field 3: `components`
     #[must_use]

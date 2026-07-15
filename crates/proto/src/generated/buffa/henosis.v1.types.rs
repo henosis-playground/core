@@ -3006,9 +3006,6 @@ pub struct GraphStatus {
         skip_serializing_if = "::core::option::Option::is_none"
     )]
     pub graph_id: ::core::option::Option<::buffa::alloc::string::String>,
-    /// Field 2: `name`
-    #[serde(rename = "name", skip_serializing_if = "::core::option::Option::is_none")]
-    pub name: ::core::option::Option<::buffa::alloc::string::String>,
     /// Field 3: `generation`
     #[serde(
         rename = "generation",
@@ -3076,7 +3073,6 @@ impl ::core::fmt::Debug for GraphStatus {
     fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         f.debug_struct("GraphStatus")
             .field("graph_id", &self.graph_id)
-            .field("name", &self.name)
             .field("generation", &self.generation)
             .field("plan", &self.plan)
             .field("outputs", &self.outputs)
@@ -3105,16 +3101,6 @@ impl GraphStatus {
         value: impl Into<::buffa::alloc::string::String>,
     ) -> Self {
         self.graph_id = Some(value.into());
-        self
-    }
-    #[must_use = "with_* setters return `self` by value; assign or chain the result"]
-    #[inline]
-    ///Sets [`Self::name`] to `Some(value)`, consuming and returning `self`.
-    pub fn with_name(
-        mut self,
-        value: impl Into<::buffa::alloc::string::String>,
-    ) -> Self {
-        self.name = Some(value.into());
         self
     }
     #[must_use = "with_* setters return `self` by value; assign or chain the result"]
@@ -3171,9 +3157,6 @@ impl ::buffa::Message for GraphStatus {
         use ::buffa::Enumeration as _;
         let mut size = 0u32;
         if let Some(ref v) = self.graph_id {
-            size += 1u32 + ::buffa::types::string_encoded_len(v) as u32;
-        }
-        if let Some(ref v) = self.name {
             size += 1u32 + ::buffa::types::string_encoded_len(v) as u32;
         }
         if let Some(v) = self.generation {
@@ -3236,9 +3219,6 @@ impl ::buffa::Message for GraphStatus {
         if let Some(ref v) = self.graph_id {
             ::buffa::types::put_string_field(1u32, v, buf);
         }
-        if let Some(ref v) = self.name {
-            ::buffa::types::put_string_field(2u32, v, buf);
-        }
         if let Some(v) = self.generation {
             ::buffa::types::put_uint64_field(3u32, v, buf);
         }
@@ -3292,16 +3272,6 @@ impl ::buffa::Message for GraphStatus {
                     self
                         .graph_id
                         .get_or_insert_with(::buffa::alloc::string::String::new),
-                    buf,
-                )?;
-            }
-            2u32 => {
-                ::buffa::encoding::check_wire_type(
-                    tag,
-                    ::buffa::encoding::WireType::LengthDelimited,
-                )?;
-                ::buffa::types::merge_string(
-                    self.name.get_or_insert_with(::buffa::alloc::string::String::new),
                     buf,
                 )?;
             }
@@ -3398,7 +3368,6 @@ impl ::buffa::Message for GraphStatus {
     }
     fn clear(&mut self) {
         self.graph_id = ::core::option::Option::None;
-        self.name = ::core::option::Option::None;
         self.generation = ::core::option::Option::None;
         self.plan = ::buffa::MessageField::none();
         self.outputs.clear();

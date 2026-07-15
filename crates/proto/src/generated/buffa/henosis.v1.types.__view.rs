@@ -3907,8 +3907,6 @@ impl ::serde::Serialize for PlanOwnedView {
 pub struct GraphStatusView<'a> {
     /// Field 1: `graph_id`
     pub graph_id: ::core::option::Option<&'a str>,
-    /// Field 2: `name`
-    pub name: ::core::option::Option<&'a str>,
     /// Field 3: `generation`
     pub generation: ::core::option::Option<u64>,
     /// Field 4: `plan`
@@ -3973,13 +3971,6 @@ impl<'a> ::buffa::MessageView<'a> for GraphStatusView<'a> {
                     ::buffa::encoding::WireType::LengthDelimited,
                 )?;
                 view.graph_id = Some(::buffa::types::borrow_str(&mut cur)?);
-            }
-            2u32 => {
-                ::buffa::encoding::check_wire_type(
-                    tag,
-                    ::buffa::encoding::WireType::LengthDelimited,
-                )?;
-                view.name = Some(::buffa::types::borrow_str(&mut cur)?);
             }
             3u32 => {
                 ::buffa::encoding::check_wire_type(
@@ -4107,7 +4098,6 @@ impl<'a> ::buffa::MessageView<'a> for GraphStatusView<'a> {
         let _ = __buffa_src;
         ::core::result::Result::Ok(super::super::GraphStatus {
             graph_id: self.graph_id.map(|s| s.to_string()),
-            name: self.name.map(|s| s.to_string()),
             generation: self.generation,
             plan: match self.plan.as_option() {
                 Some(v) => {
@@ -4148,9 +4138,6 @@ impl<'a> ::buffa::ViewEncode<'a> for GraphStatusView<'a> {
         use ::buffa::Enumeration as _;
         let mut size = 0u32;
         if let Some(ref v) = self.graph_id {
-            size += 1u32 + ::buffa::types::string_encoded_len(v) as u32;
-        }
-        if let Some(ref v) = self.name {
             size += 1u32 + ::buffa::types::string_encoded_len(v) as u32;
         }
         if let Some(v) = self.generation {
@@ -4214,9 +4201,6 @@ impl<'a> ::buffa::ViewEncode<'a> for GraphStatusView<'a> {
         if let Some(ref v) = self.graph_id {
             ::buffa::types::put_string_field(1u32, v, buf);
         }
-        if let Some(ref v) = self.name {
-            ::buffa::types::put_string_field(2u32, v, buf);
-        }
         if let Some(v) = self.generation {
             ::buffa::types::put_uint64_field(3u32, v, buf);
         }
@@ -4271,9 +4255,6 @@ impl<'__a> ::serde::Serialize for GraphStatusView<'__a> {
         let mut __map = __s.serialize_map(::core::option::Option::None)?;
         if let ::core::option::Option::Some(__v) = self.graph_id {
             __map.serialize_entry("graphId", __v)?;
-        }
-        if let ::core::option::Option::Some(__v) = self.name {
-            __map.serialize_entry("name", __v)?;
         }
         if let ::core::option::Option::Some(__v) = self.generation {
             __map
@@ -4398,11 +4379,6 @@ impl GraphStatusOwnedView {
     #[must_use]
     pub fn graph_id(&self) -> ::core::option::Option<&'_ str> {
         self.0.reborrow().graph_id
-    }
-    /// Field 2: `name`
-    #[must_use]
-    pub fn name(&self) -> ::core::option::Option<&'_ str> {
-        self.0.reborrow().name
     }
     /// Field 3: `generation`
     #[must_use]
