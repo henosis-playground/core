@@ -1358,26 +1358,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "henosis-frontend-git-sync"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "connectrpc",
- "futures",
- "henosis-controller-runtime",
- "henosis-proto",
- "henosis-types",
- "serde",
- "tempfile",
- "thiserror",
- "tokio",
- "toml",
- "uuid",
- "workspace-hack",
-]
-
-[[package]]
 name = "henosis-journal"
 version = "0.0.0"
 dependencies = [
@@ -4570,26 +4550,46 @@ dependencies = [
  "hashbrown 0.17.1",
  "hyper",
  "hyper-util",
+ "icu_locale_core",
+ "icu_provider",
  "indexmap",
  "insta",
  "libc",
+ "litemap",
+ "log",
  "memchr",
  "miniz_oxide",
  "once_cell",
  "percent-encoding",
  "phf 0.14.0",
  "phf_shared 0.14.0",
+ "potential_utf",
+ "regex-automata",
  "regex-syntax",
+ "security-framework-sys",
  "serde",
  "serde_core",
  "serde_json",
  "slab",
  "smallvec",
+ "stable_deref_trait",
  "syn",
+ "sync_wrapper",
+ "tinystr",
  "tokio",
  "tokio-util",
+ "tower",
+ "tower-http",
  "tracing",
+ "tracing-core",
+ "typenum",
+ "url",
  "uuid",
+ "writeable",
+ "yoke",
+ "zerofrom",
+ "zerotrie",
+ "zerovec",
 ]
 
 [[package]]
