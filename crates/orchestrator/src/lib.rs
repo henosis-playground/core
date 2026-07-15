@@ -257,7 +257,7 @@ impl Core {
                     error.to_string(),
                 ))
             })?;
-        self.graph_mut(graph_id)?.intent = updated.clone();
+        self.graph_mut(graph_id)?.accept_intent(updated.clone());
         self.runtime.insert(graph_id, GraphRuntime::default());
         let mut transition = Transition {
             events: vec![CoreEvent::GraphUpdated(updated)],
@@ -546,11 +546,7 @@ impl Core {
             .get_mut(&graph_id)
             .expect("runtime exists for every graph")
             .pending = pending;
-        {
-            let mut graph = self.graph_mut(graph_id)?;
-            graph.plan = Some(plan.clone());
-            graph.stall = None;
-        }
+        self.graph_mut(graph_id)?.accept_plan(plan.clone());
         evaluation_events.push(CoreEvent::PlanAccepted { graph_id, plan });
         let mut transition = Transition {
             events: evaluation_events,
@@ -1029,7 +1025,7 @@ impl MaterializedCore {
                     graph.intent.generation().next(),
                     "generation ordinals must be monotonic while folding"
                 );
-                graph.intent = intent.clone();
+                graph.accept_intent(intent.clone());
             }
             CoreEvent::PlanAccepted { graph_id, plan } => {
                 let mut graph = self
@@ -1041,7 +1037,7 @@ impl MaterializedCore {
                     plan.generation(),
                     "accepted plan must match current generation"
                 );
-                graph.plan = Some(plan.clone());
+                graph.accept_plan(plan.clone());
             }
             CoreEvent::ControllerReported(report) => {
                 self.graphs
@@ -1135,6 +1131,16 @@ impl GraphState {
             stall: None,
             retired: false,
         }
+    }
+
+    fn accept_intent(&mut self, intent: GraphIntent) {
+        self.intent = intent;
+        self.stall = None;
+    }
+
+    fn accept_plan(&mut self, plan: Plan) {
+        self.plan = Some(plan);
+        self.stall = None;
     }
 
     #[must_use]
