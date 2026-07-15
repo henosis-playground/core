@@ -9,7 +9,6 @@ use crate::ComponentName;
 use crate::ContentDigest;
 use crate::Generation;
 use crate::GraphId;
-use crate::GraphName;
 use crate::InputName;
 use crate::NativeValue;
 use crate::OutputAvailability;
@@ -357,7 +356,6 @@ pub enum ComponentIntentError {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct NewGraphIntent {
     pub id: GraphId,
-    pub name: GraphName,
     pub components: Vec<ComponentIntent>,
     pub source_policy: GraphSourcePolicy,
 }
@@ -365,7 +363,6 @@ pub struct NewGraphIntent {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct GraphIntent {
     id: GraphId,
-    name: GraphName,
     generation: Generation,
     components: IdOrdMap<ComponentIntent>,
     source_policy: GraphSourcePolicy,
@@ -375,7 +372,6 @@ impl GraphIntent {
     pub fn new(new: NewGraphIntent) -> Result<Self, GraphIntentError> {
         Self::from_parts(
             new.id,
-            new.name,
             Generation::new(1).expect("one is a valid generation"),
             new.components,
             new.source_policy,
@@ -388,7 +384,6 @@ impl GraphIntent {
     ) -> Result<Self, GraphIntentError> {
         Self::from_parts(
             self.id,
-            self.name.clone(),
             self.generation.next(),
             components,
             self.source_policy,
@@ -397,7 +392,6 @@ impl GraphIntent {
 
     fn from_parts(
         id: GraphId,
-        name: GraphName,
         generation: Generation,
         components: Vec<ComponentIntent>,
         source_policy: GraphSourcePolicy,
@@ -489,7 +483,6 @@ impl GraphIntent {
         }
         Ok(Self {
             id,
-            name,
             generation,
             components: keyed,
             source_policy,
@@ -499,11 +492,6 @@ impl GraphIntent {
     #[must_use]
     pub const fn id(&self) -> GraphId {
         self.id
-    }
-
-    #[must_use]
-    pub const fn name(&self) -> &GraphName {
-        &self.name
     }
 
     #[must_use]

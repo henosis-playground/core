@@ -94,8 +94,9 @@ message Plan {
 }
 
 message GraphStatus {
+  reserved 2;
+
   string graph_id = 1;
-  string name = 2;
   uint64 generation = 3;
   Plan plan = 4;
   repeated OutputRecord outputs = 5;

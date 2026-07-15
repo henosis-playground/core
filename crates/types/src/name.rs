@@ -54,7 +54,6 @@ macro_rules! domain_name {
     };
 }
 
-domain_name!(GraphName, "graph name");
 domain_name!(ComponentName, "component name");
 domain_name!(InputName, "input name");
 domain_name!(ControllerName, "controller name");

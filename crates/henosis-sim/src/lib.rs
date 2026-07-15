@@ -24,7 +24,6 @@ use henosis_types::ControllerCommand;
 use henosis_types::ControllerName;
 use henosis_types::ControllerReport;
 use henosis_types::GraphId;
-use henosis_types::GraphName;
 use henosis_types::InputName;
 use henosis_types::NativeValue;
 use henosis_types::NewComponentIntent;
@@ -560,7 +559,6 @@ fn build_graph(evaluator: &ProgramEvaluator, scenario: &Scenario) -> NewGraphInt
     ));
     NewGraphIntent {
         id: GraphId::from_bytes([7; 16]),
-        name: GraphName::new("simulated-graph").expect("fixture graph name is valid"),
         components,
         source_policy: henosis_types::GraphSourcePolicy::AcceptLocal,
     }

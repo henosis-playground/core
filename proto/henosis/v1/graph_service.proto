@@ -36,8 +36,9 @@ service ControllerService {
 }
 
 message CreateGraphRequest {
+  reserved 2;
+
   string graph_id = 1;
-  string name = 2;
   repeated ComponentIntent components = 3;
   GraphSourcePolicy source_policy = 4;
 }

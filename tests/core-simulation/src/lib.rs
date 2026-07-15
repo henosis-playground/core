@@ -47,7 +47,6 @@ mod tests {
     use henosis_types::Evaluator;
     use henosis_types::Generation;
     use henosis_types::GraphId;
-    use henosis_types::GraphName;
     use henosis_types::InputCell;
     use henosis_types::InputCellState;
     use henosis_types::InputName;
@@ -407,7 +406,6 @@ mod tests {
     fn graph(components: Vec<ComponentIntent>) -> NewGraphIntent {
         NewGraphIntent {
             id: graph_id(),
-            name: GraphName::new("test-graph").expect("valid graph name"),
             components,
             source_policy: henosis_types::GraphSourcePolicy::AcceptLocal,
         }

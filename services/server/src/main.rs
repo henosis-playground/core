@@ -58,7 +58,6 @@ use henosis_types::ControllerReport;
 use henosis_types::ControllerSlice;
 use henosis_types::Generation;
 use henosis_types::GraphId;
-use henosis_types::GraphName;
 use henosis_types::GraphSourcePolicy;
 use henosis_types::InputName;
 use henosis_types::KindVersion;
@@ -292,13 +291,10 @@ impl GraphService for CoreService {
     {
         let request = request.to_owned_message();
         let graph_id = parse_graph(request.graph_id.as_deref().unwrap_or_default())?;
-        let name = GraphName::new(request.name.unwrap_or_else(|| graph_id.to_string()))
-            .map_err(|error| invalid(error.to_string()))?;
         let components = self.inspect_components(request.components).await?;
         let status = self
             .apply(Command::CreateGraph(NewGraphIntent {
                 id: graph_id,
-                name,
                 components,
                 source_policy: source_policy(request.source_policy.as_ref())?,
             }))
@@ -876,7 +872,6 @@ fn graph_status(
     });
     Ok(proto::GraphStatus {
         graph_id: Some(graph_id.to_string()),
-        name: Some(graph.intent().name().to_string()),
         generation: Some(graph.intent().generation().ordinal()),
         plan: plan.into(),
         outputs,
@@ -1090,7 +1085,6 @@ mod tests {
         .expect("test component intent");
         henosis_types::GraphIntent::new(NewGraphIntent {
             id: GraphId::from_bytes([last_byte; 16]),
-            name: GraphName::new(format!("graph-{last_byte}")).expect("test graph name"),
             components: vec![component],
             source_policy: GraphSourcePolicy::AcceptLocal,
         })
