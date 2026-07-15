@@ -212,7 +212,7 @@ impl StorageEngine for MemoryStorage {
         records: Vec<AppendRecord>,
     ) -> Result<AppendAck, Error<StorageDomainError, anyhow::Error, anyhow::Error>> {
         let mut state = self.inner.state.lock().await;
-        let actual = state.streams.get(stream).map_or(0, Vec::len) as u64;
+        let actual = state.streams.get(stream).map(Vec::len).unwrap_or(0) as u64;
         if expected.sequence() != actual {
             return Err(Error::Domain(StorageDomainError::CasConflict {
                 expected: expected.sequence(),
@@ -223,7 +223,7 @@ impl StorageEngine for MemoryStorage {
         for record in records {
             let timestamp = state.clock;
             state.clock = state.clock.saturating_add(1);
-            let sequence = state.streams.get(stream).map_or(0, Vec::len) as u64;
+            let sequence = state.streams.get(stream).map(Vec::len).unwrap_or(0) as u64;
             state
                 .streams
                 .entry(stream.clone())
@@ -235,7 +235,7 @@ impl StorageEngine for MemoryStorage {
                     record.body,
                 ));
         }
-        let tail = state.streams.get(stream).map_or(0, Vec::len) as u64;
+        let tail = state.streams.get(stream).map(Vec::len).unwrap_or(0) as u64;
         drop(state);
         self.inner.changed.notify_waiters();
         Ok(AppendAck::new(
@@ -268,7 +268,7 @@ impl StorageEngine for MemoryStorage {
     ) -> Result<StreamPosition, Error<StorageDomainError, anyhow::Error, anyhow::Error>> {
         let state = self.inner.state.lock().await;
         Ok(StreamPosition::new(
-            state.streams.get(stream).map_or(0, Vec::len) as u64,
+            state.streams.get(stream).map(Vec::len).unwrap_or(0) as u64,
         ))
     }
 

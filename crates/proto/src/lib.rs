@@ -2,7 +2,11 @@
 
 #![allow(
     elided_lifetimes_in_paths,
-    reason = "generated buffa views omit explicit lifetimes"
+    clippy::doc_markdown,
+    clippy::inefficient_to_string,
+    clippy::semicolon_if_nothing_returned,
+    clippy::str_to_string,
+    reason = "generated buffa/connect code is committed verbatim"
 )]
 
 #[path = "generated/buffa/mod.rs"]
