@@ -841,6 +841,7 @@ fn graph_status(
     });
     let outputs = graph
         .outputs()
+        .filter(|output| output.key_value().generation() == graph.intent().generation())
         .map(|output| proto::OutputRecord {
             generation: Some(output.key_value().generation().ordinal()),
             reference: Some(output.key_value().reference().to_string()),
