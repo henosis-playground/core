@@ -1110,6 +1110,10 @@ impl MaterializedCore {
     pub fn graph(&self, graph_id: GraphId) -> Option<&GraphState> {
         self.graphs.get(&graph_id)
     }
+
+    pub fn graphs(&self) -> impl ExactSizeIterator<Item = &GraphState> {
+        self.graphs.iter()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

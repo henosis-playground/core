@@ -376,6 +376,23 @@ impl GraphService for CoreService {
         .into())
     }
 
+    async fn list_graphs<'a>(
+        &'a self,
+        _ctx: connectrpc::RequestContext,
+        request: ServiceRequest<'_, proto::ListGraphsRequest>,
+    ) -> ServiceResult<impl connectrpc::Encodable<proto::ListGraphsResponse> + Send + use<'a>> {
+        let include_retired = request
+            .to_owned_message()
+            .include_retired
+            .unwrap_or_default();
+        let core = self.core.lock().await;
+        Ok(proto::ListGraphsResponse {
+            graphs: graph_summaries(core.state(), include_retired),
+            ..Default::default()
+        }
+        .into())
+    }
+
     async fn watch_graph(
         &self,
         _ctx: connectrpc::RequestContext,
@@ -744,6 +761,61 @@ fn event_graph_id(event: &henosis_types::CoreEvent) -> Option<GraphId> {
     }
 }
 
+fn graph_summaries(
+    state: &henosis_orchestrator::MaterializedCore,
+    include_retired: bool,
+) -> Vec<proto::GraphSummary> {
+    state
+        .graphs()
+        .filter(|graph| include_retired || !graph.is_retired())
+        .map(|graph| proto::GraphSummary {
+            graph_id: Some(graph.intent().id().to_string()),
+            current_generation: Some(graph.intent().generation().ordinal()),
+            phase: Some(graph_phase(graph).into()),
+            created: Some(true),
+            retired: Some(graph.is_retired()),
+            ..Default::default()
+        })
+        .collect()
+}
+
+fn graph_phase(graph: &henosis_orchestrator::GraphState) -> proto::GraphPhase {
+    if graph.is_retired() {
+        return proto::GraphPhase::Retired;
+    }
+    if graph.stall().is_some() {
+        return proto::GraphPhase::Failed;
+    }
+    let Some(plan) = graph.plan() else {
+        return proto::GraphPhase::Planning;
+    };
+    if plan.blocked().next().is_some() {
+        return proto::GraphPhase::Blocked;
+    }
+    let dispositions = graph
+        .reports()
+        .filter(|report| report.generation() == graph.intent().generation())
+        .flat_map(|report| report.dispositions())
+        .collect::<Vec<_>>();
+    if dispositions
+        .iter()
+        .any(|disposition| matches!(disposition.kind(), ResourceDispositionKind::Failed { .. }))
+    {
+        return proto::GraphPhase::Failed;
+    }
+    let planned_resources = plan.resources().len();
+    if planned_resources == 0
+        || dispositions.len() >= planned_resources
+            && dispositions
+                .iter()
+                .all(|disposition| disposition.kind() == &ResourceDispositionKind::Ready)
+    {
+        proto::GraphPhase::Ready
+    } else {
+        proto::GraphPhase::Reconciling
+    }
+}
+
 fn graph_status(
     state: &henosis_orchestrator::MaterializedCore,
     graph_id: GraphId,
@@ -952,4 +1024,76 @@ fn hex(bytes: &[u8]) -> String {
         encoded.push(TABLE[(byte & 0xf) as usize] as char);
     }
     encoded
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use henosis_types::ComponentName;
+    use henosis_types::CoreEvent;
+    use henosis_types::NewComponentIntent;
+
+    #[test]
+    fn list_graphs_filters_retired_graphs() {
+        let live = graph(1);
+        let retired = graph(2);
+        let state = henosis_orchestrator::MaterializedCore::fold(&[
+            CoreEvent::GraphCreated(live.clone()),
+            CoreEvent::GraphCreated(retired.clone()),
+            CoreEvent::GraphRetired {
+                graph_id: retired.id(),
+                last_generation: retired.generation(),
+            },
+        ]);
+
+        let live_only = graph_summaries(&state, false);
+        assert_eq!(live_only.len(), 1);
+        assert_eq!(
+            live_only[0].graph_id.as_deref(),
+            Some(live.id().to_string().as_str())
+        );
+        assert_eq!(
+            live_only[0]
+                .phase
+                .as_ref()
+                .and_then(buffa::EnumValue::as_known),
+            Some(proto::GraphPhase::Planning)
+        );
+        assert_eq!(live_only[0].created, Some(true));
+        assert_eq!(live_only[0].retired, Some(false));
+
+        let with_retired = graph_summaries(&state, true);
+        assert_eq!(with_retired.len(), 2);
+        let retired_summary = with_retired
+            .iter()
+            .find(|summary| summary.graph_id.as_deref() == Some(retired.id().to_string().as_str()))
+            .expect("retired graph is included when requested");
+        assert_eq!(
+            retired_summary
+                .phase
+                .as_ref()
+                .and_then(buffa::EnumValue::as_known),
+            Some(proto::GraphPhase::Retired)
+        );
+        assert_eq!(retired_summary.created, Some(true));
+        assert_eq!(retired_summary.retired, Some(true));
+    }
+
+    fn graph(last_byte: u8) -> henosis_types::GraphIntent {
+        let component = ComponentIntent::new(NewComponentIntent {
+            name: ComponentName::new("api").expect("test component name"),
+            bundle: BundleRef::new(ContentDigest::from_bytes([last_byte; 32])),
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+            source: None,
+        })
+        .expect("test component intent");
+        henosis_types::GraphIntent::new(NewGraphIntent {
+            id: GraphId::from_bytes([last_byte; 16]),
+            name: GraphName::new(format!("graph-{last_byte}")).expect("test graph name"),
+            components: vec![component],
+            source_policy: GraphSourcePolicy::AcceptLocal,
+        })
+        .expect("test graph intent")
+    }
 }

@@ -17,6 +17,9 @@ service GraphService {
   rpc GetGraph(GetGraphRequest) returns (GetGraphResponse) {
     option idempotency_level = NO_SIDE_EFFECTS;
   }
+  rpc ListGraphs(ListGraphsRequest) returns (ListGraphsResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
   rpc WatchGraph(WatchGraphRequest) returns (stream WatchGraphResponse) {
     option idempotency_level = NO_SIDE_EFFECTS;
   }
@@ -68,6 +71,32 @@ message GetGraphRequest {
 
 message GetGraphResponse {
   GraphStatus status = 1;
+}
+
+enum GraphPhase {
+  GRAPH_PHASE_UNSPECIFIED = 0;
+  GRAPH_PHASE_PLANNING = 1;
+  GRAPH_PHASE_BLOCKED = 2;
+  GRAPH_PHASE_RECONCILING = 3;
+  GRAPH_PHASE_READY = 4;
+  GRAPH_PHASE_FAILED = 5;
+  GRAPH_PHASE_RETIRED = 6;
+}
+
+message GraphSummary {
+  string graph_id = 1;
+  uint64 current_generation = 2;
+  GraphPhase phase = 3;
+  bool created = 4;
+  bool retired = 5;
+}
+
+message ListGraphsRequest {
+  bool include_retired = 1;
+}
+
+message ListGraphsResponse {
+  repeated GraphSummary graphs = 1;
 }
 
 message WatchGraphRequest {

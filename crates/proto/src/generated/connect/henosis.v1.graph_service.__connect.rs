@@ -30,6 +30,14 @@ pub type OwnedGetGraphRequestView = ::buffa::view::OwnedView<
 pub type OwnedGetGraphResponseView = ::buffa::view::OwnedView<
     crate::proto::henosis::v1::__buffa::view::GetGraphResponseView<'static>,
 >;
+///Shorthand for `OwnedView<ListGraphsRequestView<'static>>`.
+pub type OwnedListGraphsRequestView = ::buffa::view::OwnedView<
+    crate::proto::henosis::v1::__buffa::view::ListGraphsRequestView<'static>,
+>;
+///Shorthand for `OwnedView<ListGraphsResponseView<'static>>`.
+pub type OwnedListGraphsResponseView = ::buffa::view::OwnedView<
+    crate::proto::henosis::v1::__buffa::view::ListGraphsResponseView<'static>,
+>;
 ///Shorthand for `OwnedView<WatchGraphRequestView<'static>>`.
 pub type OwnedWatchGraphRequestView = ::buffa::view::OwnedView<
     crate::proto::henosis::v1::__buffa::view::WatchGraphRequestView<'static>,
@@ -134,6 +142,26 @@ for ::buffa::view::OwnedView<
         ::connectrpc::__codegen::encode_view_body(self.reborrow(), codec)
     }
 }
+impl ::connectrpc::Encodable<crate::proto::henosis::v1::ListGraphsResponse>
+for crate::proto::henosis::v1::__buffa::view::ListGraphsResponseView<'_> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self, codec)
+    }
+}
+impl ::connectrpc::Encodable<crate::proto::henosis::v1::ListGraphsResponse>
+for ::buffa::view::OwnedView<
+    crate::proto::henosis::v1::__buffa::view::ListGraphsResponseView<'static>,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self.reborrow(), codec)
+    }
+}
 impl ::connectrpc::Encodable<crate::proto::henosis::v1::WatchGraphResponse>
 for crate::proto::henosis::v1::__buffa::view::WatchGraphResponseView<'_> {
     fn encode(
@@ -229,6 +257,15 @@ pub const GRAPH_SERVICE_RETIRE_GRAPH_SPEC: ::connectrpc::Spec = ::connectrpc::Sp
 /// [`RequestContext::spec`](::connectrpc::RequestContext::spec).
 pub const GRAPH_SERVICE_GET_GRAPH_SPEC: ::connectrpc::Spec = ::connectrpc::Spec::server(
         "/henosis.v1.GraphService/GetGraph",
+        ::connectrpc::StreamType::Unary,
+    )
+    .with_idempotency_level(::connectrpc::IdempotencyLevel::NoSideEffects);
+/// Static [`Spec`](::connectrpc::Spec) for the server-side `ListGraphs` RPC.
+///
+/// The dispatcher surfaces this on
+/// [`RequestContext::spec`](::connectrpc::RequestContext::spec).
+pub const GRAPH_SERVICE_LIST_GRAPHS_SPEC: ::connectrpc::Spec = ::connectrpc::Spec::server(
+        "/henosis.v1.GraphService/ListGraphs",
         ::connectrpc::StreamType::Unary,
     )
     .with_idempotency_level(::connectrpc::IdempotencyLevel::NoSideEffects);
@@ -381,6 +418,29 @@ pub trait GraphService: Send + Sync + 'static {
         Output = ::connectrpc::ServiceResult<
             impl ::connectrpc::Encodable<
                 crate::proto::henosis::v1::GetGraphResponse,
+            > + Send + use<'a, Self>,
+        >,
+    > + Send;
+    /// Handle the ListGraphs RPC.
+    ///
+    /// `'a` lets the response body borrow from `&self` (e.g. server-resident state).
+    ///
+    /// `request` is borrowed from the request body and is valid for the
+    /// duration of the call; message fields are read directly on it
+    /// (zero-copy). The response cannot borrow from `request` — use
+    /// `.to_owned_message()` (or copy the specific fields) for anything
+    /// returned, stored, or moved into `tokio::spawn`.
+    fn list_graphs<'a>(
+        &'a self,
+        ctx: ::connectrpc::RequestContext,
+        request: ::connectrpc::ServiceRequest<
+            '_,
+            crate::proto::henosis::v1::ListGraphsRequest,
+        >,
+    ) -> impl ::std::future::Future<
+        Output = ::connectrpc::ServiceResult<
+            impl ::connectrpc::Encodable<
+                crate::proto::henosis::v1::ListGraphsResponse,
             > + Send + use<'a, Self>,
         >,
     > + Send;
@@ -555,6 +615,35 @@ impl<S: GraphService> GraphServiceExt for S {
                 },
             )
             .with_spec(GRAPH_SERVICE_GET_GRAPH_SPEC)
+            .route_view_idempotent(
+                GRAPH_SERVICE_SERVICE_NAME,
+                "ListGraphs",
+                {
+                    let svc = ::std::sync::Arc::clone(&self);
+                    ::connectrpc::view_handler_fn(move |
+                        ctx,
+                        req: ::buffa::view::OwnedView<
+                            crate::proto::henosis::v1::__buffa::view::ListGraphsRequestView<
+                                'static,
+                            >,
+                        >,
+                        format|
+                    {
+                        let svc = ::std::sync::Arc::clone(&svc);
+                        async move {
+                            let sreq = ::connectrpc::ServiceRequest::<
+                                crate::proto::henosis::v1::ListGraphsRequest,
+                            >::from_parts(req.reborrow(), req.bytes());
+                            svc.list_graphs(ctx, sreq)
+                                .await?
+                                .encode::<
+                                    crate::proto::henosis::v1::ListGraphsResponse,
+                                >(format)
+                        }
+                    })
+                },
+            )
+            .with_spec(GRAPH_SERVICE_LIST_GRAPHS_SPEC)
             .route_view_server_stream::<
                 _,
                 _,
@@ -661,6 +750,12 @@ impl<T: GraphService> ::connectrpc::Dispatcher for GraphServiceServer<T> {
                         .with_spec(GRAPH_SERVICE_GET_GRAPH_SPEC),
                 )
             }
+            "ListGraphs" => {
+                Some(
+                    ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(true)
+                        .with_spec(GRAPH_SERVICE_LIST_GRAPHS_SPEC),
+                )
+            }
             "WatchGraph" => {
                 Some(
                     ::connectrpc::dispatcher::codegen::MethodDescriptor::server_streaming()
@@ -756,6 +851,25 @@ impl<T: GraphService> ::connectrpc::Dispatcher for GraphServiceServer<T> {
                     svc.get_graph(ctx, req)
                         .await?
                         .encode::<crate::proto::henosis::v1::GetGraphResponse>(format)
+                })
+            }
+            "ListGraphs" => {
+                let svc = ::std::sync::Arc::clone(&self.inner);
+                Box::pin(async move {
+                    let body = ::connectrpc::dispatcher::codegen::request_proto_bytes::<
+                        crate::proto::henosis::v1::ListGraphsRequest,
+                    >(request.encoded()?, format)?;
+                    let req: crate::proto::henosis::v1::__buffa::view::ListGraphsRequestView<
+                        '_,
+                    > = ::connectrpc::dispatcher::codegen::decode_borrowed_request_view(
+                        &body,
+                    )?;
+                    let req = ::connectrpc::ServiceRequest::<
+                        crate::proto::henosis::v1::ListGraphsRequest,
+                    >::from_parts(&req, &body);
+                    svc.list_graphs(ctx, req)
+                        .await?
+                        .encode::<crate::proto::henosis::v1::ListGraphsResponse>(format)
                 })
             }
             _ => ::connectrpc::dispatcher::codegen::unimplemented_unary(path),
@@ -1082,6 +1196,47 @@ where
                 &self.config,
                 GRAPH_SERVICE_SERVICE_NAME,
                 "GetGraph",
+                request,
+                options,
+            )
+            .await
+    }
+    /// Call the ListGraphs RPC. Sends a request to /henosis.v1.GraphService/ListGraphs.
+    pub async fn list_graphs(
+        &self,
+        request: crate::proto::henosis::v1::ListGraphsRequest,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::proto::henosis::v1::__buffa::view::ListGraphsResponseView<'static>,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        self.list_graphs_with_options(
+                request,
+                ::connectrpc::client::CallOptions::default(),
+            )
+            .await
+    }
+    /// Call the ListGraphs RPC with explicit per-call options. Options override [`ClientConfig`](::connectrpc::client::ClientConfig) defaults.
+    pub async fn list_graphs_with_options(
+        &self,
+        request: crate::proto::henosis::v1::ListGraphsRequest,
+        options: ::connectrpc::client::CallOptions,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::proto::henosis::v1::__buffa::view::ListGraphsResponseView<'static>,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        ::connectrpc::client::call_unary(
+                &self.transport,
+                &self.config,
+                GRAPH_SERVICE_SERVICE_NAME,
+                "ListGraphs",
                 request,
                 options,
             )

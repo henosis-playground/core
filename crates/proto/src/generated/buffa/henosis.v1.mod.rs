@@ -59,6 +59,9 @@ pub mod __buffa {
         reg.register_json_any(super::__RETIRE_GRAPH_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__GET_GRAPH_REQUEST_JSON_ANY);
         reg.register_json_any(super::__GET_GRAPH_RESPONSE_JSON_ANY);
+        reg.register_json_any(super::__GRAPH_SUMMARY_JSON_ANY);
+        reg.register_json_any(super::__LIST_GRAPHS_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__LIST_GRAPHS_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__WATCH_GRAPH_REQUEST_JSON_ANY);
         reg.register_json_any(super::__WATCH_GRAPH_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__PULL_SLICES_REQUEST_JSON_ANY);
@@ -167,6 +170,18 @@ pub use self::__buffa::view::GetGraphRequestOwnedView;
 pub use self::__buffa::view::GetGraphResponseView;
 #[doc(inline)]
 pub use self::__buffa::view::GetGraphResponseOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::GraphSummaryView;
+#[doc(inline)]
+pub use self::__buffa::view::GraphSummaryOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ListGraphsRequestView;
+#[doc(inline)]
+pub use self::__buffa::view::ListGraphsRequestOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ListGraphsResponseView;
+#[doc(inline)]
+pub use self::__buffa::view::ListGraphsResponseOwnedView;
 #[doc(inline)]
 pub use self::__buffa::view::WatchGraphRequestView;
 #[doc(inline)]
