@@ -2,8 +2,8 @@
 //!
 //! Each `k8s/object@1` resource owns one directory on the graph branch. The
 //! directory and the Kubernetes object both carry the graph and resource
-//! TypeIDs, so a fresh controller instance can observe and retire the resource
-//! without process memory.
+//! `TypeID`s, so a fresh controller instance can observe and retire the
+//! resource without process memory.
 
 use std::collections::BTreeMap;
 
@@ -105,9 +105,9 @@ impl K8sController {
 }
 
 impl PerResourceReconciler for K8sController {
-    type Observation = K8sObservation;
     type Action = K8sPublishAction;
     type Error = String;
+    type Observation = K8sObservation;
 
     fn observe<'a>(
         &'a self,
@@ -141,7 +141,8 @@ impl PerResourceReconciler for K8sController {
     ) -> Result<ReconcileDecision<Self::Action>, Self::Error> {
         if observed == &K8sObservation::Foreign {
             return Err(format!(
-                "refusing to mutate Kubernetes publication for {} because its ownership labels do not match graph {} and resource {}",
+                "refusing to mutate Kubernetes publication for {} because its ownership labels do \
+                 not match graph {} and resource {}",
                 resource.path(),
                 graph_id,
                 resource.id()
@@ -282,7 +283,8 @@ fn ownership_matches(
 fn validate_resource(resource: &Resource) -> Result<(), String> {
     if resource.kind().name().as_str() != KIND || resource.kind().version().get() != 1 {
         return Err(format!(
-            "error[k8s.kind.unsupported]: {} owns {}, expected k8s/object@1\n  = help: emit native Kubernetes objects through @henosis/platform-k8s",
+            "error[k8s.kind.unsupported]: {} owns {}, expected k8s/object@1\n  = help: emit \
+             native Kubernetes objects through @henosis/platform-k8s",
             resource.path(),
             resource.kind()
         ));

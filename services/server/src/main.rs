@@ -5,6 +5,7 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::str::FromStr as _;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 
 use async_stream::try_stream;
@@ -16,15 +17,14 @@ use connectrpc::ServiceResult;
 use connectrpc::ServiceStream;
 use futures::FutureExt as _;
 use futures::future::BoxFuture;
+use henosis_controller_cloudflare::CloudflareAction;
 use henosis_controller_cloudflare::CloudflareError;
+use henosis_controller_cloudflare::CloudflareObservation;
 use henosis_controller_cloudflare::CloudflareTransport;
 use henosis_controller_cloudflare::LiveCloudflareConfig;
 use henosis_controller_cloudflare::LiveCloudflareTransport;
-use henosis_controller_cloudflare::RouteBody;
 use henosis_controller_cloudflare::RouteObservation;
-use henosis_controller_cloudflare::TunnelBody;
 use henosis_controller_cloudflare::TunnelObservation;
-use henosis_controller_cloudflare::WorkerBody;
 use henosis_controller_cloudflare::WorkerObservation;
 use henosis_controller_k8s::K8sController;
 use henosis_controller_runtime::DirectoryArtifactStore;
@@ -106,24 +106,25 @@ async fn main() -> anyhow::Result<()> {
     let mut controllers: BTreeMap<ControllerName, Arc<dyn Controller>> = BTreeMap::new();
     let k8s: Arc<dyn Controller> = Arc::new(K8sController::new(GitRepository::new(deploy_remote)));
     controllers.insert(k8s.name().clone(), k8s);
-    let cloudflare: Arc<dyn Controller> =
-        if std::env::var("HENOSIS_CLOUDFLARE_LIVE").as_deref() == Ok("1") {
-            let artifact_root = std::env::var("HENOSIS_ARTIFACT_ROOT").map_err(|_| {
-                anyhow::anyhow!("HENOSIS_ARTIFACT_ROOT is required for live Cloudflare")
-            })?;
-            let transport = LiveCloudflareTransport::connect(
-                &LiveCloudflareConfig::default(),
-                Arc::new(DirectoryArtifactStore::new(artifact_root)),
-            )?;
-            info!("Cloudflare controller uses LIVE transport (henosis-* safety rail enforced)");
-            Arc::new(henosis_controller_cloudflare::CloudflareController::new(
-                transport,
-            ))
-        } else {
-            Arc::new(henosis_controller_cloudflare::CloudflareController::new(
-                RecordedCloudflareTransport,
-            ))
-        };
+    let cloudflare: Arc<dyn Controller> = if std::env::var("HENOSIS_CLOUDFLARE_LIVE").as_deref()
+        == Ok("1")
+    {
+        let artifact_root = std::env::var("HENOSIS_ARTIFACT_ROOT").map_err(|_| {
+            anyhow::anyhow!("HENOSIS_ARTIFACT_ROOT is required for live Cloudflare")
+        })?;
+        let transport = LiveCloudflareTransport::connect(
+            &LiveCloudflareConfig::default(),
+            Arc::new(DirectoryArtifactStore::new(artifact_root)),
+        )?;
+        info!("Cloudflare controller uses LIVE transport (metadata/identity safety rail enforced)");
+        Arc::new(henosis_controller_cloudflare::CloudflareController::new(
+            transport,
+        ))
+    } else {
+        Arc::new(henosis_controller_cloudflare::CloudflareController::new(
+            RecordedCloudflareTransport::default(),
+        ))
+    };
     controllers.insert(cloudflare.name().clone(), cloudflare);
     let supabase: Arc<dyn Controller> = Arc::new(DemoSupabaseController::new());
     controllers.insert(supabase.name().clone(), supabase);
@@ -556,66 +557,113 @@ impl Controller for DemoSupabaseController {
     }
 }
 
-struct RecordedCloudflareTransport;
+#[derive(Default)]
+struct RecordedCloudflareTransport {
+    resources: StdMutex<BTreeMap<(GraphId, ResourceId), CloudflareObservation>>,
+}
 
 impl CloudflareTransport for RecordedCloudflareTransport {
-    fn apply_worker<'a>(
+    fn observe<'a>(
         &'a self,
-        _graph: GraphId,
+        graph: GraphId,
         resource: &'a Resource,
-        _body: &'a WorkerBody,
-    ) -> BoxFuture<'a, Result<WorkerObservation, CloudflareError>> {
+    ) -> BoxFuture<'a, Result<CloudflareObservation, CloudflareError>> {
         async move {
-            Ok(WorkerObservation {
-                url: format!(
-                    "https://{}.workers.demo.invalid",
-                    resource.path().address().name()
-                ),
-                worker_name: resource.path().address().name().to_string(),
-                deployment_id: format!("recorded-{}", resource.id()),
-                version_id: "recorded-v1".into(),
-            })
+            Ok(self
+                .resources
+                .lock()
+                .expect("recorded Cloudflare lock is not poisoned")
+                .get(&(graph, resource.id()))
+                .cloned()
+                .unwrap_or(CloudflareObservation::Missing))
         }
         .boxed()
     }
 
-    fn apply_tunnel<'a>(
+    fn act<'a>(
         &'a self,
-        _graph: GraphId,
+        graph: GraphId,
         resource: &'a Resource,
-        _body: &'a TunnelBody,
-    ) -> BoxFuture<'a, Result<TunnelObservation, CloudflareError>> {
+        action: CloudflareAction,
+    ) -> BoxFuture<'a, Result<(), CloudflareError>> {
         async move {
-            Ok(TunnelObservation {
-                tunnel_id: format!("recorded-{}", resource.id()),
-                tunnel_name: resource.path().address().name().to_string(),
-                private_hostname: "supabase.internal.demo.invalid".into(),
-                token_ref: "demo-fake://cloudflare/tunnel-token".into(),
-            })
+            let mut resources = self
+                .resources
+                .lock()
+                .expect("recorded Cloudflare lock is not poisoned");
+            let key = (graph, resource.id());
+            match action {
+                CloudflareAction::UploadWorker(_) => {
+                    resources.insert(
+                        key,
+                        CloudflareObservation::Worker {
+                            digest: resource.digest(),
+                            subdomain_enabled: false,
+                            observation: WorkerObservation {
+                                url: format!(
+                                    "https://{}.workers.demo.invalid",
+                                    resource.path().address().name()
+                                ),
+                                worker_name: resource.path().address().name().to_string(),
+                                deployment_id: format!("recorded-{}", resource.id()),
+                                version_id: "recorded-v1".into(),
+                            },
+                        },
+                    );
+                }
+                CloudflareAction::EnableWorkerSubdomain => {
+                    let Some(CloudflareObservation::Worker {
+                        subdomain_enabled, ..
+                    }) = resources.get_mut(&key)
+                    else {
+                        return Err(CloudflareError::Unavailable(
+                            "recorded Worker disappeared".into(),
+                        ));
+                    };
+                    *subdomain_enabled = true;
+                }
+                CloudflareAction::CreateTunnel => {
+                    resources.insert(
+                        key,
+                        CloudflareObservation::Tunnel {
+                            configured: false,
+                            observation: TunnelObservation {
+                                tunnel_id: format!("recorded-{}", resource.id()),
+                                tunnel_name: resource.id().to_string(),
+                                private_hostname: "supabase.internal.demo.invalid".into(),
+                                token_ref: "demo-fake://cloudflare/tunnel-token".into(),
+                            },
+                        },
+                    );
+                }
+                CloudflareAction::ConfigureTunnel(_) => {
+                    let Some(CloudflareObservation::Tunnel { configured, .. }) =
+                        resources.get_mut(&key)
+                    else {
+                        return Err(CloudflareError::Unavailable(
+                            "recorded Tunnel disappeared".into(),
+                        ));
+                    };
+                    *configured = true;
+                }
+                CloudflareAction::WriteRoute(body) => {
+                    resources.insert(
+                        key,
+                        CloudflareObservation::Route {
+                            matches: true,
+                            observation: RouteObservation {
+                                hostname: body.pattern,
+                            },
+                        },
+                    );
+                }
+                CloudflareAction::Delete => {
+                    resources.remove(&key);
+                }
+            }
+            Ok(())
         }
         .boxed()
-    }
-
-    fn apply_route<'a>(
-        &'a self,
-        _graph: GraphId,
-        _resource: &'a Resource,
-        body: &'a RouteBody,
-    ) -> BoxFuture<'a, Result<RouteObservation, CloudflareError>> {
-        async move {
-            Ok(RouteObservation {
-                hostname: body.pattern.clone(),
-            })
-        }
-        .boxed()
-    }
-
-    fn delete(
-        &self,
-        _graph: GraphId,
-        _resource: ResourceId,
-    ) -> BoxFuture<'_, Result<(), CloudflareError>> {
-        async { Ok(()) }.boxed()
     }
 }
 

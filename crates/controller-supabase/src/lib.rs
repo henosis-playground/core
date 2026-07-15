@@ -1,7 +1,7 @@
 //! Local Supabase schema controller.
 //!
 //! Every schema is reconciled independently from a target receipt keyed by the
-//! graph and resource TypeIDs. Migration receipts use the same ownership key.
+//! graph and resource `TypeID`s. Migration receipts use the same ownership key.
 //! No process-memory ownership registry participates in observation or cleanup.
 
 use std::collections::BTreeMap;
@@ -194,9 +194,9 @@ impl<T> PerResourceReconciler for SupabaseController<T>
 where
     T: SupabaseTarget,
 {
-    type Observation = SupabaseResourceObservation;
     type Action = SupabaseOperation;
     type Error = SupabaseError;
+    type Observation = SupabaseResourceObservation;
 
     fn observe<'a>(
         &'a self,
@@ -217,7 +217,8 @@ where
                 let actual = format!("sha256:{}", hex::encode(Sha256::digest(bytes.as_ref())));
                 if actual != migration.sha256 {
                     return Err(SupabaseError::Plan(format!(
-                        "error[supabase.plan.checksum]: migration {:?} for {} declares {}, but file {} hashes to {}",
+                        "error[supabase.plan.checksum]: migration {:?} for {} declares {}, but \
+                         file {} hashes to {}",
                         migration.id,
                         resource.path(),
                         migration.sha256,
@@ -227,7 +228,8 @@ where
                 }
                 let sql = String::from_utf8(bytes.to_vec()).map_err(|_| {
                     SupabaseError::Plan(format!(
-                        "error[supabase.plan.migration-encoding]: migration {:?} for {} is not UTF-8",
+                        "error[supabase.plan.migration-encoding]: migration {:?} for {} is not \
+                         UTF-8",
                         migration.id,
                         resource.path()
                     ))
@@ -250,7 +252,7 @@ where
     fn diff(
         &self,
         graph_id: GraphId,
-        desired: &[Resource],
+        _desired: &[Resource],
         resource: &Resource,
         goal: ResourceGoal,
         observed: &Self::Observation,
@@ -258,12 +260,13 @@ where
         let expected_owner = observed.target.owned_schema.as_deref() == Some(&observed.body.schema);
         if observed.target.schema_exists && !expected_owner {
             return Err(SupabaseError::Provider(format!(
-                "refusing to mutate schema {:?} for {} because no matching graph/resource ownership receipt exists",
+                "refusing to mutate schema {:?} for {} because no matching graph/resource \
+                 ownership receipt exists",
                 observed.body.schema,
                 resource.path()
             )));
         }
-        let (desired_exposed, desired_anon) = desired_api(desired)?;
+        let (desired_exposed, desired_anon) = resource_api(&observed.target, &observed.body, goal);
         match goal {
             ResourceGoal::Absent => {
                 if observed.target.exposed != desired_exposed
@@ -295,7 +298,9 @@ where
                     if let Some(checksum) = observed.target.migrations.get(&migration.id) {
                         if checksum != &migration.checksum {
                             return Err(SupabaseError::Plan(format!(
-                                "error[supabase.plan.migration-mutated]: migration {:?} for {} was applied with {}, but desired declares {}\n  = help: never edit an applied migration ID; append a corrective migration",
+                                "error[supabase.plan.migration-mutated]: migration {:?} for {} \
+                                 was applied with {}, but desired declares {}\n  = help: never \
+                                 edit an applied migration ID; append a corrective migration",
                                 migration.id,
                                 resource.path(),
                                 checksum,
@@ -396,8 +401,7 @@ where
 }
 
 fn decode_body(resource: &Resource) -> Result<SchemaBody, SupabaseError> {
-    if resource.kind().name().as_str() != "supabase/schema"
-        || resource.kind().version().get() != 1
+    if resource.kind().name().as_str() != "supabase/schema" || resource.kind().version().get() != 1
     {
         return Err(SupabaseError::Plan(format!(
             "error[supabase.kind.unsupported]: {} has unsupported kind {}",
@@ -405,28 +409,34 @@ fn decode_body(resource: &Resource) -> Result<SchemaBody, SupabaseError> {
             resource.kind()
         )));
     }
-    let body: SchemaBody = serde_json::from_value(resource.body().as_json().clone()).map_err(|error| {
-        SupabaseError::Plan(format!("error[supabase.body.invalid]: {}: {error}", resource.path()))
-    })?;
+    let body: SchemaBody =
+        serde_json::from_value(resource.body().as_json().clone()).map_err(|error| {
+            SupabaseError::Plan(format!(
+                "error[supabase.body.invalid]: {}: {error}",
+                resource.path()
+            ))
+        })?;
     validate_body(resource, &body)?;
     Ok(body)
 }
 
-fn desired_api(
-    resources: &[Resource],
-) -> Result<(BTreeSet<String>, BTreeSet<String>), SupabaseError> {
-    let mut exposed = BTreeSet::from(["public".into()]);
-    let mut anon_read = BTreeSet::new();
-    for resource in resources {
-        let body = decode_body(resource)?;
-        if body.api.expose {
-            exposed.insert(body.schema.clone());
-            if body.api.anon_access == AnonymousAccess::Read {
-                anon_read.insert(body.schema);
-            }
+fn resource_api(
+    observed: &SupabaseObservation,
+    body: &SchemaBody,
+    goal: ResourceGoal,
+) -> (BTreeSet<String>, BTreeSet<String>) {
+    let mut exposed = observed.exposed.clone();
+    let mut anon_read = observed.anon_read.clone();
+    exposed.insert("public".into());
+    exposed.remove(&body.schema);
+    anon_read.remove(&body.schema);
+    if goal == ResourceGoal::Present && body.api.expose {
+        exposed.insert(body.schema.clone());
+        if body.api.anon_access == AnonymousAccess::Read {
+            anon_read.insert(body.schema.clone());
         }
     }
-    Ok((exposed, anon_read))
+    (exposed, anon_read)
 }
 
 fn resource_outputs(
@@ -442,16 +452,20 @@ fn resource_outputs(
         ("schema", serde_json::json!(body.schema)),
         ("apiUrl", serde_json::json!(base)),
         ("restUrl", serde_json::json!(format!("{base}/rest/v1"))),
-        ("databaseUrlRef", serde_json::json!(target.database_url_ref())),
+        (
+            "databaseUrlRef",
+            serde_json::json!(target.database_url_ref()),
+        ),
         ("anonKeyRef", serde_json::json!(target.anon_key_ref())),
     ] {
         if resource
             .outputs()
             .any(|declaration| declaration.name().as_str() == name)
         {
-            outputs.push(output(resource, name, value).map_err(|error| {
-                SupabaseError::Plan(error.to_string())
-            })?);
+            outputs.push(
+                output(resource, name, value)
+                    .map_err(|error| SupabaseError::Plan(error.to_string()))?,
+            );
         }
     }
     Ok(outputs)
@@ -471,7 +485,8 @@ fn validate_body(resource: &Resource, body: &SchemaBody) -> Result<(), SupabaseE
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
     {
         return Err(SupabaseError::Plan(format!(
-            "error[supabase.schema.invalid]: {} schema {:?} must contain lowercase letters, digits, or underscores",
+            "error[supabase.schema.invalid]: {} schema {:?} must contain lowercase letters, \
+             digits, or underscores",
             resource.path(),
             body.schema
         )));
@@ -489,14 +504,16 @@ fn validate_body(resource: &Resource, body: &SchemaBody) -> Result<(), SupabaseE
             || migration.path.split(['/', '\\']).any(|part| part == "..")
         {
             return Err(SupabaseError::Plan(format!(
-                "error[supabase.migration.path]: {} migration {:?} path must be repository-relative without parent traversal",
+                "error[supabase.migration.path]: {} migration {:?} path must be \
+                 repository-relative without parent traversal",
                 resource.path(),
                 migration.id
             )));
         }
         if !migration.sha256.starts_with("sha256:") || migration.sha256.len() != 71 {
             return Err(SupabaseError::Plan(format!(
-                "error[supabase.migration.checksum]: {} migration {:?} needs a lowercase SHA-256 digest",
+                "error[supabase.migration.checksum]: {} migration {:?} needs a lowercase SHA-256 \
+                 digest",
                 resource.path(),
                 migration.id
             )));
@@ -586,7 +603,9 @@ impl SupabaseTarget for LocalSupabaseTarget {
                     .map_err(database_error)?;
                 transaction
                     .execute(
-                        "insert into henosis_controller.owned_schemas (graph_id, resource_id, schema_name) values ($1, $2, $3)",
+                        "insert into henosis_controller.owned_schemas (graph_id, resource_id, \
+                         schema_name) values ($1, $2, $3) on conflict (graph_id, resource_id) do \
+                         update set schema_name = excluded.schema_name",
                         &[&graph.to_string(), &resource.to_string(), schema],
                     )
                     .map_err(database_error)?;
@@ -608,7 +627,8 @@ impl SupabaseTarget for LocalSupabaseTarget {
                 transaction.batch_execute(sql).map_err(database_error)?;
                 transaction
                     .execute(
-                        "insert into henosis_controller.migration_receipts (graph_id, resource_id, migration_id, checksum) values ($1, $2, $3, $4)",
+                        "insert into henosis_controller.migration_receipts (graph_id, \
+                         resource_id, migration_id, checksum) values ($1, $2, $3, $4)",
                         &[&graph.to_string(), &resource.to_string(), id, checksum],
                     )
                     .map_err(database_error)?;
@@ -629,13 +649,15 @@ impl SupabaseTarget for LocalSupabaseTarget {
                     .map_err(database_error)?;
                 transaction
                     .execute(
-                        "delete from henosis_controller.migration_receipts where graph_id = $1 and resource_id = $2",
+                        "delete from henosis_controller.migration_receipts where graph_id = $1 \
+                         and resource_id = $2",
                         &[&graph.to_string(), &resource.to_string()],
                     )
                     .map_err(database_error)?;
                 transaction
                     .execute(
-                        "delete from henosis_controller.owned_schemas where graph_id = $1 and resource_id = $2",
+                        "delete from henosis_controller.owned_schemas where graph_id = $1 and \
+                         resource_id = $2",
                         &[&graph.to_string(), &resource.to_string()],
                     )
                     .map_err(database_error)?;
@@ -683,7 +705,14 @@ fn operation_identity(operation: &SupabaseOperation) -> Option<(GraphId, Resourc
 fn ensure_metadata(client: &mut impl postgres::GenericClient) -> Result<(), SupabaseError> {
     client
         .batch_execute(
-            "create schema if not exists henosis_controller; create table if not exists henosis_controller.owned_schemas (graph_id text not null, resource_id text not null, schema_name text unique not null, primary key (graph_id, resource_id)); create table if not exists henosis_controller.migration_receipts (graph_id text not null, resource_id text not null, migration_id text not null, checksum text not null, applied_at timestamptz not null default now(), primary key (graph_id, resource_id, migration_id)); revoke all on schema henosis_controller from public, anon, authenticated;",
+            "create schema if not exists henosis_controller; create table if not exists \
+             henosis_controller.owned_schemas (graph_id text not null, resource_id text not null, \
+             schema_name text unique not null, primary key (graph_id, resource_id)); create table \
+             if not exists henosis_controller.migration_receipts (graph_id text not null, \
+             resource_id text not null, migration_id text not null, checksum text not null, \
+             applied_at timestamptz not null default now(), primary key (graph_id, resource_id, \
+             migration_id)); revoke all on schema henosis_controller from public, anon, \
+             authenticated;",
         )
         .map_err(database_error)
 }
@@ -712,14 +741,16 @@ fn observe_database(
     if metadata_exists {
         observation.owned_schema = client
             .query_opt(
-                "select schema_name from henosis_controller.owned_schemas where graph_id = $1 and resource_id = $2",
+                "select schema_name from henosis_controller.owned_schemas where graph_id = $1 and \
+                 resource_id = $2",
                 &[&graph.to_string(), &resource.to_string()],
             )
             .map_err(database_error)?
             .map(|row| row.get(0));
         for row in client
             .query(
-                "select migration_id, checksum from henosis_controller.migration_receipts where graph_id = $1 and resource_id = $2 order by migration_id",
+                "select migration_id, checksum from henosis_controller.migration_receipts where \
+                 graph_id = $1 and resource_id = $2 order by migration_id",
                 &[&graph.to_string(), &resource.to_string()],
             )
             .map_err(database_error)?
@@ -729,7 +760,9 @@ fn observe_database(
     }
     let configured: String = client
         .query_one(
-            "select coalesce((select split_part(setting, '=', 2) from pg_roles cross join lateral unnest(coalesce(rolconfig, '{}'::text[])) setting where rolname = 'postgres' and setting like 'pgrst.db_schemas=%' limit 1), 'public')",
+            "select coalesce((select split_part(setting, '=', 2) from pg_roles cross join lateral \
+             unnest(coalesce(rolconfig, '{}'::text[])) setting where rolname = 'postgres' and \
+             setting like 'pgrst.db_schemas=%' limit 1), 'public')",
             &[],
         )
         .map_err(database_error)?
@@ -772,13 +805,17 @@ fn configure_api(
         if anon_read.contains(schema) {
             client
                 .batch_execute(&format!(
-                    "grant usage on schema {quoted} to anon; grant select on all tables in schema {quoted} to anon; alter default privileges in schema {quoted} grant select on tables to anon;"
+                    "grant usage on schema {quoted} to anon; grant select on all tables in schema \
+                     {quoted} to anon; alter default privileges in schema {quoted} grant select \
+                     on tables to anon;"
                 ))
                 .map_err(database_error)?;
         } else {
             client
                 .batch_execute(&format!(
-                    "revoke select on all tables in schema {quoted} from anon; revoke usage on schema {quoted} from anon; alter default privileges in schema {quoted} revoke select on tables from anon;"
+                    "revoke select on all tables in schema {quoted} from anon; revoke usage on \
+                     schema {quoted} from anon; alter default privileges in schema {quoted} \
+                     revoke select on tables from anon;"
                 ))
                 .map_err(database_error)?;
         }
@@ -973,9 +1010,18 @@ mod tests {
         let slice = slice();
         let convergence = reconcile_slice(&controller, &slice).await.unwrap();
         assert_eq!((convergence.actions, convergence.passes), (3, 4));
-        assert!(matches!(actions.lock().unwrap()[0], SupabaseOperation::EnsureSchema { .. }));
-        assert!(matches!(actions.lock().unwrap()[1], SupabaseOperation::ApplyMigration { .. }));
-        assert!(matches!(actions.lock().unwrap()[2], SupabaseOperation::ConfigureApi { .. }));
+        assert!(matches!(
+            actions.lock().unwrap()[0],
+            SupabaseOperation::EnsureSchema { .. }
+        ));
+        assert!(matches!(
+            actions.lock().unwrap()[1],
+            SupabaseOperation::ApplyMigration { .. }
+        ));
+        assert!(matches!(
+            actions.lock().unwrap()[2],
+            SupabaseOperation::ConfigureApi { .. }
+        ));
         let again = reconcile_slice(&controller, &slice).await.unwrap();
         assert_eq!((again.actions, again.passes), (0, 1));
     }
@@ -1011,15 +1057,25 @@ mod tests {
         let (controller, actions) = controller();
         let slice = slice();
         controller.target.state.lock().unwrap().schemas.insert(
-            (GraphId::from_bytes([9; 16]), ResourceId::from_bytes([9; 16])),
+            (
+                GraphId::from_bytes([9; 16]),
+                ResourceId::from_bytes([9; 16]),
+            ),
             "catalog".into(),
         );
         let error = reconcile_slice(&controller, &slice).await.unwrap_err();
-        assert!(error.to_string().contains("no matching graph/resource ownership receipt"));
+        assert!(
+            error
+                .to_string()
+                .contains("no matching graph/resource ownership receipt")
+        );
         assert!(actions.lock().unwrap().is_empty());
     }
 
-    fn controller() -> (SupabaseController<FakeTarget>, Arc<Mutex<Vec<SupabaseOperation>>>) {
+    fn controller() -> (
+        SupabaseController<FakeTarget>,
+        Arc<Mutex<Vec<SupabaseOperation>>>,
+    ) {
         let state = Arc::new(Mutex::new(FakeState {
             exposed: BTreeSet::from(["public".into()]),
             ..FakeState::default()

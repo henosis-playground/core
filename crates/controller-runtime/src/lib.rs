@@ -68,6 +68,10 @@ pub trait PerResourceReconciler: Send + Sync {
     type Action: Send;
     type Error;
 
+    fn rank(&self, _resource: &Resource, _goal: ResourceGoal) -> u8 {
+        0
+    }
+
     fn observe<'a>(
         &'a self,
         graph_id: GraphId,
@@ -99,7 +103,14 @@ where
     R: PerResourceReconciler,
 {
     let mut convergence = SliceConvergence::default();
-    for resource in slice.resources() {
+    let mut desired = slice.resources().iter().collect::<Vec<_>>();
+    desired.sort_by_key(|resource| {
+        (
+            reconciler.rank(resource, ResourceGoal::Present),
+            resource.id(),
+        )
+    });
+    for resource in desired {
         let resource_convergence = reconcile_resource(
             reconciler,
             slice.graph_id(),
@@ -119,7 +130,14 @@ where
             .extend_from_slice(&resource_convergence.evidence);
         convergence.evidence.push(b';');
     }
-    for resource in slice.superseded() {
+    let mut superseded = slice.superseded().iter().collect::<Vec<_>>();
+    superseded.sort_by_key(|resource| {
+        (
+            reconciler.rank(resource, ResourceGoal::Absent),
+            resource.id(),
+        )
+    });
+    for resource in superseded {
         reconcile_resource(
             reconciler,
             slice.graph_id(),
@@ -142,6 +160,13 @@ where
     R: PerResourceReconciler,
 {
     let mut convergence = SliceConvergence::default();
+    let mut resources = resources.iter().collect::<Vec<_>>();
+    resources.sort_by_key(|resource| {
+        (
+            reconciler.rank(resource, ResourceGoal::Absent),
+            resource.id(),
+        )
+    });
     for resource in resources {
         reconcile_resource(
             reconciler,

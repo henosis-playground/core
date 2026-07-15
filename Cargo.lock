@@ -1222,6 +1222,7 @@ dependencies = [
  "futures",
  "henosis-controller-runtime",
  "henosis-types",
+ "hex",
  "reqwest",
  "serde",
  "serde_json",

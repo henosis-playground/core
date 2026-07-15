@@ -429,9 +429,10 @@ impl LiveCloudflareTransport {
         let Some(settings): Option<ScriptSettings> = self
             .session
             .request_optional(
-                self.session
-                    .client
-                    .get(self.session.account_url(&format!("workers/scripts/{name}/settings"))),
+                self.session.client.get(
+                    self.session
+                        .account_url(&format!("workers/scripts/{name}/settings")),
+                ),
                 "Worker settings observation",
             )
             .await?
@@ -449,9 +450,10 @@ impl LiveCloudflareTransport {
         let subdomain: ScriptSubdomain = self
             .session
             .request(
-                self.session
-                    .client
-                    .get(self.session.account_url(&format!("workers/scripts/{name}/subdomain"))),
+                self.session.client.get(
+                    self.session
+                        .account_url(&format!("workers/scripts/{name}/subdomain")),
+                ),
                 "Worker subdomain observation",
             )
             .await?;
@@ -492,9 +494,10 @@ impl LiveCloudflareTransport {
         let Some(settings): Option<ScriptSettings> = self
             .session
             .request_optional(
-                self.session
-                    .client
-                    .get(self.session.account_url(&format!("workers/scripts/{name}/settings"))),
+                self.session.client.get(
+                    self.session
+                        .account_url(&format!("workers/scripts/{name}/settings")),
+                ),
                 "Worker ownership observation",
             )
             .await?
@@ -606,7 +609,9 @@ impl LiveCloudflareTransport {
         let tunnel = tunnels
             .into_iter()
             .find(|item| item.name == name)
-            .ok_or_else(|| CloudflareError::Unavailable("Tunnel disappeared before configuration".into()))?;
+            .ok_or_else(|| {
+                CloudflareError::Unavailable("Tunnel disappeared before configuration".into())
+            })?;
         let config = serde_json::json!({
             "config": {
                 "ingress": [
@@ -620,10 +625,10 @@ impl LiveCloudflareTransport {
             .request(
                 self.session
                     .client
-                    .put(self.session.account_url(&format!(
-                        "cfd_tunnel/{}/configurations",
-                        tunnel.id
-                    )))
+                    .put(
+                        self.session
+                            .account_url(&format!("cfd_tunnel/{}/configurations", tunnel.id)),
+                    )
                     .json(&config),
                 "Cloudflare Tunnel configuration",
             )
@@ -648,7 +653,10 @@ impl LiveCloudflareTransport {
                 "Worker route observation",
             )
             .await?;
-        let Some(route) = routes.into_iter().find(|route| route.pattern == body.pattern) else {
+        let Some(route) = routes
+            .into_iter()
+            .find(|route| route.pattern == body.pattern)
+        else {
             return Ok(CloudflareObservation::Missing);
         };
         if route.script != body.worker_name {
@@ -662,11 +670,7 @@ impl LiveCloudflareTransport {
         })
     }
 
-    async fn write_route(
-        &self,
-        graph: GraphId,
-        body: &RouteBody,
-    ) -> Result<(), CloudflareError> {
+    async fn write_route(&self, graph: GraphId, body: &RouteBody) -> Result<(), CloudflareError> {
         self.require_owned_worker(graph, &body.worker_name).await?;
         let zone = self.session.resolve_zone(&body.zone).await?;
         let routes: Vec<WorkerRoute> = self
@@ -679,7 +683,9 @@ impl LiveCloudflareTransport {
                 "Worker route observation",
             )
             .await?;
-        let existing = routes.into_iter().find(|route| route.pattern == body.pattern);
+        let existing = routes
+            .into_iter()
+            .find(|route| route.pattern == body.pattern);
         if let Some(route) = &existing
             && route.script != body.worker_name
         {
@@ -699,10 +705,10 @@ impl LiveCloudflareTransport {
                     .request(
                         self.session
                             .client
-                            .put(self.session.url(&format!(
-                                "zones/{}/workers/routes/{}",
-                                zone.id, route.id
-                            )))
+                            .put(
+                                self.session
+                                    .url(&format!("zones/{}/workers/routes/{}", zone.id, route.id)),
+                            )
                             .json(&request),
                         "Worker route update",
                     )
@@ -714,10 +720,10 @@ impl LiveCloudflareTransport {
                     .request(
                         self.session
                             .client
-                            .post(self.session.url(&format!(
-                                "zones/{}/workers/routes",
-                                zone.id
-                            )))
+                            .post(
+                                self.session
+                                    .url(&format!("zones/{}/workers/routes", zone.id)),
+                            )
                             .json(&request),
                         "Worker route create",
                     )
@@ -755,10 +761,9 @@ impl LiveCloudflareTransport {
                 }
                 self.session
                     .request_empty(
-                        self.session.client.delete(
-                            self.session
-                                .account_url(&format!("workers/scripts/{name}")),
-                        ),
+                        self.session
+                            .client
+                            .delete(self.session.account_url(&format!("workers/scripts/{name}"))),
                         "Worker retirement",
                     )
                     .await
@@ -782,7 +787,10 @@ impl LiveCloudflareTransport {
                     .request_empty(
                         self.session
                             .client
-                            .delete(self.session.account_url(&format!("cfd_tunnel/{}", tunnel.id)))
+                            .delete(
+                                self.session
+                                    .account_url(&format!("cfd_tunnel/{}", tunnel.id)),
+                            )
                             .query(&[("cascade", "true")]),
                         "Cloudflare Tunnel retirement",
                     )
@@ -803,18 +811,17 @@ impl LiveCloudflareTransport {
                         "Worker route retirement observation",
                     )
                     .await?;
-                let Some(route) = routes
-                    .into_iter()
-                    .find(|route| route.pattern == body.pattern && route.script == body.worker_name)
-                else {
+                let Some(route) = routes.into_iter().find(|route| {
+                    route.pattern == body.pattern && route.script == body.worker_name
+                }) else {
                     return Ok(());
                 };
                 self.session
                     .request_empty(
-                        self.session.client.delete(self.session.url(&format!(
-                            "zones/{}/workers/routes/{}",
-                            zone.id, route.id
-                        ))),
+                        self.session.client.delete(
+                            self.session
+                                .url(&format!("zones/{}/workers/routes/{}", zone.id, route.id)),
+                        ),
                         "Worker route retirement",
                     )
                     .await
@@ -837,8 +844,9 @@ impl CloudflareTransport for LiveCloudflareTransport {
             match resource.kind().name().as_str() {
                 "cloudflare/worker" => self.observe_worker(graph, resource).await,
                 "cloudflare/tunnel" => {
-                    let body: TunnelBody = serde_json::from_value(resource.body().as_json().clone())
-                        .map_err(|error| CloudflareError::Contract(error.to_string()))?;
+                    let body: TunnelBody =
+                        serde_json::from_value(resource.body().as_json().clone())
+                            .map_err(|error| CloudflareError::Contract(error.to_string()))?;
                     self.observe_tunnel(graph, resource, &body).await
                 }
                 "cloudflare/route" => {
@@ -867,7 +875,9 @@ impl CloudflareTransport for LiveCloudflareTransport {
                     self.upload_worker(graph, resource, &body).await
                 }
                 CloudflareAction::EnableWorkerSubdomain => {
-                    self.session.enable_worker_subdomain(&worker_name(resource)).await
+                    self.session
+                        .enable_worker_subdomain(&worker_name(resource))
+                        .await
                 }
                 CloudflareAction::CreateTunnel => self.create_tunnel(graph, resource).await,
                 CloudflareAction::ConfigureTunnel(body) => {

@@ -20,11 +20,24 @@ futures-channel = { version = "0.3", features = ["sink"] }
 futures-core = { version = "0.3" }
 futures-sink = { version = "0.3" }
 futures-util = { version = "0.3", features = ["channel", "io", "sink"] }
-hashbrown = { version = "0.17", default-features = false, features = ["allocator-api2", "inline-more"] }
+hashbrown = { version = "0.17", default-features = false, features = [
+  "allocator-api2",
+  "inline-more",
+] }
 hyper = { version = "1", features = ["client", "http1", "http2", "server"] }
-hyper-util = { version = "0.1", features = ["client-legacy", "server-auto", "server-graceful"] }
-icu_locale_core = { version = "2", default-features = false, features = ["alloc", "zerovec"] }
-icu_provider = { version = "2", default-features = false, features = ["alloc", "baked"] }
+hyper-util = { version = "0.1", features = [
+  "client-legacy",
+  "server-auto",
+  "server-graceful",
+] }
+icu_locale_core = { version = "2", default-features = false, features = [
+  "alloc",
+  "zerovec",
+] }
+icu_provider = { version = "2", default-features = false, features = [
+  "alloc",
+  "baked",
+] }
 indexmap = { version = "2", features = ["serde"] }
 insta = { version = "1", features = ["yaml"] }
 libc = { version = "0.2" }
@@ -36,36 +49,73 @@ once_cell = { version = "1" }
 percent-encoding = { version = "2" }
 phf = { version = "0.14", features = ["macros"] }
 phf_shared = { version = "0.14", default-features = false, features = ["std"] }
-potential_utf = { version = "0.1", default-features = false, features = ["alloc", "zerovec"] }
-regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "meta", "std", "unicode-perl", "unicode-word-boundary"] }
+potential_utf = { version = "0.1", default-features = false, features = [
+  "alloc",
+  "zerovec",
+] }
+regex-automata = { version = "0.4", default-features = false, features = [
+  "dfa-build",
+  "meta",
+  "std",
+  "unicode-perl",
+  "unicode-word-boundary",
+] }
 regex-syntax = { version = "0.8" }
 serde = { version = "1", features = ["alloc", "derive"] }
 serde_core = { version = "1", features = ["alloc"] }
-serde_json = { version = "1", features = ["alloc", "float_roundtrip", "preserve_order", "raw_value"] }
+serde_json = { version = "1", features = [
+  "alloc",
+  "float_roundtrip",
+  "preserve_order",
+  "raw_value",
+] }
 slab = { version = "0.4" }
-smallvec = { version = "1", default-features = false, features = ["const_new", "serde", "union"] }
-stable_deref_trait = { version = "1", default-features = false, features = ["alloc"] }
-sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
+smallvec = { version = "1", default-features = false, features = [
+  "const_new",
+  "serde",
+  "union",
+] }
+stable_deref_trait = { version = "1", default-features = false, features = [
+  "alloc",
+] }
+sync_wrapper = { version = "1", default-features = false, features = [
+  "futures",
+] }
 tinystr = { version = "0.8", features = ["zerovec"] }
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["codec", "io", "rt"] }
 tracing = { version = "0.1" }
 tracing-core = { version = "0.1" }
-typenum = { version = "1", default-features = false, features = ["const-generics"] }
+typenum = { version = "1", default-features = false, features = [
+  "const-generics",
+] }
 url = { version = "2", features = ["expose_internals", "serde"] }
 uuid = { version = "1", features = ["fast-rng", "serde", "v4", "v7"] }
 writeable = { version = "0.6" }
-yoke = { version = "0.8", default-features = false, features = ["alloc", "derive"] }
-zerofrom = { version = "0.1", default-features = false, features = ["alloc", "derive"] }
+yoke = { version = "0.8", default-features = false, features = [
+  "alloc",
+  "derive",
+] }
+zerofrom = { version = "0.1", default-features = false, features = [
+  "alloc",
+  "derive",
+] }
 zerotrie = { version = "0.2", features = ["alloc", "yoke", "zerofrom"] }
-zerovec = { version = "0.11", default-features = false, features = ["alloc", "derive", "yoke"] }
+zerovec = { version = "0.11", default-features = false, features = [
+  "alloc",
+  "derive",
+  "yoke",
+] }
 
 [build-dependencies]
 allocator-api2 = { version = "0.2" }
 cc = { version = "1", default-features = false, features = ["parallel"] }
 either = { version = "1", features = ["serde", "use_std"] }
 fastrand = { version = "2" }
-hashbrown = { version = "0.17", default-features = false, features = ["allocator-api2", "inline-more"] }
+hashbrown = { version = "0.17", default-features = false, features = [
+  "allocator-api2",
+  "inline-more",
+] }
 indexmap = { version = "2", features = ["serde"] }
 libc = { version = "0.2" }
 log = { version = "0.4", default-features = false, features = ["std"] }
@@ -73,18 +123,44 @@ memchr = { version = "2" }
 miniz_oxide = { version = "0.8", features = ["simd"] }
 phf = { version = "0.14", features = ["macros"] }
 phf_shared = { version = "0.14", default-features = false, features = ["std"] }
-regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "meta", "std", "unicode-perl", "unicode-word-boundary"] }
+regex-automata = { version = "0.4", default-features = false, features = [
+  "dfa-build",
+  "meta",
+  "std",
+  "unicode-perl",
+  "unicode-word-boundary",
+] }
 regex-syntax = { version = "0.8" }
 serde = { version = "1", features = ["alloc", "derive"] }
 serde_core = { version = "1", features = ["alloc"] }
-smallvec = { version = "1", default-features = false, features = ["const_new", "serde", "union"] }
-syn = { version = "2", features = ["extra-traits", "fold", "full", "visit", "visit-mut"] }
+smallvec = { version = "1", default-features = false, features = [
+  "const_new",
+  "serde",
+  "union",
+] }
+syn = { version = "2", features = [
+  "extra-traits",
+  "fold",
+  "full",
+  "visit",
+  "visit-mut",
+] }
 
 [target.x86_64-unknown-linux-gnu.dependencies]
 bitflags = { version = "2", default-features = false, features = ["std"] }
-getrandom = { version = "0.4", default-features = false, features = ["std", "sys_rng"] }
-hyper-util = { version = "0.1", default-features = false, features = ["client-proxy", "client-proxy-system"] }
-tower = { version = "0.5", default-features = false, features = ["buffer", "retry", "timeout"] }
+getrandom = { version = "0.4", default-features = false, features = [
+  "std",
+  "sys_rng",
+] }
+hyper-util = { version = "0.1", default-features = false, features = [
+  "client-proxy",
+  "client-proxy-system",
+] }
+tower = { version = "0.5", default-features = false, features = [
+  "buffer",
+  "retry",
+  "timeout",
+] }
 tower-http = { version = "0.6", features = ["catch-panic", "follow-redirect"] }
 
 [target.x86_64-unknown-linux-gnu.build-dependencies]
@@ -92,9 +168,19 @@ bitflags = { version = "2", default-features = false, features = ["std"] }
 
 [target.x86_64-unknown-linux-musl.dependencies]
 bitflags = { version = "2", default-features = false, features = ["std"] }
-getrandom = { version = "0.4", default-features = false, features = ["std", "sys_rng"] }
-hyper-util = { version = "0.1", default-features = false, features = ["client-proxy", "client-proxy-system"] }
-tower = { version = "0.5", default-features = false, features = ["buffer", "retry", "timeout"] }
+getrandom = { version = "0.4", default-features = false, features = [
+  "std",
+  "sys_rng",
+] }
+hyper-util = { version = "0.1", default-features = false, features = [
+  "client-proxy",
+  "client-proxy-system",
+] }
+tower = { version = "0.5", default-features = false, features = [
+  "buffer",
+  "retry",
+  "timeout",
+] }
 tower-http = { version = "0.6", features = ["catch-panic", "follow-redirect"] }
 
 [target.x86_64-unknown-linux-musl.build-dependencies]
@@ -102,9 +188,19 @@ bitflags = { version = "2", default-features = false, features = ["std"] }
 
 [target.aarch64-unknown-linux-gnu.dependencies]
 bitflags = { version = "2", default-features = false, features = ["std"] }
-getrandom = { version = "0.4", default-features = false, features = ["std", "sys_rng"] }
-hyper-util = { version = "0.1", default-features = false, features = ["client-proxy", "client-proxy-system"] }
-tower = { version = "0.5", default-features = false, features = ["buffer", "retry", "timeout"] }
+getrandom = { version = "0.4", default-features = false, features = [
+  "std",
+  "sys_rng",
+] }
+hyper-util = { version = "0.1", default-features = false, features = [
+  "client-proxy",
+  "client-proxy-system",
+] }
+tower = { version = "0.5", default-features = false, features = [
+  "buffer",
+  "retry",
+  "timeout",
+] }
 tower-http = { version = "0.6", features = ["catch-panic", "follow-redirect"] }
 
 [target.aarch64-unknown-linux-gnu.build-dependencies]
@@ -112,9 +208,19 @@ bitflags = { version = "2", default-features = false, features = ["std"] }
 
 [target.aarch64-unknown-linux-musl.dependencies]
 bitflags = { version = "2", default-features = false, features = ["std"] }
-getrandom = { version = "0.4", default-features = false, features = ["std", "sys_rng"] }
-hyper-util = { version = "0.1", default-features = false, features = ["client-proxy", "client-proxy-system"] }
-tower = { version = "0.5", default-features = false, features = ["buffer", "retry", "timeout"] }
+getrandom = { version = "0.4", default-features = false, features = [
+  "std",
+  "sys_rng",
+] }
+hyper-util = { version = "0.1", default-features = false, features = [
+  "client-proxy",
+  "client-proxy-system",
+] }
+tower = { version = "0.5", default-features = false, features = [
+  "buffer",
+  "retry",
+  "timeout",
+] }
 tower-http = { version = "0.6", features = ["catch-panic", "follow-redirect"] }
 
 [target.aarch64-unknown-linux-musl.build-dependencies]
@@ -123,17 +229,31 @@ bitflags = { version = "2", default-features = false, features = ["std"] }
 [target.aarch64-apple-darwin.dependencies]
 bitflags = { version = "2", default-features = false, features = ["std"] }
 errno = { version = "0.3" }
-getrandom = { version = "0.4", default-features = false, features = ["std", "sys_rng"] }
-hyper-util = { version = "0.1", default-features = false, features = ["client-proxy", "client-proxy-system"] }
-libc = { version = "0.2", default-features = false, features = ["extra_traits"] }
+getrandom = { version = "0.4", default-features = false, features = [
+  "std",
+  "sys_rng",
+] }
+hyper-util = { version = "0.1", default-features = false, features = [
+  "client-proxy",
+  "client-proxy-system",
+] }
+libc = { version = "0.2", default-features = false, features = [
+  "extra_traits",
+] }
 security-framework-sys = { version = "2" }
-tower = { version = "0.5", default-features = false, features = ["buffer", "retry", "timeout"] }
+tower = { version = "0.5", default-features = false, features = [
+  "buffer",
+  "retry",
+  "timeout",
+] }
 tower-http = { version = "0.6", features = ["catch-panic", "follow-redirect"] }
 
 [target.aarch64-apple-darwin.build-dependencies]
 bitflags = { version = "2", default-features = false, features = ["std"] }
 errno = { version = "0.3" }
-libc = { version = "0.2", default-features = false, features = ["extra_traits"] }
+libc = { version = "0.2", default-features = false, features = [
+  "extra_traits",
+] }
 
 ### END HAKARI SECTION
 
