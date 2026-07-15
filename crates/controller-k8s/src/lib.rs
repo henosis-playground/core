@@ -134,6 +134,7 @@ impl PerResourceReconciler for K8sController {
     fn diff(
         &self,
         graph_id: GraphId,
+        _desired: &[Resource],
         resource: &Resource,
         goal: ResourceGoal,
         observed: &Self::Observation,

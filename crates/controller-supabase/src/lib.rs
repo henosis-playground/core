@@ -1,25 +1,28 @@
 //! Local Supabase schema controller.
 //!
-//! Reconciliation keeps the proven plan/apply split: desired resources and
-//! fresh target receipts produce an immutable ordered plan, and only that plan
-//! is handed to the target. Applied migration IDs are immutable and
-//! checksummed. Migration bytes are read from the component's verified
-//! configuration closure; controllers never fall back to a checkout path.
+//! Every schema is reconciled independently from a target receipt keyed by the
+//! graph and resource TypeIDs. Migration receipts use the same ownership key.
+//! No process-memory ownership registry participates in observation or cleanup.
 
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::Mutex;
 
 use futures::FutureExt as _;
 use futures::future::BoxFuture;
+use henosis_controller_runtime::PerResourceReconciler;
+use henosis_controller_runtime::ReconcileDecision;
+use henosis_controller_runtime::ResourceConvergence;
+use henosis_controller_runtime::ResourceGoal;
 use henosis_controller_runtime::controller_name;
 use henosis_controller_runtime::failed_report;
 use henosis_controller_runtime::output;
 use henosis_controller_runtime::publication_id;
 use henosis_controller_runtime::ready_report;
+use henosis_controller_runtime::reconcile_absent;
+use henosis_controller_runtime::reconcile_slice;
 use henosis_types::BundleRef;
 use henosis_types::ComponentName;
 use henosis_types::ConfigClosureReader;
@@ -74,27 +77,22 @@ pub enum AnonymousAccess {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SupabaseObservation {
-    pub schemas: BTreeSet<String>,
-    pub migrations: BTreeMap<(ResourceId, String), String>,
+    pub schema_exists: bool,
+    pub owned_schema: Option<String>,
+    pub migrations: BTreeMap<String, String>,
     pub exposed: BTreeSet<String>,
     pub anon_read: BTreeSet<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SupabasePlan {
-    pub graph: GraphId,
-    pub generation: u64,
-    pub observed_digest: String,
-    pub operations: Vec<SupabaseOperation>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SupabaseOperation {
     EnsureSchema {
+        graph: GraphId,
         resource: ResourceId,
         schema: String,
     },
     ApplyMigration {
+        graph: GraphId,
         resource: ResourceId,
         schema: String,
         id: String,
@@ -105,6 +103,11 @@ pub enum SupabaseOperation {
         exposed: BTreeSet<String>,
         anon_read: BTreeSet<String>,
     },
+    DropSchema {
+        graph: GraphId,
+        resource: ResourceId,
+        schema: String,
+    },
 }
 
 pub trait ComponentBundleResolver: Send + Sync {
@@ -112,9 +115,17 @@ pub trait ComponentBundleResolver: Send + Sync {
 }
 
 pub trait SupabaseTarget: Send + Sync {
-    fn observe(&self, graph: GraphId) -> Result<SupabaseObservation, SupabaseError>;
-    fn apply(&self, plan: &SupabasePlan) -> Result<String, SupabaseError>;
-    fn retire(&self, graph: GraphId, resources: &[ResourceId]) -> Result<(), SupabaseError>;
+    fn observe(
+        &self,
+        graph: GraphId,
+        resource: ResourceId,
+        schema: &str,
+    ) -> Result<SupabaseObservation, SupabaseError>;
+    fn apply(
+        &self,
+        observed_digest: &str,
+        operation: &SupabaseOperation,
+    ) -> Result<String, SupabaseError>;
     fn api_url(&self) -> &str;
     fn database_url_ref(&self) -> &str;
     fn anon_key_ref(&self) -> &str;
@@ -125,7 +136,20 @@ pub struct SupabaseController<T> {
     target: T,
     config_files: Arc<dyn ConfigClosureReader>,
     bundles: Arc<dyn ComponentBundleResolver>,
-    state: Mutex<BTreeMap<GraphId, Vec<ResourceId>>>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SupabaseResourceObservation {
+    target: SupabaseObservation,
+    body: SchemaBody,
+    migrations: Vec<PreparedMigration>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PreparedMigration {
+    id: String,
+    checksum: String,
+    sql: String,
 }
 
 impl<T> SupabaseController<T>
@@ -143,7 +167,6 @@ where
             target,
             config_files,
             bundles,
-            state: Mutex::new(BTreeMap::new()),
         }
     }
 
@@ -151,69 +174,191 @@ where
         &self,
         slice: &ControllerSlice,
     ) -> Result<ControllerReport, ControllerError> {
-        let result = self.plan_and_apply(slice).await;
-        let (outputs, evidence) = match result {
-            Ok(result) => result,
+        let convergence = match reconcile_slice(self, slice).await {
+            Ok(convergence) => convergence,
             Err(error) => {
                 return failed_report(slice, error.to_string())
                     .map_err(|report_error| ControllerError::new(report_error.to_string()));
             }
         };
-        self.state
-            .lock()
-            .expect("supabase controller state lock is not poisoned")
-            .insert(
-                slice.graph_id(),
-                slice.resources().iter().map(Resource::id).collect(),
-            );
-        ready_report(slice, Some(publication_id(evidence.as_bytes())), outputs)
-            .map_err(|error| ControllerError::new(error.to_string()))
+        ready_report(
+            slice,
+            Some(publication_id(&convergence.evidence)),
+            convergence.outputs,
+        )
+        .map_err(|error| ControllerError::new(error.to_string()))
+    }
+}
+
+impl<T> PerResourceReconciler for SupabaseController<T>
+where
+    T: SupabaseTarget,
+{
+    type Observation = SupabaseResourceObservation;
+    type Action = SupabaseOperation;
+    type Error = SupabaseError;
+
+    fn observe<'a>(
+        &'a self,
+        graph_id: GraphId,
+        resource: &'a Resource,
+    ) -> BoxFuture<'a, Result<Self::Observation, Self::Error>> {
+        async move {
+            let body = decode_body(resource)?;
+            let target = self.target.observe(graph_id, resource.id(), &body.schema)?;
+            let mut migrations = Vec::with_capacity(body.migrations.len());
+            for migration in &body.migrations {
+                let bundle = self.bundles.resolve(resource.path().instance())?;
+                let bytes = self
+                    .config_files
+                    .read(bundle, &migration.path)
+                    .await
+                    .map_err(|error| SupabaseError::Plan(error.to_string()))?;
+                let actual = format!("sha256:{}", hex::encode(Sha256::digest(bytes.as_ref())));
+                if actual != migration.sha256 {
+                    return Err(SupabaseError::Plan(format!(
+                        "error[supabase.plan.checksum]: migration {:?} for {} declares {}, but file {} hashes to {}",
+                        migration.id,
+                        resource.path(),
+                        migration.sha256,
+                        migration.path,
+                        actual
+                    )));
+                }
+                let sql = String::from_utf8(bytes.to_vec()).map_err(|_| {
+                    SupabaseError::Plan(format!(
+                        "error[supabase.plan.migration-encoding]: migration {:?} for {} is not UTF-8",
+                        migration.id,
+                        resource.path()
+                    ))
+                })?;
+                migrations.push(PreparedMigration {
+                    id: migration.id.clone(),
+                    checksum: migration.sha256.clone(),
+                    sql,
+                });
+            }
+            Ok(SupabaseResourceObservation {
+                target,
+                body,
+                migrations,
+            })
+        }
+        .boxed()
     }
 
-    async fn plan_and_apply(
+    fn diff(
         &self,
-        slice: &ControllerSlice,
-    ) -> Result<(Vec<henosis_types::ObservedOutput>, String), SupabaseError> {
-        let observed = self.target.observe(slice.graph_id())?;
-        let (plan, bodies) = build_plan(
-            slice,
-            &observed,
-            self.config_files.as_ref(),
-            self.bundles.as_ref(),
-        )
-        .await?;
-        let evidence = if plan.operations.is_empty() {
-            plan.observed_digest.clone()
-        } else {
-            self.target.apply(&plan)?
-        };
-        let mut outputs = Vec::new();
-        for (resource, body) in slice.resources().iter().zip(bodies) {
-            let base = self.target.api_url().trim_end_matches('/');
-            for (name, value) in [
-                ("project", serde_json::json!(body.project)),
-                ("database", serde_json::json!(body.database)),
-                ("schema", serde_json::json!(body.schema)),
-                ("apiUrl", serde_json::json!(base)),
-                ("restUrl", serde_json::json!(format!("{base}/rest/v1"))),
-                (
-                    "databaseUrlRef",
-                    serde_json::json!(self.target.database_url_ref()),
-                ),
-                ("anonKeyRef", serde_json::json!(self.target.anon_key_ref())),
-            ] {
-                if resource
-                    .outputs()
-                    .any(|declaration| declaration.name().as_str() == name)
+        graph_id: GraphId,
+        desired: &[Resource],
+        resource: &Resource,
+        goal: ResourceGoal,
+        observed: &Self::Observation,
+    ) -> Result<ReconcileDecision<Self::Action>, Self::Error> {
+        let expected_owner = observed.target.owned_schema.as_deref() == Some(&observed.body.schema);
+        if observed.target.schema_exists && !expected_owner {
+            return Err(SupabaseError::Provider(format!(
+                "refusing to mutate schema {:?} for {} because no matching graph/resource ownership receipt exists",
+                observed.body.schema,
+                resource.path()
+            )));
+        }
+        let (desired_exposed, desired_anon) = desired_api(desired)?;
+        match goal {
+            ResourceGoal::Absent => {
+                if observed.target.exposed != desired_exposed
+                    || observed.target.anon_read != desired_anon
                 {
-                    outputs.push(
-                        output(resource, name, value)
-                            .map_err(|error| SupabaseError::Plan(error.to_string()))?,
-                    );
+                    return Ok(ReconcileDecision::Act(SupabaseOperation::ConfigureApi {
+                        exposed: desired_exposed,
+                        anon_read: desired_anon,
+                    }));
                 }
+                if expected_owner {
+                    return Ok(ReconcileDecision::Act(SupabaseOperation::DropSchema {
+                        graph: graph_id,
+                        resource: resource.id(),
+                        schema: observed.body.schema.clone(),
+                    }));
+                }
+                Ok(ReconcileDecision::Converged(ResourceConvergence::default()))
+            }
+            ResourceGoal::Present => {
+                if !observed.target.schema_exists {
+                    return Ok(ReconcileDecision::Act(SupabaseOperation::EnsureSchema {
+                        graph: graph_id,
+                        resource: resource.id(),
+                        schema: observed.body.schema.clone(),
+                    }));
+                }
+                for migration in &observed.migrations {
+                    if let Some(checksum) = observed.target.migrations.get(&migration.id) {
+                        if checksum != &migration.checksum {
+                            return Err(SupabaseError::Plan(format!(
+                                "error[supabase.plan.migration-mutated]: migration {:?} for {} was applied with {}, but desired declares {}\n  = help: never edit an applied migration ID; append a corrective migration",
+                                migration.id,
+                                resource.path(),
+                                checksum,
+                                migration.checksum
+                            )));
+                        }
+                    } else {
+                        return Ok(ReconcileDecision::Act(SupabaseOperation::ApplyMigration {
+                            graph: graph_id,
+                            resource: resource.id(),
+                            schema: observed.body.schema.clone(),
+                            id: migration.id.clone(),
+                            checksum: migration.checksum.clone(),
+                            sql: migration.sql.clone(),
+                        }));
+                    }
+                }
+                if observed.target.exposed != desired_exposed
+                    || observed.target.anon_read != desired_anon
+                {
+                    return Ok(ReconcileDecision::Act(SupabaseOperation::ConfigureApi {
+                        exposed: desired_exposed,
+                        anon_read: desired_anon,
+                    }));
+                }
+                Ok(ReconcileDecision::Converged(ResourceConvergence {
+                    outputs: resource_outputs(&self.target, resource, &observed.body)?,
+                    evidence: observation_digest(&observed.target).into_bytes(),
+                }))
             }
         }
-        Ok((outputs, evidence))
+    }
+
+    fn act<'a>(
+        &'a self,
+        _graph_id: GraphId,
+        _resource: &'a Resource,
+        action: Self::Action,
+    ) -> BoxFuture<'a, Result<(), Self::Error>> {
+        async move {
+            let observed_digest = match &action {
+                SupabaseOperation::EnsureSchema {
+                    graph,
+                    resource,
+                    schema,
+                }
+                | SupabaseOperation::ApplyMigration {
+                    graph,
+                    resource,
+                    schema,
+                    ..
+                }
+                | SupabaseOperation::DropSchema {
+                    graph,
+                    resource,
+                    schema,
+                } => observation_digest(&self.target.observe(*graph, *resource, schema)?),
+                SupabaseOperation::ConfigureApi { .. } => String::new(),
+            };
+            self.target.apply(&observed_digest, &action)?;
+            Ok(())
+        }
+        .boxed()
     }
 }
 
@@ -233,25 +378,15 @@ where
             match command {
                 ControllerCommand::Reconcile(slice) => self.reconcile(slice).await.map(Some),
                 ControllerCommand::Supersede(supersession) => {
-                    self.target
-                        .retire(
-                            supersession.graph_id,
-                            &supersession.resources.iter().map(Resource::id).collect::<Vec<_>>(),
-                        )
+                    reconcile_absent(self, supersession.graph_id, &supersession.resources)
+                        .await
                         .map_err(|error| ControllerError::new(error.to_string()))?;
                     Ok(None)
                 }
                 ControllerCommand::Retire(retirement) => {
-                    self.target
-                        .retire(
-                            retirement.graph_id,
-                            &retirement.resources.iter().map(Resource::id).collect::<Vec<_>>(),
-                        )
+                    reconcile_absent(self, retirement.graph_id, &retirement.resources)
+                        .await
                         .map_err(|error| ControllerError::new(error.to_string()))?;
-                    self.state
-                        .lock()
-                        .expect("supabase controller state lock is not poisoned")
-                        .remove(&retirement.graph_id);
                     Ok(None)
                 }
             }
@@ -260,111 +395,66 @@ where
     }
 }
 
-async fn build_plan(
-    slice: &ControllerSlice,
-    observed: &SupabaseObservation,
-    config_files: &dyn ConfigClosureReader,
-    bundles: &dyn ComponentBundleResolver,
-) -> Result<(SupabasePlan, Vec<SchemaBody>), SupabaseError> {
-    let mut operations = Vec::new();
-    let mut bodies = Vec::new();
+fn decode_body(resource: &Resource) -> Result<SchemaBody, SupabaseError> {
+    if resource.kind().name().as_str() != "supabase/schema"
+        || resource.kind().version().get() != 1
+    {
+        return Err(SupabaseError::Plan(format!(
+            "error[supabase.kind.unsupported]: {} has unsupported kind {}",
+            resource.path(),
+            resource.kind()
+        )));
+    }
+    let body: SchemaBody = serde_json::from_value(resource.body().as_json().clone()).map_err(|error| {
+        SupabaseError::Plan(format!("error[supabase.body.invalid]: {}: {error}", resource.path()))
+    })?;
+    validate_body(resource, &body)?;
+    Ok(body)
+}
+
+fn desired_api(
+    resources: &[Resource],
+) -> Result<(BTreeSet<String>, BTreeSet<String>), SupabaseError> {
     let mut exposed = BTreeSet::from(["public".into()]);
     let mut anon_read = BTreeSet::new();
-    for resource in slice.resources() {
-        if resource.kind().name().as_str() != "supabase/schema"
-            || resource.kind().version().get() != 1
-        {
-            return Err(SupabaseError::Plan(format!(
-                "error[supabase.kind.unsupported]: {} has unsupported kind {}",
-                resource.path(),
-                resource.kind()
-            )));
-        }
-        let body: SchemaBody =
-            serde_json::from_value(resource.body().as_json().clone()).map_err(|error| {
-                SupabaseError::Plan(format!(
-                    "error[supabase.body.invalid]: {}: {error}",
-                    resource.path()
-                ))
-            })?;
-        validate_body(resource, &body)?;
-        if !observed.schemas.contains(&body.schema) {
-            operations.push(SupabaseOperation::EnsureSchema {
-                resource: resource.id(),
-                schema: body.schema.clone(),
-            });
-        }
-        for migration in &body.migrations {
-            let key = (resource.id(), migration.id.clone());
-            if let Some(checksum) = observed.migrations.get(&key) {
-                if checksum != &migration.sha256 {
-                    return Err(SupabaseError::Plan(format!(
-                        "error[supabase.plan.migration-mutated]: migration {:?} for {} was \
-                         applied with {}, but desired declares {}\n  --> {}\n  = help: never edit \
-                         an applied migration ID; append a corrective migration",
-                        migration.id,
-                        resource.path(),
-                        checksum,
-                        migration.sha256,
-                        migration.path
-                    )));
-                }
-                continue;
-            }
-            let bundle = bundles.resolve(resource.path().instance())?;
-            let bytes = config_files
-                .read(bundle, &migration.path)
-                .await
-                .map_err(|error| SupabaseError::Plan(error.to_string()))?;
-            let actual = format!("sha256:{}", hex::encode(Sha256::digest(bytes.as_ref())));
-            if actual != migration.sha256 {
-                return Err(SupabaseError::Plan(format!(
-                    "error[supabase.plan.checksum]: migration {:?} for {} declares {}, but file \
-                     {} hashes to {}\n  = help: regenerate the migration reference from the exact \
-                     committed SQL bytes",
-                    migration.id,
-                    resource.path(),
-                    migration.sha256,
-                    migration.path,
-                    actual
-                )));
-            }
-            let sql = String::from_utf8(bytes.to_vec()).map_err(|_| {
-                SupabaseError::Plan(format!(
-                    "error[supabase.plan.migration-encoding]: migration {:?} for {} is not UTF-8",
-                    migration.id,
-                    resource.path()
-                ))
-            })?;
-            operations.push(SupabaseOperation::ApplyMigration {
-                resource: resource.id(),
-                schema: body.schema.clone(),
-                id: migration.id.clone(),
-                checksum: migration.sha256.clone(),
-                sql,
-            });
-        }
+    for resource in resources {
+        let body = decode_body(resource)?;
         if body.api.expose {
             exposed.insert(body.schema.clone());
             if body.api.anon_access == AnonymousAccess::Read {
-                anon_read.insert(body.schema.clone());
+                anon_read.insert(body.schema);
             }
         }
-        bodies.push(body);
     }
-    if observed.exposed != exposed || observed.anon_read != anon_read {
-        operations.push(SupabaseOperation::ConfigureApi { exposed, anon_read });
+    Ok((exposed, anon_read))
+}
+
+fn resource_outputs(
+    target: &impl SupabaseTarget,
+    resource: &Resource,
+    body: &SchemaBody,
+) -> Result<Vec<henosis_types::ObservedOutput>, SupabaseError> {
+    let base = target.api_url().trim_end_matches('/');
+    let mut outputs = Vec::new();
+    for (name, value) in [
+        ("project", serde_json::json!(body.project)),
+        ("database", serde_json::json!(body.database)),
+        ("schema", serde_json::json!(body.schema)),
+        ("apiUrl", serde_json::json!(base)),
+        ("restUrl", serde_json::json!(format!("{base}/rest/v1"))),
+        ("databaseUrlRef", serde_json::json!(target.database_url_ref())),
+        ("anonKeyRef", serde_json::json!(target.anon_key_ref())),
+    ] {
+        if resource
+            .outputs()
+            .any(|declaration| declaration.name().as_str() == name)
+        {
+            outputs.push(output(resource, name, value).map_err(|error| {
+                SupabaseError::Plan(error.to_string())
+            })?);
+        }
     }
-    let observed_digest = observation_digest(observed);
-    Ok((
-        SupabasePlan {
-            graph: slice.graph_id(),
-            generation: slice.generation().ordinal(),
-            observed_digest,
-            operations,
-        },
-        bodies,
-    ))
+    Ok(outputs)
 }
 
 fn validate_body(resource: &Resource, body: &SchemaBody) -> Result<(), SupabaseError> {
@@ -381,8 +471,7 @@ fn validate_body(resource: &Resource, body: &SchemaBody) -> Result<(), SupabaseE
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
     {
         return Err(SupabaseError::Plan(format!(
-            "error[supabase.schema.invalid]: {} schema {:?} must contain lowercase letters, \
-             digits, or underscores",
+            "error[supabase.schema.invalid]: {} schema {:?} must contain lowercase letters, digits, or underscores",
             resource.path(),
             body.schema
         )));
@@ -400,16 +489,14 @@ fn validate_body(resource: &Resource, body: &SchemaBody) -> Result<(), SupabaseE
             || migration.path.split(['/', '\\']).any(|part| part == "..")
         {
             return Err(SupabaseError::Plan(format!(
-                "error[supabase.migration.path]: {} migration {:?} path must be \
-                 repository-relative without parent traversal",
+                "error[supabase.migration.path]: {} migration {:?} path must be repository-relative without parent traversal",
                 resource.path(),
                 migration.id
             )));
         }
         if !migration.sha256.starts_with("sha256:") || migration.sha256.len() != 71 {
             return Err(SupabaseError::Plan(format!(
-                "error[supabase.migration.checksum]: {} migration {:?} needs a lowercase SHA-256 \
-                 digest",
+                "error[supabase.migration.checksum]: {} migration {:?} needs a lowercase SHA-256 digest",
                 resource.path(),
                 migration.id
             )));
@@ -420,8 +507,12 @@ fn validate_body(resource: &Resource, body: &SchemaBody) -> Result<(), SupabaseE
 
 fn observation_digest(observed: &SupabaseObservation) -> String {
     let text = format!(
-        "schemas={:?};migrations={:?};exposed={:?};anon={:?}",
-        observed.schemas, observed.migrations, observed.exposed, observed.anon_read
+        "exists={};owned={:?};migrations={:?};exposed={:?};anon={:?}",
+        observed.schema_exists,
+        observed.owned_schema,
+        observed.migrations,
+        observed.exposed,
+        observed.anon_read
     );
     format!("sha256:{}", hex::encode(Sha256::digest(text.as_bytes())))
 }
@@ -455,116 +546,103 @@ impl LocalSupabaseTarget {
 }
 
 impl SupabaseTarget for LocalSupabaseTarget {
-    fn observe(&self, _graph: GraphId) -> Result<SupabaseObservation, SupabaseError> {
-        observe_database(&mut self.connect()?)
+    fn observe(
+        &self,
+        graph: GraphId,
+        resource: ResourceId,
+        schema: &str,
+    ) -> Result<SupabaseObservation, SupabaseError> {
+        observe_database(&mut self.connect()?, graph, resource, schema)
     }
 
-    fn apply(&self, plan: &SupabasePlan) -> Result<String, SupabaseError> {
+    fn apply(
+        &self,
+        observed_digest: &str,
+        operation: &SupabaseOperation,
+    ) -> Result<String, SupabaseError> {
         let mut client = self.connect()?;
         let mut transaction = client.transaction().map_err(database_error)?;
-        let fresh = observe_database(&mut transaction)?;
-        if observation_digest(&fresh) != plan.observed_digest {
-            return Err(SupabaseError::Unavailable(
-                "target changed after planning; retry from fresh observation".into(),
-            ));
+        if let Some((graph, resource, schema)) = operation_identity(operation) {
+            let fresh = observe_database(&mut transaction, graph, resource, schema)?;
+            if observation_digest(&fresh) != observed_digest {
+                return Err(SupabaseError::Unavailable(
+                    "target changed after observation; retry from fresh state".into(),
+                ));
+            }
         }
         ensure_metadata(&mut transaction)?;
-        for operation in &plan.operations {
-            match operation {
-                SupabaseOperation::EnsureSchema { resource, schema } => {
-                    transaction
-                        .batch_execute(&format!(
-                            "create schema if not exists {}; revoke all on schema {} from public;",
-                            quote_identifier(schema),
-                            quote_identifier(schema)
-                        ))
-                        .map_err(database_error)?;
-                    transaction
-                        .execute(
-                            "insert into henosis_controller.owned_schemas (resource_id, \
-                             schema_name) values ($1, $2) on conflict (resource_id) do update set \
-                             schema_name = excluded.schema_name",
-                            &[&resource.to_string(), schema],
-                        )
-                        .map_err(database_error)?;
-                }
-                SupabaseOperation::ApplyMigration {
-                    resource,
-                    schema,
-                    id,
-                    checksum,
-                    sql,
-                } => {
-                    transaction
-                        .batch_execute(&format!(
-                            "set local search_path = {}, public, extensions;",
-                            quote_identifier(schema)
-                        ))
-                        .map_err(database_error)?;
-                    transaction.batch_execute(sql).map_err(database_error)?;
-                    transaction
-                        .execute(
-                            "insert into henosis_controller.migration_receipts (resource_id, \
-                             migration_id, checksum) values ($1, $2, $3)",
-                            &[&resource.to_string(), id, checksum],
-                        )
-                        .map_err(database_error)?;
-                }
-                SupabaseOperation::ConfigureApi { exposed, anon_read } => {
-                    configure_api(&mut transaction, exposed, anon_read)?;
-                }
+        match operation {
+            SupabaseOperation::EnsureSchema {
+                graph,
+                resource,
+                schema,
+            } => {
+                transaction
+                    .batch_execute(&format!(
+                        "create schema {}; revoke all on schema {} from public;",
+                        quote_identifier(schema),
+                        quote_identifier(schema)
+                    ))
+                    .map_err(database_error)?;
+                transaction
+                    .execute(
+                        "insert into henosis_controller.owned_schemas (graph_id, resource_id, schema_name) values ($1, $2, $3)",
+                        &[&graph.to_string(), &resource.to_string(), schema],
+                    )
+                    .map_err(database_error)?;
+            }
+            SupabaseOperation::ApplyMigration {
+                graph,
+                resource,
+                schema,
+                id,
+                checksum,
+                sql,
+            } => {
+                transaction
+                    .batch_execute(&format!(
+                        "set local search_path = {}, public, extensions;",
+                        quote_identifier(schema)
+                    ))
+                    .map_err(database_error)?;
+                transaction.batch_execute(sql).map_err(database_error)?;
+                transaction
+                    .execute(
+                        "insert into henosis_controller.migration_receipts (graph_id, resource_id, migration_id, checksum) values ($1, $2, $3, $4)",
+                        &[&graph.to_string(), &resource.to_string(), id, checksum],
+                    )
+                    .map_err(database_error)?;
+            }
+            SupabaseOperation::ConfigureApi { exposed, anon_read } => {
+                configure_api(&mut transaction, exposed, anon_read)?;
+            }
+            SupabaseOperation::DropSchema {
+                graph,
+                resource,
+                schema,
+            } => {
+                transaction
+                    .batch_execute(&format!(
+                        "drop schema {} cascade;",
+                        quote_identifier(schema)
+                    ))
+                    .map_err(database_error)?;
+                transaction
+                    .execute(
+                        "delete from henosis_controller.migration_receipts where graph_id = $1 and resource_id = $2",
+                        &[&graph.to_string(), &resource.to_string()],
+                    )
+                    .map_err(database_error)?;
+                transaction
+                    .execute(
+                        "delete from henosis_controller.owned_schemas where graph_id = $1 and resource_id = $2",
+                        &[&graph.to_string(), &resource.to_string()],
+                    )
+                    .map_err(database_error)?;
             }
         }
         transaction.commit().map_err(database_error)?;
-        let observed = observe_database(&mut self.connect()?)?;
-        Ok(observation_digest(&observed))
-    }
-
-    fn retire(&self, _graph: GraphId, resources: &[ResourceId]) -> Result<(), SupabaseError> {
-        let mut client = self.connect()?;
-        let mut transaction = client.transaction().map_err(database_error)?;
-        let metadata_exists: bool = transaction
-            .query_one(
-                "select to_regclass('henosis_controller.owned_schemas') is not null",
-                &[],
-            )
-            .map_err(database_error)?
-            .get(0);
-        if !metadata_exists {
-            return Ok(());
-        }
-        for resource in resources {
-            let resource = resource.to_string();
-            let schema = transaction
-                .query_opt(
-                    "select schema_name from henosis_controller.owned_schemas where resource_id = \
-                     $1",
-                    &[&resource],
-                )
-                .map_err(database_error)?
-                .map(|row| row.get::<_, String>(0));
-            if let Some(schema) = schema {
-                transaction
-                    .batch_execute(&format!(
-                        "drop schema if exists {} cascade;",
-                        quote_identifier(&schema)
-                    ))
-                    .map_err(database_error)?;
-            }
-            transaction
-                .execute(
-                    "delete from henosis_controller.migration_receipts where resource_id = $1",
-                    &[&resource],
-                )
-                .map_err(database_error)?;
-            transaction
-                .execute(
-                    "delete from henosis_controller.owned_schemas where resource_id = $1",
-                    &[&resource],
-                )
-                .map_err(database_error)?;
-        }
-        transaction.commit().map_err(database_error)
+        Ok("applied".into())
     }
 
     fn api_url(&self) -> &str {
@@ -580,23 +658,46 @@ impl SupabaseTarget for LocalSupabaseTarget {
     }
 }
 
+fn operation_identity(operation: &SupabaseOperation) -> Option<(GraphId, ResourceId, &str)> {
+    match operation {
+        SupabaseOperation::EnsureSchema {
+            graph,
+            resource,
+            schema,
+        }
+        | SupabaseOperation::ApplyMigration {
+            graph,
+            resource,
+            schema,
+            ..
+        }
+        | SupabaseOperation::DropSchema {
+            graph,
+            resource,
+            schema,
+        } => Some((*graph, *resource, schema)),
+        SupabaseOperation::ConfigureApi { .. } => None,
+    }
+}
+
 fn ensure_metadata(client: &mut impl postgres::GenericClient) -> Result<(), SupabaseError> {
     client
         .batch_execute(
-            "create schema if not exists henosis_controller; create table if not exists \
-             henosis_controller.owned_schemas (resource_id text primary key, schema_name text \
-             unique not null); create table if not exists henosis_controller.migration_receipts \
-             (resource_id text not null, migration_id text not null, checksum text not null, \
-             applied_at timestamptz not null default now(), primary key (resource_id, \
-             migration_id)); revoke all on schema henosis_controller from public, anon, \
-             authenticated;",
+            "create schema if not exists henosis_controller; create table if not exists henosis_controller.owned_schemas (graph_id text not null, resource_id text not null, schema_name text unique not null, primary key (graph_id, resource_id)); create table if not exists henosis_controller.migration_receipts (graph_id text not null, resource_id text not null, migration_id text not null, checksum text not null, applied_at timestamptz not null default now(), primary key (graph_id, resource_id, migration_id)); revoke all on schema henosis_controller from public, anon, authenticated;",
         )
         .map_err(database_error)
 }
 
 fn observe_database(
     client: &mut impl postgres::GenericClient,
+    graph: GraphId,
+    resource: ResourceId,
+    schema: &str,
 ) -> Result<SupabaseObservation, SupabaseError> {
+    let schema_exists: bool = client
+        .query_one("select to_regnamespace($1) is not null", &[&schema])
+        .map_err(database_error)?
+        .get(0);
     let metadata_exists: bool = client
         .query_one(
             "select to_regclass('henosis_controller.owned_schemas') is not null",
@@ -604,51 +705,31 @@ fn observe_database(
         )
         .map_err(database_error)?
         .get(0);
-    let mut observation = SupabaseObservation::default();
+    let mut observation = SupabaseObservation {
+        schema_exists,
+        ..SupabaseObservation::default()
+    };
     if metadata_exists {
+        observation.owned_schema = client
+            .query_opt(
+                "select schema_name from henosis_controller.owned_schemas where graph_id = $1 and resource_id = $2",
+                &[&graph.to_string(), &resource.to_string()],
+            )
+            .map_err(database_error)?
+            .map(|row| row.get(0));
         for row in client
             .query(
-                "select resource_id, schema_name from henosis_controller.owned_schemas order by \
-                 resource_id",
-                &[],
+                "select migration_id, checksum from henosis_controller.migration_receipts where graph_id = $1 and resource_id = $2 order by migration_id",
+                &[&graph.to_string(), &resource.to_string()],
             )
             .map_err(database_error)?
         {
-            let schema = row.get::<_, String>(1);
-            observation.schemas.insert(schema.clone());
-            let read: bool = client
-                .query_one(
-                    "select has_schema_privilege('anon', $1, 'USAGE')",
-                    &[&schema],
-                )
-                .map_err(database_error)?
-                .get(0);
-            if read {
-                observation.anon_read.insert(schema);
-            }
-        }
-        for row in client
-            .query(
-                "select resource_id, migration_id, checksum from \
-                 henosis_controller.migration_receipts order by resource_id, migration_id",
-                &[],
-            )
-            .map_err(database_error)?
-        {
-            let resource = row
-                .get::<_, String>(0)
-                .parse::<ResourceId>()
-                .map_err(|error| SupabaseError::Provider(error.to_string()))?;
-            observation
-                .migrations
-                .insert((resource, row.get(1)), row.get(2));
+            observation.migrations.insert(row.get(0), row.get(1));
         }
     }
     let configured: String = client
         .query_one(
-            "select coalesce((select split_part(setting, '=', 2) from pg_roles cross join lateral \
-             unnest(coalesce(rolconfig, '{}'::text[])) setting where rolname = 'postgres' and \
-             setting like 'pgrst.db_schemas=%' limit 1), 'public')",
+            "select coalesce((select split_part(setting, '=', 2) from pg_roles cross join lateral unnest(coalesce(rolconfig, '{}'::text[])) setting where rolname = 'postgres' and setting like 'pgrst.db_schemas=%' limit 1), 'public')",
             &[],
         )
         .map_err(database_error)?
@@ -659,6 +740,18 @@ fn observe_database(
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
         .collect();
+    for exposed_schema in &observation.exposed {
+        let read: bool = client
+            .query_one(
+                "select has_schema_privilege('anon', $1, 'USAGE')",
+                &[exposed_schema],
+            )
+            .map_err(database_error)?
+            .get(0);
+        if read {
+            observation.anon_read.insert(exposed_schema.clone());
+        }
+    }
     Ok(observation)
 }
 
@@ -675,21 +768,17 @@ fn configure_api(
         ))
         .map_err(database_error)?;
     for schema in exposed.iter().filter(|schema| schema.as_str() != "public") {
-        let schema = quote_identifier(schema);
-        if anon_read.contains(schema.trim_matches('"')) {
+        let quoted = quote_identifier(schema);
+        if anon_read.contains(schema) {
             client
                 .batch_execute(&format!(
-                    "grant usage on schema {schema} to anon; grant select on all tables in schema \
-                     {schema} to anon; alter default privileges in schema {schema} grant select \
-                     on tables to anon;"
+                    "grant usage on schema {quoted} to anon; grant select on all tables in schema {quoted} to anon; alter default privileges in schema {quoted} grant select on tables to anon;"
                 ))
                 .map_err(database_error)?;
         } else {
             client
                 .batch_execute(&format!(
-                    "revoke select on all tables in schema {schema} from anon; revoke usage on \
-                     schema {schema} from anon; alter default privileges in schema {schema} \
-                     revoke select on tables from anon;"
+                    "revoke select on all tables in schema {quoted} from anon; revoke usage on schema {quoted} from anon; alter default privileges in schema {quoted} revoke select on tables from anon;"
                 ))
                 .map_err(database_error)?;
         }
@@ -731,17 +820,16 @@ pub enum SupabaseError {
     Plan(String),
     #[error("local Supabase unavailable: {0}")]
     Unavailable(String),
-    #[error("local Supabase rejected the plan: {0}")]
+    #[error("local Supabase rejected the operation: {0}")]
     Provider(String),
 }
 
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroU32;
+    use std::sync::Mutex;
 
-    use henosis_types::ComponentName;
     use henosis_types::ContentDigest;
-    use henosis_types::ControllerSlice;
     use henosis_types::Generation;
     use henosis_types::KindName;
     use henosis_types::KindVersion;
@@ -756,10 +844,17 @@ mod tests {
 
     use super::*;
 
+    #[derive(Default)]
+    struct FakeState {
+        schemas: BTreeMap<(GraphId, ResourceId), String>,
+        migrations: BTreeMap<(GraphId, ResourceId, String), String>,
+        exposed: BTreeSet<String>,
+        anon_read: BTreeSet<String>,
+    }
+
     struct FakeTarget {
-        observation: Mutex<SupabaseObservation>,
-        applies: Mutex<usize>,
-        retired: Mutex<Vec<ResourceId>>,
+        state: Arc<Mutex<FakeState>>,
+        actions: Arc<Mutex<Vec<SupabaseOperation>>>,
     }
 
     struct FakeConfigFiles {
@@ -780,7 +875,7 @@ mod tests {
             _bundle: BundleRef,
             path: &'a str,
         ) -> BoxFuture<'a, Result<Arc<[u8]>, henosis_types::ConfigClosureError>> {
-            Box::pin(async move {
+            async move {
                 if path == "migrations/001.sql" {
                     Ok(Arc::clone(&self.sql))
                 } else {
@@ -789,45 +884,74 @@ mod tests {
                         path: path.to_owned(),
                     })
                 }
-            })
+            }
+            .boxed()
         }
     }
 
     impl SupabaseTarget for FakeTarget {
-        fn observe(&self, _graph: GraphId) -> Result<SupabaseObservation, SupabaseError> {
-            Ok(self.observation.lock().unwrap().clone())
+        fn observe(
+            &self,
+            graph: GraphId,
+            resource: ResourceId,
+            schema: &str,
+        ) -> Result<SupabaseObservation, SupabaseError> {
+            let state = self.state.lock().unwrap();
+            let owned_schema = state.schemas.get(&(graph, resource)).cloned();
+            Ok(SupabaseObservation {
+                schema_exists: state.schemas.values().any(|value| value == schema),
+                owned_schema,
+                migrations: state
+                    .migrations
+                    .iter()
+                    .filter(|((g, r, _), _)| *g == graph && *r == resource)
+                    .map(|((_, _, id), checksum)| (id.clone(), checksum.clone()))
+                    .collect(),
+                exposed: state.exposed.clone(),
+                anon_read: state.anon_read.clone(),
+            })
         }
 
-        fn apply(&self, plan: &SupabasePlan) -> Result<String, SupabaseError> {
-            *self.applies.lock().unwrap() += 1;
-            let mut observed = self.observation.lock().unwrap();
-            for operation in &plan.operations {
-                match operation {
-                    SupabaseOperation::EnsureSchema { schema, .. } => {
-                        observed.schemas.insert(schema.clone());
-                    }
-                    SupabaseOperation::ApplyMigration {
-                        resource,
-                        id,
-                        checksum,
-                        ..
-                    } => {
-                        observed
-                            .migrations
-                            .insert((*resource, id.clone()), checksum.clone());
-                    }
-                    SupabaseOperation::ConfigureApi { exposed, anon_read } => {
-                        observed.exposed = exposed.clone();
-                        observed.anon_read = anon_read.clone();
-                    }
+        fn apply(
+            &self,
+            _observed_digest: &str,
+            operation: &SupabaseOperation,
+        ) -> Result<String, SupabaseError> {
+            self.actions.lock().unwrap().push(operation.clone());
+            let mut state = self.state.lock().unwrap();
+            match operation {
+                SupabaseOperation::EnsureSchema {
+                    graph,
+                    resource,
+                    schema,
+                } => {
+                    state.schemas.insert((*graph, *resource), schema.clone());
+                }
+                SupabaseOperation::ApplyMigration {
+                    graph,
+                    resource,
+                    id,
+                    checksum,
+                    ..
+                } => {
+                    state
+                        .migrations
+                        .insert((*graph, *resource, id.clone()), checksum.clone());
+                }
+                SupabaseOperation::ConfigureApi { exposed, anon_read } => {
+                    state.exposed = exposed.clone();
+                    state.anon_read = anon_read.clone();
+                }
+                SupabaseOperation::DropSchema {
+                    graph, resource, ..
+                } => {
+                    state.schemas.remove(&(*graph, *resource));
+                    state
+                        .migrations
+                        .retain(|(g, r, _), _| g != graph || r != resource);
                 }
             }
-            Ok(observation_digest(&observed))
-        }
-
-        fn retire(&self, _graph: GraphId, resources: &[ResourceId]) -> Result<(), SupabaseError> {
-            self.retired.lock().unwrap().extend_from_slice(resources);
-            Ok(())
+            Ok("applied".into())
         }
 
         fn api_url(&self) -> &str {
@@ -844,74 +968,82 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn plans_applies_reports_idempotently_and_retires() {
-        let sql = "create table items (id bigint primary key);".to_owned();
-        let controller = SupabaseController::new(
-            FakeTarget {
-                observation: Mutex::new(SupabaseObservation {
-                    exposed: BTreeSet::from(["public".into()]),
-                    ..SupabaseObservation::default()
-                }),
-                applies: Mutex::new(0),
-                retired: Mutex::new(Vec::new()),
-            },
-            Arc::new(FakeConfigFiles {
-                sql: Arc::from(sql.clone().into_bytes()),
-            }),
-            Arc::new(FakeBundles),
-        );
-        let slice = slice(&sql);
-        let report = controller
-            .execute(&ControllerCommand::Reconcile(slice.clone()))
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(report.dispositions().len(), 1);
-        assert_eq!(report.outputs().len(), 7);
-        controller
-            .execute(&ControllerCommand::Reconcile(slice.clone()))
-            .await
-            .unwrap();
-        assert_eq!(*controller.target.applies.lock().unwrap(), 1);
-        controller
-            .execute(&ControllerCommand::Retire(Retirement {
-                graph_id: slice.graph_id(),
-                last_generation: slice.generation(),
-                controller: controller.name().clone(),
-                resources: vec![slice.resources()[0].clone()],
-            }))
-            .await
-            .unwrap();
-        assert_eq!(
-            controller.target.retired.lock().unwrap().as_slice(),
-            &[slice.resources()[0].id()]
-        );
+    async fn converges_one_operation_per_pass_without_flapping() {
+        let (controller, actions) = controller();
+        let slice = slice();
+        let convergence = reconcile_slice(&controller, &slice).await.unwrap();
+        assert_eq!((convergence.actions, convergence.passes), (3, 4));
+        assert!(matches!(actions.lock().unwrap()[0], SupabaseOperation::EnsureSchema { .. }));
+        assert!(matches!(actions.lock().unwrap()[1], SupabaseOperation::ApplyMigration { .. }));
+        assert!(matches!(actions.lock().unwrap()[2], SupabaseOperation::ConfigureApi { .. }));
+        let again = reconcile_slice(&controller, &slice).await.unwrap();
+        assert_eq!((again.actions, again.passes), (0, 1));
     }
 
     #[tokio::test]
-    async fn migration_mutation_diagnostic_is_stable() {
-        let sql = "select 1;";
-        let slice = slice(sql);
-        let resource = &slice.resources()[0];
-        let observed = SupabaseObservation {
-            migrations: BTreeMap::from([((resource.id(), "001".into()), "sha256:old".into())]),
+    async fn fresh_controller_retires_from_receipt() {
+        let state = Arc::new(Mutex::new(FakeState {
             exposed: BTreeSet::from(["public".into()]),
-            ..SupabaseObservation::default()
-        };
-        let files = FakeConfigFiles {
-            sql: Arc::from(sql.as_bytes()),
-        };
-        let error = build_plan(&slice, &observed, &files, &FakeBundles)
+            ..FakeState::default()
+        }));
+        let actions = Arc::new(Mutex::new(Vec::new()));
+        let slice = slice();
+        let first = make_controller(Arc::clone(&state), Arc::clone(&actions));
+        first
+            .execute(&ControllerCommand::Reconcile(slice.clone()))
             .await
-            .unwrap_err();
-        insta::assert_snapshot!(error.to_string(), @r###"
-        error[supabase.plan.migration-mutated]: migration "001" for catalog/supabase/schema@1/catalog was applied with sha256:old, but desired declares sha256:354b7196c9ba5fb4b21cf615bb6ec4cd5c07503c34229feef033fc081a8c03f4
-          --> migrations/001.sql
-          = help: never edit an applied migration ID; append a corrective migration
-        "###);
+            .unwrap();
+        let restarted = make_controller(Arc::clone(&state), actions);
+        restarted
+            .execute(&ControllerCommand::Retire(Retirement {
+                graph_id: slice.graph_id(),
+                last_generation: slice.generation(),
+                controller: restarted.name().clone(),
+                resources: slice.resources().to_vec(),
+            }))
+            .await
+            .unwrap();
+        assert!(state.lock().unwrap().schemas.is_empty());
     }
 
-    fn slice(sql: &str) -> ControllerSlice {
+    #[tokio::test]
+    async fn refuses_schema_without_matching_receipt() {
+        let (controller, actions) = controller();
+        let slice = slice();
+        controller.target.state.lock().unwrap().schemas.insert(
+            (GraphId::from_bytes([9; 16]), ResourceId::from_bytes([9; 16])),
+            "catalog".into(),
+        );
+        let error = reconcile_slice(&controller, &slice).await.unwrap_err();
+        assert!(error.to_string().contains("no matching graph/resource ownership receipt"));
+        assert!(actions.lock().unwrap().is_empty());
+    }
+
+    fn controller() -> (SupabaseController<FakeTarget>, Arc<Mutex<Vec<SupabaseOperation>>>) {
+        let state = Arc::new(Mutex::new(FakeState {
+            exposed: BTreeSet::from(["public".into()]),
+            ..FakeState::default()
+        }));
+        let actions = Arc::new(Mutex::new(Vec::new()));
+        (make_controller(state, Arc::clone(&actions)), actions)
+    }
+
+    fn make_controller(
+        state: Arc<Mutex<FakeState>>,
+        actions: Arc<Mutex<Vec<SupabaseOperation>>>,
+    ) -> SupabaseController<FakeTarget> {
+        let sql = "create table items (id bigint primary key);";
+        SupabaseController::new(
+            FakeTarget { state, actions },
+            Arc::new(FakeConfigFiles {
+                sql: Arc::from(sql.as_bytes()),
+            }),
+            Arc::new(FakeBundles),
+        )
+    }
+
+    fn slice() -> ControllerSlice {
+        let sql = "create table items (id bigint primary key);";
         let checksum = format!("sha256:{}", hex::encode(Sha256::digest(sql.as_bytes())));
         let outputs = [
             "project",
@@ -929,11 +1061,23 @@ mod tests {
         .collect();
         let resource = Resource::new(NewResource {
             id: ResourceId::from_bytes([4; 16]),
-            path: ResourcePath::new(ComponentName::new("catalog").unwrap(), ResourceAddress::new(KindVersion::new(KindName::new("supabase/schema").unwrap(), NonZeroU32::new(1).unwrap()), ResourceName::new("catalog").unwrap())),
+            path: ResourcePath::new(
+                ComponentName::new("catalog").unwrap(),
+                ResourceAddress::new(
+                    KindVersion::new(
+                        KindName::new("supabase/schema").unwrap(),
+                        NonZeroU32::new(1).unwrap(),
+                    ),
+                    ResourceName::new("catalog").unwrap(),
+                ),
+            ),
             controller: controller_name(CONTROLLER_NAME),
-            body: serde_json::json!({"stack":"local","project":"henosis-local","database":"postgres","schema":"catalog","migrations":[{"id":"001","path":"migrations/001.sql","sha256":checksum}],"api":{"expose":true,"anonAccess":"read"}}).try_into().unwrap(),
+            body: serde_json::json!({"stack":"local","project":"henosis-local","database":"postgres","schema":"catalog","migrations":[{"id":"001","path":"migrations/001.sql","sha256":checksum}],"api":{"expose":true,"anonAccess":"read"}})
+                .try_into()
+                .unwrap(),
             outputs,
-        }).unwrap();
+        })
+        .unwrap();
         ControllerSlice::new(
             GraphId::from_bytes([3; 16]),
             Generation::new(1).unwrap(),

@@ -77,6 +77,7 @@ pub trait PerResourceReconciler: Send + Sync {
     fn diff(
         &self,
         graph_id: GraphId,
+        desired: &[Resource],
         resource: &Resource,
         goal: ResourceGoal,
         observed: &Self::Observation,
@@ -102,6 +103,7 @@ where
         let resource_convergence = reconcile_resource(
             reconciler,
             slice.graph_id(),
+            slice.resources(),
             resource,
             ResourceGoal::Present,
             &mut convergence,
@@ -121,6 +123,7 @@ where
         reconcile_resource(
             reconciler,
             slice.graph_id(),
+            slice.resources(),
             resource,
             ResourceGoal::Absent,
             &mut convergence,
@@ -143,6 +146,7 @@ where
         reconcile_resource(
             reconciler,
             graph_id,
+            &[],
             resource,
             ResourceGoal::Absent,
             &mut convergence,
@@ -155,6 +159,7 @@ where
 async fn reconcile_resource<R>(
     reconciler: &R,
     graph_id: GraphId,
+    desired: &[Resource],
     resource: &Resource,
     goal: ResourceGoal,
     totals: &mut SliceConvergence,
@@ -170,7 +175,7 @@ where
             .await
             .map_err(ReconcileLoopError::Target)?;
         match reconciler
-            .diff(graph_id, resource, goal, &observed)
+            .diff(graph_id, desired, resource, goal, &observed)
             .map_err(ReconcileLoopError::Target)?
         {
             ReconcileDecision::Converged(convergence) => return Ok(convergence),
