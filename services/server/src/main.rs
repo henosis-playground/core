@@ -261,7 +261,9 @@ impl CoreService {
                 (transition, status)
             };
             self.publish(graph_id, status).await;
-            queue.extend(transition.effects().iter().cloned());
+            if !transition.effects().is_empty() {
+                queue = VecDeque::from(transition.effects().to_vec());
+            }
         }
         Ok(())
     }
