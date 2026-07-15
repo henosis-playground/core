@@ -136,7 +136,7 @@ pub enum CommandError {
     StaleControllerReport,
     #[error("controller report does not cover exactly its current holistic slice")]
     IncompleteControllerReport,
-    #[error("controller published an undeclared or unbound observed output")]
+    #[error("controller published an undeclared observed output")]
     InvalidObservedOutput,
     #[error("component evaluation failed: {0}")]
     Evaluation(String),
@@ -334,12 +334,9 @@ impl Core {
                     CommandError::InvalidObservedOutput,
                 ));
             }
-            let component_output = bindings
-                .get(output.key_value())
-                .ok_or(Error::<CommandError, Never, anyhow::Error>::Domain(
-                    CommandError::InvalidObservedOutput,
-                ))?
-                .clone();
+            let Some(component_output) = bindings.get(output.key_value()).cloned() else {
+                continue;
+            };
             published.push(OutputRecord::new(
                 OutputKey::new(report.generation(), component_output),
                 output.value().clone(),

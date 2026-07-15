@@ -34,7 +34,10 @@ use futures::FutureExt;
 use futures::future::BoxFuture;
 use henosis_types::BlockedDetail;
 use henosis_types::BundleRef;
+use henosis_types::ComponentInput;
+use henosis_types::ComponentIntent;
 use henosis_types::ComponentName;
+use henosis_types::ComponentOutput;
 use henosis_types::ControllerName;
 use henosis_types::EvaluationAttempt;
 use henosis_types::EvaluationError;
@@ -47,6 +50,7 @@ use henosis_types::KindVersion;
 use henosis_types::NativeValue;
 use henosis_types::NewBlockedEvaluation;
 use henosis_types::NewCompleteEvaluation;
+use henosis_types::NewComponentIntent;
 use henosis_types::NewEvaluationResource;
 use henosis_types::ObservedOutputBinding;
 use henosis_types::OutputAvailability;
@@ -231,6 +235,102 @@ impl henosis_types::Evaluator for EvaluationEngine {
                 .map_err(|_| EvaluationError::new("evaluation worker dropped its response"))?
         })
     }
+}
+
+/// Read the pure component declaration exported by a bundle without invoking
+/// its desire function. Core uses this at graph admission so the CLI does not
+/// execute user TypeScript or duplicate the SDK's metadata grammar.
+pub fn inspect_bundle(
+    bundle: BundleRef,
+    source: &[u8],
+    config: &EngineConfig,
+) -> Result<ComponentIntent, EvaluationError> {
+    if source.len() > config.max_bundle_bytes {
+        return Err(EvaluationError::new(format!(
+            "bundle is {} bytes, exceeding the {} byte limit",
+            source.len(),
+            config.max_bundle_bytes
+        )));
+    }
+    let source = std::str::from_utf8(source)
+        .map_err(|_| EvaluationError::new("bundle is not UTF-8 JavaScript source"))?;
+    reject_top_level_await(source)?;
+    let dynamic_import_attempted = Rc::new(Cell::new(false));
+    let loader = Rc::new(DenyModuleLoader {
+        dynamic_import_attempted: Rc::clone(&dynamic_import_attempted),
+    });
+    let mut runtime = JsRuntime::new(RuntimeOptions {
+        module_loader: Some(loader),
+        extensions: vec![henosis_evaluation_runtime::init()],
+        create_params: Some(v8::Isolate::create_params().heap_limits(0, config.max_heap_bytes)),
+        ..Default::default()
+    });
+    let timed_out = Arc::new(AtomicBool::new(false));
+    let out_of_memory = Arc::new(AtomicBool::new(false));
+    let isolate_handle = runtime.v8_isolate().thread_safe_handle();
+    let heap_handle = isolate_handle.clone();
+    let heap_flag = Arc::clone(&out_of_memory);
+    runtime.add_near_heap_limit_callback(move |current, _initial| {
+        heap_flag.store(true, Ordering::Release);
+        heap_handle.terminate_execution();
+        current.saturating_add(1024 * 1024)
+    });
+    let (cancel_timeout, timeout_cancelled) = mpsc::channel();
+    let timeout_handle = isolate_handle;
+    let timeout_flag = Arc::clone(&timed_out);
+    let timeout = config.timeout;
+    let watchdog = thread::spawn(move || {
+        if timeout_cancelled.recv_timeout(timeout).is_err() {
+            timeout_flag.store(true, Ordering::Release);
+            timeout_handle.terminate_execution();
+        }
+    });
+
+    let result = (|| {
+        install_host_boundary(&mut runtime)?;
+        let specifier = ModuleSpecifier::parse(ENTRY_SPECIFIER)
+            .map_err(|error| EvaluationError::new(format!("invalid entry specifier: {error}")))?;
+        let module_id =
+            block_on(runtime.load_main_es_module_from_code(&specifier, source.to_owned()))
+                .map_err(core_failure("loading component bundle"))?;
+        let module_evaluation = runtime.mod_evaluate(module_id);
+        match module_evaluation.now_or_never() {
+            Some(Ok(())) => {}
+            Some(Err(error)) => return Err(core_failure("evaluating component module")(error)),
+            None => {
+                return Err(EvaluationError::new(
+                    "error[HENOSIS_TOP_LEVEL_AWAIT]: top-level await is unavailable in component \
+                     bundles",
+                ));
+            }
+        }
+        let namespace = runtime
+            .get_module_namespace(module_id)
+            .map_err(core_failure("reading component exports"))?;
+        let metadata = read_metadata(&mut runtime, &namespace)?;
+        verify_policy_guards(&mut runtime)?;
+        if dynamic_import_attempted.get() {
+            return Err(EvaluationError::new(
+                "error[HENOSIS_DYNAMIC_IMPORT]: dynamic import is unavailable in component \
+                 evaluation",
+            ));
+        }
+        component_intent(bundle, metadata)
+    })();
+    let _ = cancel_timeout.send(());
+    let _ = watchdog.join();
+    if out_of_memory.load(Ordering::Acquire) {
+        return Err(EvaluationError::new(
+            "component metadata inspection exceeded the V8 heap limit",
+        ));
+    }
+    if timed_out.load(Ordering::Acquire) {
+        return Err(EvaluationError::new(format!(
+            "component metadata inspection exceeded the {:?} execution deadline",
+            config.timeout
+        )));
+    }
+    result
 }
 
 struct Job {
@@ -715,6 +815,48 @@ enum SchemaWire {
     },
 }
 
+fn component_intent(
+    bundle: BundleRef,
+    metadata: ComponentMetadataWire,
+) -> Result<ComponentIntent, EvaluationError> {
+    validate_logical_name(&metadata.name, "component name")?;
+    let name = ComponentName::new(metadata.name)
+        .map_err(|error| EvaluationError::new(format!("invalid component name: {error}")))?;
+    let mut inputs = Vec::with_capacity(metadata.inputs.len());
+    for (input_name, declaration) in metadata.inputs {
+        validate_api_name(&input_name, "input name")?;
+        validate_logical_name(&declaration.component, "source component name")?;
+        validate_api_name(&declaration.output, "source output name")?;
+        inputs.push(ComponentInput::new(
+            InputName::new(input_name)
+                .map_err(|error| EvaluationError::new(format!("invalid input name: {error}")))?,
+            output_ref(&declaration.component, &declaration.output)?,
+            declaration.optional,
+        ));
+    }
+    let mut outputs = Vec::with_capacity(metadata.outputs.len());
+    for (output_name, declaration) in metadata.outputs {
+        validate_api_name(&output_name, "output name")?;
+        validate_schema_shape(&declaration.schema)?;
+        outputs.push(ComponentOutput::new(
+            OutputName::new(output_name)
+                .map_err(|error| EvaluationError::new(format!("invalid output name: {error}")))?,
+            match declaration.availability {
+                AvailabilityWire::Static => OutputAvailability::Static,
+                AvailabilityWire::Observed => OutputAvailability::Observed,
+            },
+            declaration.optional,
+        ));
+    }
+    ComponentIntent::new(NewComponentIntent {
+        name,
+        bundle,
+        inputs,
+        outputs,
+    })
+    .map_err(|error| EvaluationError::new(format!("invalid component metadata: {error}")))
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(
     tag = "status",
@@ -798,9 +940,9 @@ fn validate_metadata(
         ));
     }
     for (name, declaration) in &metadata.inputs {
-        validate_logical_name(name, "input name")?;
+        validate_api_name(name, "input name")?;
         validate_logical_name(&declaration.component, "source component name")?;
-        validate_logical_name(&declaration.output, "source output name")?;
+        validate_api_name(&declaration.output, "source output name")?;
         let input = InputName::new(name.clone())
             .map_err(|error| EvaluationError::new(format!("invalid input name: {error}")))?;
         let source = output_ref(&declaration.component, &declaration.output)?;
@@ -819,7 +961,7 @@ fn validate_metadata(
         }
     }
     for (name, declaration) in &metadata.outputs {
-        validate_logical_name(name, "output name")?;
+        validate_api_name(name, "output name")?;
         OutputName::new(name.clone())
             .map_err(|error| EvaluationError::new(format!("invalid output name: {error}")))?;
         validate_schema_shape(&declaration.schema)?;
@@ -1203,6 +1345,21 @@ fn validate_logical_name(value: &str, label: &str) -> Result<(), EvaluationError
     }
 }
 
+fn validate_api_name(value: &str, label: &str) -> Result<(), EvaluationError> {
+    let mut bytes = value.bytes();
+    let valid = value.len() <= 63
+        && bytes.next().is_some_and(|byte| byte.is_ascii_alphabetic())
+        && bytes.all(|byte| byte.is_ascii_alphanumeric());
+    if valid {
+        Ok(())
+    } else {
+        Err(EvaluationError::new(format!(
+            "invalid {label} {value:?}; expected 1-63 ASCII letters or digits, beginning with a \
+             letter"
+        )))
+    }
+}
+
 fn validate_kind_name(value: &str) -> Result<(), EvaluationError> {
     let mut segments = value.split('/');
     let valid_segment = |segment: &str| {
@@ -1296,6 +1453,9 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     const CONSUMER_BUNDLE: &str = include_str!("../fixtures/consumer.bundle.js");
+    const BENCHMARK_BACKEND_BUNDLE: &str = include_str!("../fixtures/benchmark/backend.bundle.js");
+    const BENCHMARK_SERVICE_PAIR_BUNDLE: &str =
+        include_str!("../fixtures/benchmark/service_pair.bundle.js");
 
     struct MemorySource {
         bundle: Arc<[u8]>,
@@ -1325,6 +1485,35 @@ mod tests {
             Ok(ResourceContract::new(
                 ControllerName::new("test").expect("valid controller"),
                 vec![OutputName::new("result").expect("valid output")],
+            ))
+        }
+    }
+
+    struct BenchmarkRegistry;
+
+    impl ResourceRegistry for BenchmarkRegistry {
+        fn validate(
+            &self,
+            kind: &KindVersion,
+            body: &serde_json::Value,
+        ) -> Result<ResourceContract, String> {
+            if !body.is_object() {
+                return Err(format!("{kind} body must be an object"));
+            }
+            let (controller, outputs): (&str, &[&str]) = match kind.to_string().as_str() {
+                "k8s/object@1" => ("k8s", &[]),
+                "cloudflare/worker@1" => (
+                    "cloudflare",
+                    &["url", "workerName", "deploymentId", "versionId"],
+                ),
+                other => return Err(format!("unsupported benchmark kind {other}")),
+            };
+            Ok(ResourceContract::new(
+                ControllerName::new(controller).expect("valid controller"),
+                outputs
+                    .iter()
+                    .map(|name| OutputName::new(*name).expect("valid API output"))
+                    .collect(),
             ))
         }
     }
@@ -1370,6 +1559,85 @@ mod tests {
             &TestRegistry,
             &EngineConfig::default(),
         )
+    }
+
+    #[test]
+    fn api_names_accept_camel_case_while_logical_names_stay_strict() {
+        for name in ["apiUrl", "URL2", "restUrl"] {
+            validate_api_name(name, "API name").expect("camel-case API name should be valid");
+        }
+        for name in ["api_url", "api-url", "2api", ""] {
+            assert!(validate_api_name(name, "API name").is_err(), "{name:?}");
+        }
+        validate_logical_name("source_component", "component name")
+            .expect("logical names retain underscores");
+        assert!(validate_logical_name("sourceComponent", "component name").is_err());
+    }
+
+    #[test]
+    fn current_sdk_benchmark_bundles_accept_camel_case_api_names() {
+        let backend_intent = inspect_bundle(
+            bundle_ref(BENCHMARK_BACKEND_BUNDLE),
+            BENCHMARK_BACKEND_BUNDLE.as_bytes(),
+            &EngineConfig::default(),
+        )
+        .expect("core admission should inspect current SDK metadata");
+        assert_eq!(
+            backend_intent
+                .inputs()
+                .map(|input| input.name().as_str())
+                .collect::<Vec<_>>(),
+            vec!["databaseUrl", "tunnelHost"]
+        );
+
+        let service_pair = evaluate_job(
+            &request(BENCHMARK_SERVICE_PAIR_BUNDLE, "service_pair", Vec::new()),
+            BENCHMARK_SERVICE_PAIR_BUNDLE.as_bytes(),
+            &BenchmarkRegistry,
+            &EngineConfig::default(),
+        )
+        .expect("current CLI/SDK service-pair bundle should evaluate");
+        let output_names = service_pair
+            .complete_result()
+            .expect("service pair completes")
+            .outputs()
+            .map(|output| output.name().as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(output_names, vec!["apiUrl", "webUrl"]);
+
+        let backend = evaluate_job(
+            &request(
+                BENCHMARK_BACKEND_BUNDLE,
+                "backend",
+                vec![
+                    input(
+                        "databaseUrl",
+                        "database",
+                        "restUrl",
+                        InputCellState::Blocked,
+                    ),
+                    input(
+                        "tunnelHost",
+                        "supabase_tunnel",
+                        "hostname",
+                        InputCellState::Blocked,
+                    ),
+                ],
+            ),
+            BENCHMARK_BACKEND_BUNDLE.as_bytes(),
+            &BenchmarkRegistry,
+            &EngineConfig::default(),
+        )
+        .expect("current CLI/SDK backend bundle should report suspense");
+        assert_eq!(
+            backend
+                .blocked_result()
+                .expect("backend is blocked")
+                .blocked()
+                .input()
+                .as_str(),
+            "databaseUrl"
+        );
     }
 
     #[test]

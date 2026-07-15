@@ -20,6 +20,7 @@ Use `just` — run `just` to list all recipes. Prefer just recipes over raw carg
 - `just lint` — run all lints (fmt, clippy, deny, pre-commit). Always run after making changes.
 - `just test` — run all tests with optimized third-party dependencies
 - `just doc` — build docs
+- `just demo-d26` — run the clean local bundle → core → controller → Git/frontend demo
 <!-- LINT.ThenChange(//README.md:command_recipes) -->
 
 All recipes accept passthrough flags: `just test -p some-crate`, `just clippy -- -W clippy::pedantic`.

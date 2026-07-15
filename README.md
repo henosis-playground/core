@@ -24,4 +24,5 @@ Use `just` to discover and run common tasks:
 - `just lint` — run all lints (fmt, clippy, deny, pre-commit). Always run after making changes.
 - `just test` — run all tests with optimized third-party dependencies
 - `just doc` — build docs
+- `just demo-d26` — run the clean local bundle → core → controller → Git/frontend demo
 <!-- LINT.ThenChange(//AGENTS.md:command_recipes) -->

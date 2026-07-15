@@ -34,6 +34,10 @@ test *flags:
 doc *flags:
     RUSTDOCFLAGS="--cfg docsrs" cargo doc --all-features --no-deps --document-private-items --keep-going {{ flags }}
 
+# Runs the clean local D26 bundle → core → controllers → Git/frontend demo.
+demo-d26:
+    ./demo/d26.sh
+
 [private]
 _assert-clean:
     {{ if `test -z "$(git status --porcelain --untracked-files=no)" && echo clean || echo dirty` == "dirty" {
