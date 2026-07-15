@@ -57,6 +57,16 @@ use henosis_types::ResourceAddress;
 use henosis_types::ResourceId;
 use henosis_types::ResourceName;
 use henosis_types::StaticOutput;
+use oxc_allocator::Allocator;
+use oxc_ast::ast::ArrowFunctionExpression;
+use oxc_ast::ast::AwaitExpression;
+use oxc_ast::ast::ForOfStatement;
+use oxc_ast::ast::Function;
+use oxc_ast_visit::Visit;
+use oxc_ast_visit::walk;
+use oxc_parser::Parser;
+use oxc_span::SourceType;
+use oxc_syntax::scope::ScopeFlags;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -120,7 +130,9 @@ pub struct EngineConfig {
 impl Default for EngineConfig {
     fn default() -> Self {
         Self {
-            workers: thread::available_parallelism().map_or(1, usize::from),
+            workers: thread::available_parallelism()
+                .map(usize::from)
+                .unwrap_or(1),
             queue_capacity_per_worker: 8,
             max_bundle_bytes: 2 * 1024 * 1024,
             max_output_bytes: 4 * 1024 * 1024,
@@ -310,6 +322,60 @@ impl ModuleLoader for DenyModuleLoader {
     }
 }
 
+fn reject_top_level_await(source: &str) -> Result<(), EvaluationError> {
+    let allocator = Allocator::default();
+    let parsed = Parser::new(&allocator, source, SourceType::mjs()).parse();
+    if let Some(diagnostic) = parsed.diagnostics.first() {
+        return Err(EvaluationError::new(format!(
+            "bundle is not valid ESM JavaScript: {diagnostic:?}"
+        )));
+    }
+    let mut detector = TopLevelAwaitDetector::default();
+    detector.visit_program(&parsed.program);
+    if detector.found {
+        Err(EvaluationError::new(
+            "error[HENOSIS_TOP_LEVEL_AWAIT]: top-level await is unavailable in component bundles",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct TopLevelAwaitDetector {
+    function_depth: usize,
+    found: bool,
+}
+
+impl<'a> Visit<'a> for TopLevelAwaitDetector {
+    fn visit_function(&mut self, function: &Function<'a>, flags: ScopeFlags) {
+        self.function_depth += 1;
+        walk::walk_function(self, function, flags);
+        self.function_depth -= 1;
+    }
+
+    fn visit_arrow_function_expression(&mut self, function: &ArrowFunctionExpression<'a>) {
+        self.function_depth += 1;
+        walk::walk_arrow_function_expression(self, function);
+        self.function_depth -= 1;
+    }
+
+    fn visit_await_expression(&mut self, expression: &AwaitExpression<'a>) {
+        if self.function_depth == 0 {
+            self.found = true;
+        } else {
+            walk::walk_await_expression(self, expression);
+        }
+    }
+
+    fn visit_for_of_statement(&mut self, statement: &ForOfStatement<'a>) {
+        if self.function_depth == 0 && statement.r#await {
+            self.found = true;
+        }
+        walk::walk_for_of_statement(self, statement);
+    }
+}
+
 fn evaluate_job(
     request: &EvaluationRequest,
     bundle: &[u8],
@@ -318,6 +384,7 @@ fn evaluate_job(
 ) -> Result<EvaluationAttempt, EvaluationError> {
     let source = std::str::from_utf8(bundle)
         .map_err(|_| EvaluationError::new("bundle is not UTF-8 JavaScript source"))?;
+    reject_top_level_await(source)?;
     let dynamic_import_attempted = Rc::new(Cell::new(false));
     let loader = Rc::new(DenyModuleLoader {
         dynamic_import_attempted: Rc::clone(&dynamic_import_attempted),
@@ -565,10 +632,8 @@ fn invoke_bundle(
         let message = try_catch
             .exception()
             .and_then(|exception| exception.to_string(try_catch))
-            .map_or_else(
-                || "component threw an exception".to_owned(),
-                |message| message.to_rust_string_lossy(try_catch),
-            );
+            .map(|message| message.to_rust_string_lossy(try_catch))
+            .unwrap_or_else(|| "component threw an exception".to_owned());
         return Err(EvaluationError::new(message));
     };
     if result.is_promise() {
@@ -1454,6 +1519,21 @@ mod tests {
     }
 
     #[test]
+    fn rejects_top_level_await() {
+        let source = r#"
+          await Promise.resolve();
+          export const protocolVersion = 1;
+          export const component = { name: "hostile", inputs: {}, outputs: {} };
+          export function evaluate() {
+            return { protocolVersion: 1, status: "complete", resources: [], outputs: {}, observedOutputs: {}, reads: [] };
+          }
+        "#;
+        let error = evaluate_direct(source, &request(source, "hostile", Vec::new()))
+            .expect_err("top-level await must fail");
+        assert!(error.to_string().contains("HENOSIS_TOP_LEVEL_AWAIT"));
+    }
+
+    #[test]
     fn rejects_returned_promises() {
         let source = minimal_bundle("return Promise.resolve({});");
         let error = evaluate_direct(&source, &request(&source, "hostile", Vec::new()))
@@ -1477,8 +1557,8 @@ mod tests {
             ),
             (
                 "dynamic import",
-                "return import('data:text/javascript,export default 1');",
-                "HENOSIS_ASYNC_EVALUATION",
+                "import('data:text/javascript,export default 1').catch(() => {});",
+                "HENOSIS_DYNAMIC_IMPORT",
             ),
         ] {
             let source = minimal_bundle(body);

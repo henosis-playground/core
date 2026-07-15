@@ -31,6 +31,12 @@ newtype-uuid = { git = "https://github.com/henosis-playground/newtype-uuid.git",
   "serde",
   "v7",
 ] }
+oxc_allocator = "=0.140.0"
+oxc_ast = "=0.140.0"
+oxc_ast_visit = "=0.140.0"
+oxc_parser = "=0.140.0"
+oxc_span = "=0.140.0"
+oxc_syntax = "=0.140.0"
 proptest = "1"
 ryu-js = "1.0.3"
 s2-sdk = "=0.31.9"
