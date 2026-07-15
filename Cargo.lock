@@ -433,6 +433,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "console"
+version = "0.16.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4fe5f465a4f6fee88fad41b85d990f84c835335e85b5d9e6e63e0d06d28cba7c"
+dependencies = [
+ "encode_unicode",
+ "libc",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "constant_time_eq"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -736,6 +747,12 @@ checksum = "91622ff5e7162018101f2fea40d6ebf4a78bbe5a49736a2020649edf9693679e"
 dependencies = [
  "serde",
 ]
+
+[[package]]
+name = "encode_unicode"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "34aa73646ffb006b8f5147f3dc182bd4bcb190227ce861fc4a4844bf8e3cb2c0"
 
 [[package]]
 name = "enumset"
@@ -1076,9 +1093,13 @@ dependencies = [
  "henosis-journal",
  "henosis-multi-stream-merge",
  "henosis-orchestrator",
+ "henosis-sim",
  "henosis-storage",
+ "henosis-testkit",
  "henosis-types",
+ "insta",
  "proptest",
+ "proptest-state-machine",
  "serde_json",
  "tokio",
  "uuid",
@@ -1161,6 +1182,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "henosis-sim"
+version = "0.0.0"
+dependencies = [
+ "blake3",
+ "faultline",
+ "henosis-orchestrator",
+ "henosis-testkit",
+ "henosis-types",
+ "serde",
+ "serde_json",
+ "tokio",
+ "workspace-hack",
+]
+
+[[package]]
 name = "henosis-storage"
 version = "0.0.0"
 dependencies = [
@@ -1171,6 +1207,25 @@ dependencies = [
  "futures",
  "thiserror",
  "tokio",
+ "workspace-hack",
+]
+
+[[package]]
+name = "henosis-testkit"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "blake3",
+ "faultline",
+ "futures",
+ "henosis-storage",
+ "henosis-types",
+ "rand 0.9.5",
+ "rand_chacha",
+ "serde",
+ "serde_json",
+ "thiserror",
  "workspace-hack",
 ]
 
@@ -1486,6 +1541,19 @@ dependencies = [
  "hashbrown 0.17.1",
  "serde",
  "serde_core",
+]
+
+[[package]]
+name = "insta"
+version = "1.48.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "86f0f8fee8c926415c58d6ae43a08523a26faccb2323f5e6b644fe7dd4ef6b82"
+dependencies = [
+ "console",
+ "once_cell",
+ "serde",
+ "similar",
+ "tempfile",
 ]
 
 [[package]]
@@ -2147,6 +2215,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "proptest-state-machine"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1675727965d66ff6f335e7d398e477184da08f4bed22f1a7f0dbf2f077f56f2e"
+dependencies = [
+ "proptest",
+]
+
+[[package]]
 name = "prost"
 version = "0.14.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2740,6 +2817,12 @@ name = "simdutf8"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
+
+[[package]]
+name = "similar"
+version = "2.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbbb5d9659141646ae647b42fe094daf6c6192d1620870b449d9557f748b2daa"
 
 [[package]]
 name = "siphasher"

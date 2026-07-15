@@ -1,0 +1,35 @@
+//! Deterministic fakes used by the Henosis domain simulator.
+
+mod clock;
+mod diagnostics;
+mod evaluator;
+mod rng;
+mod storage;
+mod target;
+mod trace;
+
+pub use clock::SimClock;
+pub use clock::SimInstant;
+pub use clock::TimerId;
+pub use diagnostics::Quiescence;
+pub use diagnostics::StallReport;
+pub use diagnostics::WaitEdge;
+pub use diagnostics::WaitGraph;
+pub use diagnostics::WaitNode;
+pub use evaluator::ComponentProgram;
+pub use evaluator::ProgramEvaluator;
+pub use evaluator::ResourceProgram;
+pub use rng::NamedRng;
+pub use rng::Seed;
+pub use storage::AppendFault;
+pub use storage::MemS2;
+pub use storage::MemS2Append;
+pub use storage::MemS2Error;
+pub use target::FakeTarget;
+pub use target::IdempotencyViolation;
+pub use target::OutputDelivery;
+pub use target::TargetFault;
+pub use target::TargetOperation;
+pub use trace::NormalizedTrace;
+pub use trace::TraceEvent;
+pub use trace::TraceRecorder;

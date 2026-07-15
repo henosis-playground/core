@@ -27,6 +27,7 @@ deno_error = "=0.7.1"
 faultline = "0.1.0"
 futures = "0.3"
 iddqd = { version = "0.4.5", features = ["serde"] }
+insta = { version = "1.48", features = ["yaml"] }
 newtype-uuid = { git = "https://github.com/henosis-playground/newtype-uuid.git", rev = "f20e0aff365e59de7eadd29e769cf0c93990c587", features = [
   "serde",
   "v7",
@@ -38,6 +39,9 @@ oxc_parser = "=0.140.0"
 oxc_span = "=0.140.0"
 oxc_syntax = "=0.140.0"
 proptest = "1"
+proptest-state-machine = "0.8"
+rand = "0.9"
+rand_chacha = "0.9"
 ryu-js = "1.0.3"
 s2-sdk = "=0.31.9"
 serde = { version = "1", features = ["derive"] }
@@ -58,6 +62,8 @@ uuid = { version = "1", features = ["serde", "v7"] }
 henosis-evaluation-engine = { path = "crates/evaluation-engine" }
 henosis-journal = { path = "crates/journal" }
 henosis-multi-stream-merge = { path = "crates/multi-stream-merge" }
+henosis-testkit = { path = "crates/henosis-testkit" }
+henosis-sim = { path = "crates/henosis-sim" }
 henosis-orchestrator = { path = "crates/orchestrator" }
 henosis-proto = { path = "crates/proto" }
 henosis-storage = { path = "crates/storage" }

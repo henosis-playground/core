@@ -4,6 +4,7 @@
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::collections::BTreeSet;
     use std::num::NonZeroU32;
     use std::sync::Arc;
 
@@ -629,6 +630,31 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(names.contains(&"left"));
         assert!(names.contains(&"right"));
+
+        let mut wait_graph = henosis_testkit::WaitGraph::default();
+        wait_graph.add_edge(
+            henosis_testkit::WaitNode::Component("left".to_owned()),
+            henosis_testkit::WaitNode::Component("right".to_owned()),
+        );
+        wait_graph.add_edge(
+            henosis_testkit::WaitNode::Component("right".to_owned()),
+            henosis_testkit::WaitNode::Component("left".to_owned()),
+        );
+        let classified = wait_graph.classify(false, false);
+        assert_eq!(
+            classified.classification,
+            henosis_testkit::Quiescence::Deadlocked
+        );
+        let classified_names = classified
+            .cycle
+            .iter()
+            .filter_map(|node| match node {
+                henosis_testkit::WaitNode::Component(name) => Some(name.as_str()),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(classified_names, names.into_iter().collect());
+
         assert!(
             transition
                 .events()
@@ -772,5 +798,101 @@ mod tests {
         let wire = id.to_string();
         assert!(wire.starts_with("graph_"));
         assert_eq!(wire.parse::<GraphId>().expect("TypeID round trips"), id);
+    }
+
+    #[tokio::test]
+    async fn seeded_regression_replay_clears_superseded_stall() {
+        let left = component(
+            "left",
+            4,
+            vec![input("rightValue", "right", "value")],
+            vec![observed_component_output("value")],
+        );
+        let right = component(
+            "right",
+            4,
+            vec![input("leftValue", "left", "value")],
+            vec![observed_component_output("value")],
+        );
+        let mut core = Core::new(Arc::new(FakeEvaluator));
+        let initial = core
+            .handle(Command::CreateGraph(graph(vec![left, right])))
+            .await
+            .expect("cycle is materialized as a stall");
+        let replacement = component(
+            "replacement",
+            1,
+            Vec::new(),
+            vec![observed_component_output("url")],
+        );
+        let updated = core
+            .handle(Command::UpdateGraph {
+                graph_id: graph_id(),
+                expected_generation: Generation::new(1).expect("one is valid"),
+                components: vec![replacement],
+            })
+            .await
+            .expect("new generation replaces the stalled graph");
+        let events = initial
+            .events()
+            .iter()
+            .chain(updated.events())
+            .cloned()
+            .collect::<Vec<_>>();
+        let replayed = MaterializedCore::fold(&events);
+
+        assert!(
+            core.state()
+                .graph(graph_id())
+                .expect("live graph exists")
+                .stall()
+                .is_none(),
+            "live update clears the old stall"
+        );
+        assert!(
+            replayed
+                .graph(graph_id())
+                .expect("replayed graph exists")
+                .stall()
+                .is_none(),
+            "replay clears a stall superseded by a new accepted generation"
+        );
+        assert_eq!(replayed, core.state().clone());
+    }
+
+    #[tokio::test]
+    async fn core_error_paths_have_stable_diagnostics() {
+        let producer = component(
+            "database",
+            1,
+            Vec::new(),
+            vec![observed_component_output("url")],
+        );
+        let mut core = Core::new(Arc::new(FakeEvaluator));
+        let initial = core
+            .handle(Command::CreateGraph(graph(vec![producer.clone()])))
+            .await
+            .expect("graph creation succeeds");
+        let stale_report = controller_report(&initial.effects()[0], 90, "old.test");
+        core.handle(Command::UpdateGraph {
+            graph_id: graph_id(),
+            expected_generation: Generation::new(1).expect("one is valid"),
+            components: vec![producer],
+        })
+        .await
+        .expect("generation update succeeds");
+        let stale_error = core
+            .handle(Command::ReportController(stale_report))
+            .await
+            .expect_err("old plan report is fenced");
+        insta::assert_snapshot!(stale_error.to_string(), @"Terminal error: controller report targets a stale plan");
+
+        let invalid = component("broken", 99, Vec::new(), Vec::new());
+        let mut invalid_core = Core::new(Arc::new(FakeEvaluator));
+        let evaluation_error = invalid_core
+            .handle(Command::CreateGraph(graph(vec![invalid])))
+            .await
+            .expect_err("unknown bundle behavior fails evaluation");
+        insta::assert_snapshot!(evaluation_error.to_string(), @"Terminal error: component evaluation failed: component evaluation failed: unknown fake bundle");
     }
 }
