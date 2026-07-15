@@ -80,6 +80,13 @@ pub enum RunStatus {
     BudgetExhausted,
 }
 
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct ModelResource {
+    pub id: String,
+    pub path: String,
+    pub body: String,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RunResult {
     pub status: RunStatus,
@@ -446,6 +453,50 @@ impl SimWorld {
 #[must_use]
 pub async fn run_seed(seed: Seed, scenario: &Scenario, step_budget: usize) -> RunResult {
     SimWorld::new(seed, scenario).await.run(step_budget).await
+}
+
+#[must_use]
+pub fn canonical_resources(plan: &Plan) -> BTreeSet<ModelResource> {
+    plan.resources()
+        .map(|resource| ModelResource {
+            id: resource.id().to_string(),
+            path: resource.path().to_string(),
+            body: resource.body().canonical().to_owned(),
+        })
+        .collect()
+}
+
+#[must_use]
+pub fn slow_all_inputs_model(scenario: &Scenario) -> BTreeSet<ModelResource> {
+    let mut resources = BTreeSet::new();
+    for index in 0..scenario.source_count {
+        let id = resource_id(index.saturating_add(1));
+        resources.insert(ModelResource {
+            id: id.to_string(),
+            path: format!("source-{index}/test/resource@1/source-{index}"),
+            body: "{}".to_owned(),
+        });
+    }
+    let body = (0..scenario.source_count)
+        .map(|index| {
+            let id = resource_id(index.saturating_add(1));
+            (
+                format!("input-{index}"),
+                serde_json::json!(format!("value-1-{id}")),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>();
+    let body = NativeValue::new(serde_json::Value::Object(body))
+        .expect("slow-model body is finite JSON")
+        .canonical()
+        .to_owned();
+    let sink_id = resource_id(200);
+    resources.insert(ModelResource {
+        id: sink_id.to_string(),
+        path: "sink/test/resource@1/sink".to_owned(),
+        body,
+    });
+    resources
 }
 
 #[must_use]

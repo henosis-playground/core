@@ -4,7 +4,9 @@ use henosis_sim::RunStatus;
 use henosis_sim::Scenario;
 use henosis_sim::SimAction;
 use henosis_sim::SimWorld;
+use henosis_sim::canonical_resources;
 use henosis_sim::run_seed;
+use henosis_sim::slow_all_inputs_model;
 use henosis_storage::AppendRecord;
 use henosis_storage::StreamName;
 use henosis_storage::StreamPosition;
@@ -73,7 +75,9 @@ proptest! {
         let scenario = Scenario::bounded(width);
         let random = runtime().block_on(run_seed(Seed::from_u64(seed), &scenario, 64));
         let canonical = runtime().block_on(run_seed(Seed::from_u64(0), &scenario, 64));
+        let slow_model = slow_all_inputs_model(&scenario);
         prop_assert_eq!(random.status, RunStatus::Converged);
+        prop_assert_eq!(canonical_resources(&random.plan), slow_model);
         prop_assert_eq!(random.plan, canonical.plan);
         for history in random.presence_history.values() {
             prop_assert!(!history.windows(3).any(|window| window == [true, false, true]));
