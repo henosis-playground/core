@@ -7,10 +7,10 @@ edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 buffa.workspace = true
 connectrpc.workspace = true
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
-
-[lints]
-workspace = true

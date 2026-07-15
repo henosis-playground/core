@@ -1,1 +1,21 @@
-//! Domain types that parse external data into valid Henosis representations.
+//! Validated domain types plus the evaluator and controller boundaries used by core.
+
+mod controller;
+mod evaluation;
+mod event;
+mod graph;
+mod id;
+mod name;
+mod plan;
+mod resource;
+mod value;
+
+pub use controller::*;
+pub use evaluation::*;
+pub use event::*;
+pub use graph::*;
+pub use id::*;
+pub use name::*;
+pub use plan::*;
+pub use resource::*;
+pub use value::*;

@@ -1,0 +1,71 @@
+edition = "2023";
+
+package henosis.v1;
+
+import "henosis/v1/types.proto";
+
+service GraphService {
+  rpc CreateGraph(CreateGraphRequest) returns (CreateGraphResponse) {
+    option idempotency_level = IDEMPOTENT;
+  }
+  rpc UpdateGraph(UpdateGraphRequest) returns (UpdateGraphResponse) {
+    option idempotency_level = IDEMPOTENT;
+  }
+  rpc RetireGraph(RetireGraphRequest) returns (RetireGraphResponse) {
+    option idempotency_level = IDEMPOTENT;
+  }
+  rpc GetGraph(GetGraphRequest) returns (GetGraphResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+  rpc WatchGraph(WatchGraphRequest) returns (stream WatchGraphResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+}
+
+message CreateGraphRequest {
+  string graph_id = 1;
+  string name = 2;
+  repeated ComponentIntent components = 3;
+}
+
+message CreateGraphResponse {
+  GraphStatus status = 1;
+}
+
+message UpdateGraphRequest {
+  string graph_id = 1;
+  uint64 expected_generation = 2;
+  repeated ComponentIntent components = 3;
+}
+
+message UpdateGraphResponse {
+  GraphStatus status = 1;
+}
+
+message RetireGraphRequest {
+  string graph_id = 1;
+  uint64 expected_generation = 2;
+}
+
+message RetireGraphResponse {
+  GraphStatus status = 1;
+}
+
+message GetGraphRequest {
+  string graph_id = 1;
+}
+
+message GetGraphResponse {
+  GraphStatus status = 1;
+}
+
+message WatchGraphRequest {
+  string graph_id = 1;
+  uint64 after_sequence = 2;
+}
+
+message WatchGraphResponse {
+  uint64 sequence = 1;
+  GraphStatus status = 2;
+  bool heartbeat = 3;
+}

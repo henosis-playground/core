@@ -1,18 +1,20 @@
 [package]
 name = "henosis-orchestrator"
 version = "0.0.0"
-description = "Graph lifecycle domain logic for Henosis"
+description = "Deterministic evaluate-diff-dispatch-observe state machine for Henosis"
 repository.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
-[dependencies]
-faultline.workspace = true
-henosis-db-queries.workspace = true
-henosis-journal.workspace = true
-henosis-types.workspace = true
-workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
-
 [lints]
 workspace = true
+
+[dependencies]
+anyhow.workspace = true
+faultline.workspace = true
+henosis-types.workspace = true
+iddqd.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+workspace-hack = { version = "0.0.0", path = "../workspace-hack" }

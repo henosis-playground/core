@@ -1,7 +1,7 @@
 [package]
 name = "henosis-types"
 version = "0.0.0"
-description = "Domain types for the Henosis graph orchestrator"
+description = "Domain types and controller/evaluation seams for Henosis"
 repository.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,4 +11,12 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+blake3.workspace = true
+futures.workspace = true
+iddqd.workspace = true
+newtype-uuid.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }

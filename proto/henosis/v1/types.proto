@@ -1,0 +1,45 @@
+edition = "2023";
+
+package henosis.v1;
+
+message ComponentIntent {
+  string name = 1;
+  bytes bundle_digest = 2;
+}
+
+message Resource {
+  string id = 1;
+  string path = 2;
+  string controller = 3;
+  string kind = 4;
+  bytes body_json = 5;
+}
+
+message BlockedOn {
+  string component = 1;
+  repeated string inputs = 2;
+}
+
+message OutputRecord {
+  uint64 generation = 1;
+  string reference = 2;
+  bytes value_json = 3;
+  string source = 4;
+}
+
+message Plan {
+  uint64 generation = 1;
+  bytes digest = 2;
+  repeated Resource resources = 3;
+  repeated BlockedOn blocked = 4;
+}
+
+message GraphStatus {
+  string graph_id = 1;
+  string name = 2;
+  uint64 generation = 3;
+  Plan plan = 4;
+  repeated OutputRecord outputs = 5;
+  repeated string stall_cycle = 6;
+  bool retired = 7;
+}
