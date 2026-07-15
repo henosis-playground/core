@@ -6,6 +6,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 
+use base64::Engine as _;
 use henosis_types::ArtifactDigest;
 use henosis_types::ArtifactStore;
 use henosis_types::ArtifactStoreError;
@@ -379,7 +380,7 @@ impl GitRepository {
     }
 
     pub fn delete_branch(&self, branch: &str) -> Result<(), GitError> {
-        let result = Command::new("git")
+        let result = git_command()?
             .args([
                 "push",
                 remote_text(&self.remote)?,
@@ -488,7 +489,7 @@ fn run_git<'a>(
     current_dir: Option<&Path>,
     args: impl IntoIterator<Item = &'a str>,
 ) -> Result<(), GitError> {
-    let mut command = Command::new("git");
+    let mut command = git_command()?;
     command.args(args);
     if let Some(current_dir) = current_dir {
         command.current_dir(current_dir);
@@ -507,7 +508,7 @@ fn run_git_status<'a>(
     current_dir: Option<&Path>,
     args: impl IntoIterator<Item = &'a str>,
 ) -> Result<bool, GitError> {
-    let mut command = Command::new("git");
+    let mut command = git_command()?;
     command.args(args);
     if let Some(current_dir) = current_dir {
         command.current_dir(current_dir);
@@ -520,7 +521,7 @@ fn git_output<'a>(
     current_dir: Option<&Path>,
     args: impl IntoIterator<Item = &'a str>,
 ) -> Result<String, GitError> {
-    let mut command = Command::new("git");
+    let mut command = git_command()?;
     command.args(args);
     if let Some(current_dir) = current_dir {
         command.current_dir(current_dir);
@@ -532,6 +533,24 @@ fn git_output<'a>(
         ));
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+}
+
+fn git_command() -> Result<Command, GitError> {
+    let mut command = Command::new("git");
+    let Ok(path) = std::env::var("HENOSIS_GITHUB_TOKEN_FILE") else {
+        return Ok(command);
+    };
+    let token = fs::read_to_string(&path).map_err(GitError::Io)?;
+    let credentials = base64::engine::general_purpose::STANDARD
+        .encode(format!("x-access-token:{}", token.trim()));
+    command
+        .env("GIT_CONFIG_COUNT", "1")
+        .env("GIT_CONFIG_KEY_0", "http.extraHeader")
+        .env(
+            "GIT_CONFIG_VALUE_0",
+            format!("Authorization: Basic {credentials}"),
+        );
+    Ok(command)
 }
 
 #[derive(Debug, Error)]
