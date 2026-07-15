@@ -380,7 +380,17 @@ impl GitRepository {
     }
 
     pub fn delete_branch(&self, branch: &str) -> Result<(), GitError> {
+        let directory = tempfile::tempdir().map_err(GitError::Io)?;
+        run_git(
+            None,
+            [
+                "init",
+                "--quiet",
+                directory.path().to_str().ok_or(GitError::NonUtf8Path)?,
+            ],
+        )?;
         let result = git_command()?
+            .current_dir(directory.path())
             .args([
                 "push",
                 remote_text(&self.remote)?,
