@@ -1,23 +1,32 @@
 //! Cloudflare resource controller with a replaceable API transport.
 //!
-//! The transport seam is deliberately provider-shaped and is exercised with a recorded/in-memory
-//! implementation. Worker source bytes are resolved inside the transport boundary because the D26
-//! `cloudflare/worker@1` body currently carries a repository-relative source entry rather than the
-//! bundled bytes themselves.
+//! The transport seam is deliberately provider-shaped and is exercised with a
+//! recorded/in-memory implementation. Worker source bytes are resolved inside
+//! the transport boundary because the D26 `cloudflare/worker@1` body currently
+//! carries a repository-relative source entry rather than the bundled bytes
+//! themselves.
 
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 
 use futures::FutureExt as _;
 use futures::future::BoxFuture;
-use henosis_controller_runtime::{
-    controller_name, failed_report, output, publication_id, ready_report,
-};
-use henosis_types::{
-    Controller, ControllerCommand, ControllerError, ControllerName, ControllerReport,
-    ControllerSlice, GraphId, Resource, ResourceId,
-};
-use serde::{Deserialize, Serialize};
+use henosis_controller_runtime::controller_name;
+use henosis_controller_runtime::failed_report;
+use henosis_controller_runtime::output;
+use henosis_controller_runtime::publication_id;
+use henosis_controller_runtime::ready_report;
+use henosis_types::Controller;
+use henosis_types::ControllerCommand;
+use henosis_types::ControllerError;
+use henosis_types::ControllerName;
+use henosis_types::ControllerReport;
+use henosis_types::ControllerSlice;
+use henosis_types::GraphId;
+use henosis_types::Resource;
+use henosis_types::ResourceId;
+use serde::Deserialize;
+use serde::Serialize;
 use thiserror::Error;
 
 const CONTROLLER_NAME: &str = "cloudflare";
@@ -146,30 +155,86 @@ where
     ) -> Result<(Vec<henosis_types::ObservedOutput>, String), CloudflareError> {
         let mut outputs = Vec::new();
         let mut evidence = String::new();
-        for resource in slice.resources() {
-            match (resource.kind().name().as_str(), resource.kind().version().get()) {
+        let mut resources = slice.resources().iter().collect::<Vec<_>>();
+        resources.sort_by_key(|resource| cloudflare_rank(resource));
+        for resource in resources {
+            match (
+                resource.kind().name().as_str(),
+                resource.kind().version().get(),
+            ) {
                 ("cloudflare/worker", 1) => {
                     let body: WorkerBody = decode(resource)?;
-                    let observed = self.transport.apply_worker(slice.graph_id(), resource, &body)?;
-                    push_if_declared(resource, "url", serde_json::json!(observed.url), &mut outputs)?;
-                    push_if_declared(resource, "workerName", serde_json::json!(observed.worker_name), &mut outputs)?;
-                    push_if_declared(resource, "deploymentId", serde_json::json!(observed.deployment_id), &mut outputs)?;
-                    push_if_declared(resource, "versionId", serde_json::json!(observed.version_id), &mut outputs)?;
+                    let observed =
+                        self.transport
+                            .apply_worker(slice.graph_id(), resource, &body)?;
+                    push_if_declared(
+                        resource,
+                        "url",
+                        serde_json::json!(observed.url),
+                        &mut outputs,
+                    )?;
+                    push_if_declared(
+                        resource,
+                        "workerName",
+                        serde_json::json!(observed.worker_name),
+                        &mut outputs,
+                    )?;
+                    push_if_declared(
+                        resource,
+                        "deploymentId",
+                        serde_json::json!(observed.deployment_id),
+                        &mut outputs,
+                    )?;
+                    push_if_declared(
+                        resource,
+                        "versionId",
+                        serde_json::json!(observed.version_id),
+                        &mut outputs,
+                    )?;
                     evidence.push_str(&format!("{}:{};", resource.id(), observed.deployment_id));
                 }
                 ("cloudflare/tunnel", 1) => {
                     let body: TunnelBody = decode(resource)?;
-                    let observed = self.transport.apply_tunnel(slice.graph_id(), resource, &body)?;
-                    push_if_declared(resource, "tunnelId", serde_json::json!(observed.tunnel_id), &mut outputs)?;
-                    push_if_declared(resource, "tunnelName", serde_json::json!(observed.tunnel_name), &mut outputs)?;
-                    push_if_declared(resource, "privateHostname", serde_json::json!(observed.private_hostname), &mut outputs)?;
-                    push_if_declared(resource, "tokenRef", serde_json::json!(observed.token_ref), &mut outputs)?;
+                    let observed =
+                        self.transport
+                            .apply_tunnel(slice.graph_id(), resource, &body)?;
+                    push_if_declared(
+                        resource,
+                        "tunnelId",
+                        serde_json::json!(observed.tunnel_id),
+                        &mut outputs,
+                    )?;
+                    push_if_declared(
+                        resource,
+                        "tunnelName",
+                        serde_json::json!(observed.tunnel_name),
+                        &mut outputs,
+                    )?;
+                    push_if_declared(
+                        resource,
+                        "privateHostname",
+                        serde_json::json!(observed.private_hostname),
+                        &mut outputs,
+                    )?;
+                    push_if_declared(
+                        resource,
+                        "tokenRef",
+                        serde_json::json!(observed.token_ref),
+                        &mut outputs,
+                    )?;
                     evidence.push_str(&format!("{}:{};", resource.id(), observed.tunnel_id));
                 }
                 ("cloudflare/route", 1) => {
                     let body: RouteBody = decode(resource)?;
-                    let observed = self.transport.apply_route(slice.graph_id(), resource, &body)?;
-                    push_if_declared(resource, "hostname", serde_json::json!(observed.hostname), &mut outputs)?;
+                    let observed = self
+                        .transport
+                        .apply_route(slice.graph_id(), resource, &body)?;
+                    push_if_declared(
+                        resource,
+                        "hostname",
+                        serde_json::json!(observed.hostname),
+                        &mut outputs,
+                    )?;
                     evidence.push_str(&format!("{}:{};", resource.id(), observed.hostname));
                 }
                 _ => {
@@ -237,6 +302,15 @@ where
     }
 }
 
+fn cloudflare_rank(resource: &Resource) -> u8 {
+    match resource.kind().name().as_str() {
+        "cloudflare/worker" => 0,
+        "cloudflare/tunnel" => 1,
+        "cloudflare/route" => 2,
+        _ => 3,
+    }
+}
+
 fn decode<T>(resource: &Resource) -> Result<T, CloudflareError>
 where
     T: for<'de> Deserialize<'de>,
@@ -255,8 +329,14 @@ fn push_if_declared(
     value: serde_json::Value,
     outputs: &mut Vec<henosis_types::ObservedOutput>,
 ) -> Result<(), CloudflareError> {
-    if resource.outputs().any(|declaration| declaration.name().as_str() == name) {
-        outputs.push(output(resource, name, value).map_err(|error| CloudflareError::Contract(error.to_string()))?);
+    if resource
+        .outputs()
+        .any(|declaration| declaration.name().as_str() == name)
+    {
+        outputs.push(
+            output(resource, name, value)
+                .map_err(|error| CloudflareError::Contract(error.to_string()))?,
+        );
     }
     Ok(())
 }
@@ -276,11 +356,20 @@ mod tests {
     use std::num::NonZeroU32;
     use std::sync::Mutex;
 
-    use henosis_types::{
-        ComponentName, ContentDigest, ControllerSlice, Generation, KindName, KindVersion,
-        NewResource, OutputAvailability, OutputDeclaration, OutputName, ResourceAddress,
-        ResourceName, ResourcePath, Retirement,
-    };
+    use henosis_types::ComponentName;
+    use henosis_types::ContentDigest;
+    use henosis_types::ControllerSlice;
+    use henosis_types::Generation;
+    use henosis_types::KindName;
+    use henosis_types::KindVersion;
+    use henosis_types::NewResource;
+    use henosis_types::OutputAvailability;
+    use henosis_types::OutputDeclaration;
+    use henosis_types::OutputName;
+    use henosis_types::ResourceAddress;
+    use henosis_types::ResourceName;
+    use henosis_types::ResourcePath;
+    use henosis_types::Retirement;
 
     use super::*;
 
@@ -292,7 +381,12 @@ mod tests {
     }
 
     impl CloudflareTransport for RecordedTransport {
-        fn apply_worker(&self, _graph: GraphId, resource: &Resource, _body: &WorkerBody) -> Result<WorkerObservation, CloudflareError> {
+        fn apply_worker(
+            &self,
+            _graph: GraphId,
+            resource: &Resource,
+            _body: &WorkerBody,
+        ) -> Result<WorkerObservation, CloudflareError> {
             self.record(resource);
             Ok(WorkerObservation {
                 url: "https://api.example.workers.dev".into(),
@@ -301,8 +395,25 @@ mod tests {
                 version_id: "version-1".into(),
             })
         }
-        fn apply_tunnel(&self, _graph: GraphId, _resource: &Resource, _body: &TunnelBody) -> Result<TunnelObservation, CloudflareError> { unreachable!() }
-        fn apply_route(&self, _graph: GraphId, _resource: &Resource, _body: &RouteBody) -> Result<RouteObservation, CloudflareError> { unreachable!() }
+
+        fn apply_tunnel(
+            &self,
+            _graph: GraphId,
+            _resource: &Resource,
+            _body: &TunnelBody,
+        ) -> Result<TunnelObservation, CloudflareError> {
+            unreachable!()
+        }
+
+        fn apply_route(
+            &self,
+            _graph: GraphId,
+            _resource: &Resource,
+            _body: &RouteBody,
+        ) -> Result<RouteObservation, CloudflareError> {
+            unreachable!()
+        }
+
         fn delete(&self, _graph: GraphId, resource: ResourceId) -> Result<(), CloudflareError> {
             self.digests.lock().unwrap().remove(&resource);
             self.deletions.lock().unwrap().push(resource);
@@ -324,38 +435,59 @@ mod tests {
     async fn reports_outputs_atomically_without_recreate_flapping_and_retires() {
         let controller = CloudflareController::new(RecordedTransport::default());
         let slice = slice();
-        let report = controller.execute(&ControllerCommand::Reconcile(slice.clone())).await.unwrap().unwrap();
+        let report = controller
+            .execute(&ControllerCommand::Reconcile(slice.clone()))
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(report.dispositions().len(), 1);
         assert_eq!(report.outputs().len(), 4);
-        controller.execute(&ControllerCommand::Reconcile(slice.clone())).await.unwrap();
+        controller
+            .execute(&ControllerCommand::Reconcile(slice.clone()))
+            .await
+            .unwrap();
         assert_eq!(*controller.transport.mutations.lock().unwrap(), 1);
-        controller.execute(&ControllerCommand::Retire(Retirement {
-            graph_id: slice.graph_id(),
-            last_generation: slice.generation(),
-            controller: controller.name().clone(),
-            resources: vec![slice.resources()[0].id()],
-        })).await.unwrap();
-        assert_eq!(controller.transport.deletions.lock().unwrap().as_slice(), &[slice.resources()[0].id()]);
+        controller
+            .execute(&ControllerCommand::Retire(Retirement {
+                graph_id: slice.graph_id(),
+                last_generation: slice.generation(),
+                controller: controller.name().clone(),
+                resources: vec![slice.resources()[0].id()],
+            }))
+            .await
+            .unwrap();
+        assert_eq!(
+            controller.transport.deletions.lock().unwrap().as_slice(),
+            &[slice.resources()[0].id()]
+        );
     }
 
     fn slice() -> ControllerSlice {
         let outputs = ["url", "workerName", "deploymentId", "versionId"]
             .into_iter()
-            .map(|name| OutputDeclaration::new(OutputName::new(name).unwrap(), OutputAvailability::Observed))
+            .map(|name| {
+                OutputDeclaration::new(OutputName::new(name).unwrap(), OutputAvailability::Observed)
+            })
             .collect();
         let resource = Resource::new(NewResource {
             id: ResourceId::from_bytes([4; 16]),
             path: ResourcePath::new(
                 ComponentName::new("api").unwrap(),
                 ResourceAddress::new(
-                    KindVersion::new(KindName::new("cloudflare/worker").unwrap(), NonZeroU32::new(1).unwrap()),
+                    KindVersion::new(
+                        KindName::new("cloudflare/worker").unwrap(),
+                        NonZeroU32::new(1).unwrap(),
+                    ),
                     ResourceName::new("api").unwrap(),
                 ),
             ),
             controller: controller_name(CONTROLLER_NAME),
-            body: serde_json::json!({"source":{"entry":"workers/api.ts"},"vars":{}}).try_into().unwrap(),
+            body: serde_json::json!({"source":{"entry":"workers/api.ts"},"vars":{}})
+                .try_into()
+                .unwrap(),
             outputs,
-        }).unwrap();
+        })
+        .unwrap();
         ControllerSlice::new(
             GraphId::from_bytes([3; 16]),
             Generation::new(1).unwrap(),

@@ -1,22 +1,32 @@
 //! Kubernetes publication controller.
 //!
-//! `k8s/object@1` bodies are already concrete Kubernetes objects. This controller preserves that
-//! vocabulary, writes one stable YAML file per resource under its component instance, and force
-//! updates the graph's `env/<graph-typeid>` branch in one Git commit. Publication is the finish line:
-//! without a cluster this controller deliberately claims no observed readiness outputs.
+//! `k8s/object@1` bodies are already concrete Kubernetes objects. This
+//! controller preserves that vocabulary, writes one stable YAML file per
+//! resource under its component instance, and force updates the graph's
+//! `env/<graph-typeid>` branch in one Git commit. Publication is the finish
+//! line: without a cluster this controller deliberately claims no observed
+//! readiness outputs.
 
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 
 use futures::FutureExt as _;
 use futures::future::BoxFuture;
-use henosis_controller_runtime::{
-    GitRepository, PublicationMode, controller_name, failed_report, publication_id, ready_report,
-};
-use henosis_types::{
-    Controller, ControllerCommand, ControllerError, ControllerName, ControllerReport,
-    ControllerSlice, GraphId, Resource, ResourceId,
-};
+use henosis_controller_runtime::GitRepository;
+use henosis_controller_runtime::PublicationMode;
+use henosis_controller_runtime::controller_name;
+use henosis_controller_runtime::failed_report;
+use henosis_controller_runtime::publication_id;
+use henosis_controller_runtime::ready_report;
+use henosis_types::Controller;
+use henosis_types::ControllerCommand;
+use henosis_types::ControllerError;
+use henosis_types::ControllerName;
+use henosis_types::ControllerReport;
+use henosis_types::ControllerSlice;
+use henosis_types::GraphId;
+use henosis_types::Resource;
+use henosis_types::ResourceId;
 
 const CONTROLLER_NAME: &str = "k8s";
 const KIND: &str = "k8s/object";
@@ -31,6 +41,7 @@ pub struct K8sController {
 struct PublishedGraph {
     files: BTreeMap<String, Vec<u8>>,
     resources: BTreeMap<ResourceId, String>,
+    revision: Option<String>,
 }
 
 impl K8sController {
@@ -52,6 +63,17 @@ impl K8sController {
                     .map_err(|report_error| ControllerError::new(report_error.to_string()));
             }
         };
+        if let Some(revision) = self
+            .state
+            .lock()
+            .expect("k8s controller state lock is not poisoned")
+            .get(&slice.graph_id())
+            .filter(|published| published.files == graph.files)
+            .and_then(|published| published.revision.clone())
+        {
+            return ready_report(slice, Some(publication_id(revision.as_bytes())), Vec::new())
+                .map_err(|error| ControllerError::new(error.to_string()));
+        }
         let branch = branch(slice.graph_id());
         let publication = self
             .repository
@@ -59,9 +81,15 @@ impl K8sController {
                 &branch,
                 PublicationMode::ReplaceBranch,
                 &graph.files,
-                &format!("Publish Kubernetes graph {} generation {}", slice.graph_id(), slice.generation()),
+                &format!(
+                    "Publish Kubernetes graph {} generation {}",
+                    slice.graph_id(),
+                    slice.generation()
+                ),
             )
             .map_err(|error| ControllerError::new(error.to_string()))?;
+        let mut graph = graph;
+        graph.revision = Some(publication.revision.clone());
         self.state
             .lock()
             .expect("k8s controller state lock is not poisoned")
@@ -74,7 +102,11 @@ impl K8sController {
         .map_err(|error| ControllerError::new(error.to_string()))
     }
 
-    fn supersede(&self, graph_id: GraphId, resources: &[ResourceId]) -> Result<(), ControllerError> {
+    fn supersede(
+        &self,
+        graph_id: GraphId,
+        resources: &[ResourceId],
+    ) -> Result<(), ControllerError> {
         let mut state = self
             .state
             .lock()
@@ -87,7 +119,8 @@ impl K8sController {
                 graph.files.remove(&path);
             }
         }
-        self.repository
+        let publication = self
+            .repository
             .publish(
                 &branch(graph_id),
                 PublicationMode::ReplaceBranch,
@@ -95,6 +128,7 @@ impl K8sController {
                 &format!("Remove superseded Kubernetes resources for {graph_id}"),
             )
             .map_err(|error| ControllerError::new(error.to_string()))?;
+        graph.revision = Some(publication.revision);
         Ok(())
     }
 }
@@ -157,13 +191,18 @@ fn render(slice: &ControllerSlice) -> Result<PublishedGraph, String> {
         files.insert(path.clone(), format!("---\n{yaml}").into_bytes());
         resources.insert(resource.id(), path);
     }
-    Ok(PublishedGraph { files, resources })
+    Ok(PublishedGraph {
+        files,
+        resources,
+        revision: None,
+    })
 }
 
 fn validate_resource(resource: &Resource) -> Result<(), String> {
     if resource.kind().name().as_str() != KIND || resource.kind().version().get() != 1 {
         return Err(format!(
-            "error[k8s.kind.unsupported]: {} owns {}, expected k8s/object@1\n  = help: emit native Kubernetes objects through @henosis/platform-k8s",
+            "error[k8s.kind.unsupported]: {} owns {}, expected k8s/object@1\n  = help: emit \
+             native Kubernetes objects through @henosis/platform-k8s",
             resource.path(),
             resource.kind()
         ));
@@ -194,11 +233,19 @@ mod tests {
     use std::num::NonZeroU32;
     use std::process::Command;
 
-    use henosis_types::{
-        ComponentName, ContentDigest, ControllerCommand, ControllerSlice, Generation, KindName,
-        KindVersion, NewResource, OutputDeclaration, ResourceAddress, ResourceName, ResourcePath,
-        Retirement,
-    };
+    use henosis_types::ComponentName;
+    use henosis_types::ContentDigest;
+    use henosis_types::ControllerCommand;
+    use henosis_types::ControllerSlice;
+    use henosis_types::Generation;
+    use henosis_types::KindName;
+    use henosis_types::KindVersion;
+    use henosis_types::NewResource;
+    use henosis_types::OutputDeclaration;
+    use henosis_types::ResourceAddress;
+    use henosis_types::ResourceName;
+    use henosis_types::ResourcePath;
+    use henosis_types::Retirement;
 
     use super::*;
 
@@ -238,7 +285,12 @@ mod tests {
         let yaml_files = std::fs::read_dir(component_directory)
             .unwrap()
             .filter_map(Result::ok)
-            .filter(|entry| entry.path().extension().is_some_and(|extension| extension == "yaml"))
+            .filter(|entry| {
+                entry
+                    .path()
+                    .extension()
+                    .is_some_and(|extension| extension == "yaml")
+            })
             .count();
         assert_eq!(yaml_files, 1);
         controller
@@ -251,9 +303,17 @@ mod tests {
             .await
             .unwrap();
         let status = Command::new("git")
-            .args(["--git-dir", remote.path().to_str().unwrap(), "show-ref", "--verify", &format!("refs/heads/{branch}")])
-            .status()
-            .unwrap();
+            .args([
+                "--git-dir",
+                remote.path().to_str().unwrap(),
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                &format!("refs/heads/{branch}"),
+            ])
+            .output()
+            .unwrap()
+            .status;
         assert!(!status.success());
     }
 
@@ -290,7 +350,12 @@ mod tests {
     fn revision(remote: &std::path::Path, branch: &str) -> String {
         String::from_utf8(
             Command::new("git")
-                .args(["--git-dir", remote.to_str().unwrap(), "rev-parse", &format!("refs/heads/{branch}")])
+                .args([
+                    "--git-dir",
+                    remote.to_str().unwrap(),
+                    "rev-parse",
+                    &format!("refs/heads/{branch}"),
+                ])
                 .output()
                 .unwrap()
                 .stdout,
@@ -301,6 +366,13 @@ mod tests {
     }
 
     fn git<'a>(current: &std::path::Path, args: impl IntoIterator<Item = &'a str>) {
-        assert!(Command::new("git").current_dir(current).args(args).status().unwrap().success());
+        assert!(
+            Command::new("git")
+                .current_dir(current)
+                .args(args)
+                .status()
+                .unwrap()
+                .success()
+        );
     }
 }

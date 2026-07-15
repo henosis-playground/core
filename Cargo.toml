@@ -26,6 +26,7 @@ faultline = "0.1.0"
 futures = "0.3"
 hex = "0.4"
 iddqd = { version = "0.4.5", features = ["serde"] }
+postgres = "0.19"
 newtype-uuid = { git = "https://github.com/henosis-playground/newtype-uuid.git", rev = "f20e0aff365e59de7eadd29e769cf0c93990c587", features = [
   "serde",
   "v7",

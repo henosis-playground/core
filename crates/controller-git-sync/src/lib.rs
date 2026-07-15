@@ -1,8 +1,10 @@
 //! Bidirectional long-lived graph pin synchronization.
 //!
-//! This controller intentionally does **not** implement `henosis_types::Controller`: resource slices
-//! cannot express graph membership or bundle pins, and translating Git edits back into graph intent
-//! is not target reconciliation. Its narrow [`GraphIntentApi`] seam is the stress-test result.
+//! This controller intentionally does **not** implement
+//! `henosis_types::Controller`: resource slices cannot express graph membership
+//! or bundle pins, and translating Git edits back into graph intent
+//! is not target reconciliation. Its narrow [`GraphIntentApi`] seam is the
+//! stress-test result.
 //!
 //! Files live at `henosis/graphs/<graph-typeid>.toml` on `main`:
 //!
@@ -16,13 +18,18 @@
 //! source_rev = "0123456789abcdef"
 //! ```
 //!
-//! A file is the complete pin set for one long-lived graph. Removing it requests graph retirement.
+//! A file is the complete pin set for one long-lived graph. Removing it
+//! requests graph retirement.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
-use henosis_controller_runtime::{GitError, GitRepository, PublicationMode};
+use henosis_controller_runtime::GitError;
+use henosis_controller_runtime::GitRepository;
+use henosis_controller_runtime::PublicationMode;
 use henosis_types::GraphId;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use thiserror::Error;
 
 const DIRECTORY: &str = "henosis/graphs";
@@ -229,7 +236,10 @@ mod tests {
 
         edit_remote(remote.path(), graph, Some(pins(graph, "rev-b")));
         assert_eq!(controller.poll_git_intent().unwrap(), 1);
-        assert_eq!(controller.api.applied.borrow()[0].components["api"].source_rev, "rev-b");
+        assert_eq!(
+            controller.api.applied.borrow()[0].components["api"].source_rev,
+            "rev-b"
+        );
 
         edit_remote(remote.path(), graph, None);
         assert_eq!(controller.poll_git_intent().unwrap(), 1);
@@ -256,20 +266,42 @@ mod tests {
         let checkout = tempfile::tempdir().unwrap();
         git(checkout.path(), ["init", "--quiet", "-b", "main"]);
         git(checkout.path(), ["config", "user.name", "Test"]);
-        git(checkout.path(), ["config", "user.email", "test@example.com"]);
+        git(
+            checkout.path(),
+            ["config", "user.email", "test@example.com"],
+        );
         std::fs::write(checkout.path().join("README"), "deploy\n").unwrap();
         git(checkout.path(), ["add", "README"]);
         git(checkout.path(), ["commit", "--quiet", "-m", "initial"]);
-        git(checkout.path(), ["remote", "add", "origin", remote.to_str().unwrap()]);
+        git(
+            checkout.path(),
+            ["remote", "add", "origin", remote.to_str().unwrap()],
+        );
         git(checkout.path(), ["push", "--quiet", "origin", "main"]);
     }
 
     fn edit_remote(remote: &std::path::Path, graph: GraphId, pins: Option<GraphPins>) {
         let checkout = tempfile::tempdir().unwrap();
-        git(checkout.path(), ["clone", "--quiet", "--branch", "main", remote.to_str().unwrap(), "."]);
+        git(
+            checkout.path(),
+            [
+                "clone",
+                "--quiet",
+                "--branch",
+                "main",
+                remote.to_str().unwrap(),
+                ".",
+            ],
+        );
         git(checkout.path(), ["config", "user.name", "Kargo"]);
-        git(checkout.path(), ["config", "user.email", "kargo@example.com"]);
-        let path = checkout.path().join(DIRECTORY).join(format!("{graph}.toml"));
+        git(
+            checkout.path(),
+            ["config", "user.email", "kargo@example.com"],
+        );
+        let path = checkout
+            .path()
+            .join(DIRECTORY)
+            .join(format!("{graph}.toml"));
         if let Some(pins) = pins {
             std::fs::write(path, toml::to_string_pretty(&pins).unwrap()).unwrap();
         } else {
@@ -281,6 +313,13 @@ mod tests {
     }
 
     fn git<'a>(current: &std::path::Path, args: impl IntoIterator<Item = &'a str>) {
-        assert!(Command::new("git").current_dir(current).args(args).status().unwrap().success());
+        assert!(
+            Command::new("git")
+                .current_dir(current)
+                .args(args)
+                .status()
+                .unwrap()
+                .success()
+        );
     }
 }
