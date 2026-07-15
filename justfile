@@ -34,13 +34,10 @@ test *flags:
 doc *flags:
     RUSTDOCFLAGS="--cfg docsrs" cargo doc --all-features --no-deps --document-private-items --keep-going {{ flags }}
 
-# Runs the clean local D26 bundle → core → controllers → Git/frontend demo.
 
 # Builds benchmark workload artifacts and reconciles them against live Cloudflare.
 
-# Runs the live D26 showcase and leaves the graph, Workers, core, and s2-lite up.
 
-# Retires the showcase graph, verifies Cloudflare cleanup, and stops local services.
 
 [private]
 _assert-clean:
