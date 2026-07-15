@@ -1,0 +1,22 @@
+[package]
+name = "henosis-controller-k8s"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+futures.workspace = true
+henosis-controller-runtime.workspace = true
+henosis-types.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+tokio.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true
