@@ -1,23 +1,26 @@
 //! Kubernetes publication controller.
 //!
-//! `k8s/object@1` bodies are already concrete Kubernetes objects. This
-//! controller preserves that vocabulary, writes one stable YAML file per
-//! resource under its component instance, and force updates the graph's
-//! `env/<graph-typeid>` branch in one Git commit. Publication is the finish
-//! line: without a cluster this controller deliberately claims no observed
-//! readiness outputs.
+//! Each `k8s/object@1` resource owns one directory on the graph branch. The
+//! directory and the Kubernetes object both carry the graph and resource
+//! TypeIDs, so a fresh controller instance can observe and retire the resource
+//! without process memory.
 
 use std::collections::BTreeMap;
-use std::sync::Mutex;
 
 use futures::FutureExt as _;
 use futures::future::BoxFuture;
 use henosis_controller_runtime::GitRepository;
+use henosis_controller_runtime::PerResourceReconciler;
 use henosis_controller_runtime::PublicationMode;
+use henosis_controller_runtime::ReconcileDecision;
+use henosis_controller_runtime::ResourceConvergence;
+use henosis_controller_runtime::ResourceGoal;
 use henosis_controller_runtime::controller_name;
 use henosis_controller_runtime::failed_report;
 use henosis_controller_runtime::publication_id;
 use henosis_controller_runtime::ready_report;
+use henosis_controller_runtime::reconcile_absent;
+use henosis_controller_runtime::reconcile_slice;
 use henosis_types::Controller;
 use henosis_types::ControllerCommand;
 use henosis_types::ControllerError;
@@ -26,22 +29,29 @@ use henosis_types::ControllerReport;
 use henosis_types::ControllerSlice;
 use henosis_types::GraphId;
 use henosis_types::Resource;
-use henosis_types::ResourceId;
+use serde_json::Map;
+use serde_json::Value;
 
 const CONTROLLER_NAME: &str = "k8s";
 const KIND: &str = "k8s/object";
+const GRAPH_LABEL: &str = "henosis.dev/graph-id";
+const RESOURCE_LABEL: &str = "henosis.dev/resource-id";
 
 pub struct K8sController {
     name: ControllerName,
     repository: GitRepository,
-    state: Mutex<BTreeMap<GraphId, PublishedGraph>>,
 }
 
-#[derive(Clone, Debug)]
-struct PublishedGraph {
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum K8sObservation {
+    Missing,
+    Owned(BTreeMap<String, Vec<u8>>),
+    Foreign,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct K8sPublishAction {
     files: BTreeMap<String, Vec<u8>>,
-    resources: BTreeMap<ResourceId, String>,
-    revision: Option<String>,
 }
 
 impl K8sController {
@@ -50,86 +60,140 @@ impl K8sController {
         Self {
             name: controller_name(CONTROLLER_NAME),
             repository,
-            state: Mutex::new(BTreeMap::new()),
         }
     }
 
-    fn reconcile(&self, slice: &ControllerSlice) -> Result<ControllerReport, ControllerError> {
-        let graph = render(slice).map_err(|message| ControllerError::new(message.clone()));
-        let graph = match graph {
-            Ok(graph) => graph,
+    async fn reconcile(
+        &self,
+        slice: &ControllerSlice,
+    ) -> Result<ControllerReport, ControllerError> {
+        let convergence = match reconcile_slice(self, slice).await {
+            Ok(convergence) => convergence,
             Err(error) => {
                 return failed_report(slice, error.to_string())
                     .map_err(|report_error| ControllerError::new(report_error.to_string()));
             }
         };
-        if let Some(revision) = self
-            .state
-            .lock()
-            .expect("k8s controller state lock is not poisoned")
-            .get(&slice.graph_id())
-            .filter(|published| published.files == graph.files)
-            .and_then(|published| published.revision.clone())
-        {
-            return ready_report(slice, Some(publication_id(revision.as_bytes())), Vec::new())
-                .map_err(|error| ControllerError::new(error.to_string()));
-        }
-        let branch = branch(slice.graph_id());
-        let publication = self
-            .repository
-            .publish(
-                &branch,
-                PublicationMode::ReplaceBranch,
-                &graph.files,
-                &format!(
-                    "Publish Kubernetes graph {} generation {}",
-                    slice.graph_id(),
-                    slice.generation()
-                ),
-            )
-            .map_err(|error| ControllerError::new(error.to_string()))?;
-        let mut graph = graph;
-        graph.revision = Some(publication.revision.clone());
-        self.state
-            .lock()
-            .expect("k8s controller state lock is not poisoned")
-            .insert(slice.graph_id(), graph);
         ready_report(
             slice,
-            Some(publication_id(publication.revision.as_bytes())),
-            Vec::new(),
+            Some(publication_id(&convergence.evidence)),
+            convergence.outputs,
         )
         .map_err(|error| ControllerError::new(error.to_string()))
     }
 
-    fn supersede(
+    async fn remove(
         &self,
         graph_id: GraphId,
         resources: &[Resource],
     ) -> Result<(), ControllerError> {
-        let mut state = self
-            .state
-            .lock()
-            .expect("k8s controller state lock is not poisoned");
-        let Some(graph) = state.get_mut(&graph_id) else {
-            return Ok(());
-        };
-        for resource in resources {
-            if let Some(path) = graph.resources.remove(&resource.id()) {
-                graph.files.remove(&path);
+        reconcile_absent(self, graph_id, resources)
+            .await
+            .map_err(|error| ControllerError::new(error.to_string()))?;
+        if self
+            .repository
+            .read_directory(&branch(graph_id), "resources")
+            .map_err(|error| ControllerError::new(error.to_string()))?
+            .is_empty()
+        {
+            self.repository
+                .delete_branch(&branch(graph_id))
+                .map_err(|error| ControllerError::new(error.to_string()))?;
+        }
+        Ok(())
+    }
+}
+
+impl PerResourceReconciler for K8sController {
+    type Observation = K8sObservation;
+    type Action = K8sPublishAction;
+    type Error = String;
+
+    fn observe<'a>(
+        &'a self,
+        graph_id: GraphId,
+        resource: &'a Resource,
+    ) -> BoxFuture<'a, Result<Self::Observation, Self::Error>> {
+        async move {
+            let files = self
+                .repository
+                .read_directory(&branch(graph_id), &resource_directory(resource))
+                .map_err(|error| error.to_string())?;
+            if files.is_empty() {
+                return Ok(K8sObservation::Missing);
+            }
+            if ownership_matches(&files, graph_id, resource.id()) {
+                Ok(K8sObservation::Owned(files))
+            } else {
+                Ok(K8sObservation::Foreign)
             }
         }
-        let publication = self
-            .repository
-            .publish(
-                &branch(graph_id),
-                PublicationMode::ReplaceBranch,
-                &graph.files,
-                &format!("Remove superseded Kubernetes resources for {graph_id}"),
-            )
-            .map_err(|error| ControllerError::new(error.to_string()))?;
-        graph.revision = Some(publication.revision);
-        Ok(())
+        .boxed()
+    }
+
+    fn diff(
+        &self,
+        graph_id: GraphId,
+        resource: &Resource,
+        goal: ResourceGoal,
+        observed: &Self::Observation,
+    ) -> Result<ReconcileDecision<Self::Action>, Self::Error> {
+        if observed == &K8sObservation::Foreign {
+            return Err(format!(
+                "refusing to mutate Kubernetes publication for {} because its ownership labels do not match graph {} and resource {}",
+                resource.path(),
+                graph_id,
+                resource.id()
+            ));
+        }
+        match goal {
+            ResourceGoal::Absent if observed == &K8sObservation::Missing => {
+                Ok(ReconcileDecision::Converged(ResourceConvergence::default()))
+            }
+            ResourceGoal::Absent => Ok(ReconcileDecision::Act(K8sPublishAction {
+                files: BTreeMap::new(),
+            })),
+            ResourceGoal::Present => {
+                let desired = render_resource(graph_id, resource)?;
+                if observed == &K8sObservation::Owned(desired.clone()) {
+                    Ok(ReconcileDecision::Converged(ResourceConvergence {
+                        outputs: Vec::new(),
+                        evidence: desired
+                            .values()
+                            .flat_map(|bytes| bytes.iter().copied())
+                            .collect(),
+                    }))
+                } else {
+                    Ok(ReconcileDecision::Act(K8sPublishAction { files: desired }))
+                }
+            }
+        }
+    }
+
+    fn act<'a>(
+        &'a self,
+        graph_id: GraphId,
+        resource: &'a Resource,
+        action: Self::Action,
+    ) -> BoxFuture<'a, Result<(), Self::Error>> {
+        async move {
+            let directory = resource_directory(resource);
+            let files = action
+                .files
+                .into_iter()
+                .map(|(path, bytes)| (format!("{directory}/{path}"), bytes))
+                .collect();
+            self.repository
+                .publish(
+                    &branch(graph_id),
+                    PublicationMode::ReplaceDirectory(&directory),
+                    &files,
+                    &format!("Reconcile Kubernetes resource {}", resource.id()),
+                )
+                .map_err(|error| error.to_string())?;
+            Ok(())
+        }
+        .boxed()
     }
 }
 
@@ -144,19 +208,15 @@ impl Controller for K8sController {
     ) -> BoxFuture<'a, Result<Option<ControllerReport>, ControllerError>> {
         async move {
             match command {
-                ControllerCommand::Reconcile(slice) => self.reconcile(slice).map(Some),
+                ControllerCommand::Reconcile(slice) => self.reconcile(slice).await.map(Some),
                 ControllerCommand::Supersede(supersession) => {
-                    self.supersede(supersession.graph_id, &supersession.resources)?;
+                    self.remove(supersession.graph_id, &supersession.resources)
+                        .await?;
                     Ok(None)
                 }
                 ControllerCommand::Retire(retirement) => {
-                    self.repository
-                        .delete_branch(&branch(retirement.graph_id))
-                        .map_err(|error| ControllerError::new(error.to_string()))?;
-                    self.state
-                        .lock()
-                        .expect("k8s controller state lock is not poisoned")
-                        .remove(&retirement.graph_id);
+                    self.remove(retirement.graph_id, &retirement.resources)
+                        .await?;
                     Ok(None)
                 }
             }
@@ -165,44 +225,63 @@ impl Controller for K8sController {
     }
 }
 
-fn render(slice: &ControllerSlice) -> Result<PublishedGraph, String> {
-    let mut files = BTreeMap::new();
-    let mut resources = BTreeMap::new();
-    files.insert(
-        ".henosis-publication.json".into(),
-        format!(
-            "{{\"graph\":\"{}\",\"generation\":{},\"planDigest\":\"{}\"}}\n",
-            slice.graph_id(),
-            slice.generation().ordinal(),
-            slice.plan_digest()
-        )
-        .into_bytes(),
+fn render_resource(
+    graph_id: GraphId,
+    resource: &Resource,
+) -> Result<BTreeMap<String, Vec<u8>>, String> {
+    validate_resource(resource)?;
+    let mut body = resource.body().as_json().clone();
+    let object = body
+        .as_object_mut()
+        .expect("resource validation proved the body is an object");
+    let metadata = object
+        .entry("metadata")
+        .or_insert_with(|| Value::Object(Map::new()))
+        .as_object_mut()
+        .ok_or_else(|| format!("{} metadata must be an object", resource.path()))?;
+    let labels = metadata
+        .entry("labels")
+        .or_insert_with(|| Value::Object(Map::new()))
+        .as_object_mut()
+        .ok_or_else(|| format!("{} metadata.labels must be an object", resource.path()))?;
+    labels.insert(GRAPH_LABEL.into(), Value::String(graph_id.to_string()));
+    labels.insert(
+        RESOURCE_LABEL.into(),
+        Value::String(resource.id().to_string()),
     );
-    for resource in slice.resources() {
-        validate_resource(resource)?;
-        let path = format!(
-            "components/{}/{}--{}.yaml",
-            resource.path().instance(),
-            resource.path().address().name(),
-            resource.id()
-        );
-        let yaml = serde_yaml::to_string(resource.body().as_json())
-            .map_err(|error| format!("cannot serialize {} as YAML: {error}", resource.path()))?;
-        files.insert(path.clone(), format!("---\n{yaml}").into_bytes());
-        resources.insert(resource.id(), path);
-    }
-    Ok(PublishedGraph {
-        files,
-        resources,
-        revision: None,
-    })
+    let yaml = serde_yaml::to_string(&body)
+        .map_err(|error| format!("cannot serialize {} as YAML: {error}", resource.path()))?;
+    Ok(BTreeMap::from([(
+        "resource.yaml".into(),
+        format!("---\n{yaml}").into_bytes(),
+    )]))
+}
+
+fn ownership_matches(
+    files: &BTreeMap<String, Vec<u8>>,
+    graph_id: GraphId,
+    resource_id: henosis_types::ResourceId,
+) -> bool {
+    let Some(bytes) = files.get("resource.yaml") else {
+        return false;
+    };
+    let Ok(value) = serde_yaml::from_slice::<Value>(bytes) else {
+        return false;
+    };
+    value
+        .pointer("/metadata/labels")
+        .and_then(Value::as_object)
+        .is_some_and(|labels| {
+            labels.get(GRAPH_LABEL).and_then(Value::as_str) == Some(graph_id.to_string().as_str())
+                && labels.get(RESOURCE_LABEL).and_then(Value::as_str)
+                    == Some(resource_id.to_string().as_str())
+        })
 }
 
 fn validate_resource(resource: &Resource) -> Result<(), String> {
     if resource.kind().name().as_str() != KIND || resource.kind().version().get() != 1 {
         return Err(format!(
-            "error[k8s.kind.unsupported]: {} owns {}, expected k8s/object@1\n  = help: emit \
-             native Kubernetes objects through @henosis/platform-k8s",
+            "error[k8s.kind.unsupported]: {} owns {}, expected k8s/object@1\n  = help: emit native Kubernetes objects through @henosis/platform-k8s",
             resource.path(),
             resource.kind()
         ));
@@ -214,7 +293,7 @@ fn validate_resource(resource: &Resource) -> Result<(), String> {
         )
     })?;
     for field in ["apiVersion", "kind"] {
-        if !object.get(field).is_some_and(serde_json::Value::is_string) {
+        if !object.get(field).is_some_and(Value::is_string) {
             return Err(format!(
                 "error[k8s.object.invalid]: {} is missing string field {field:?}",
                 resource.path()
@@ -222,6 +301,10 @@ fn validate_resource(resource: &Resource) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn resource_directory(resource: &Resource) -> String {
+    format!("resources/{}", resource.id())
 }
 
 fn branch(graph_id: GraphId) -> String {
@@ -235,14 +318,13 @@ mod tests {
 
     use henosis_types::ComponentName;
     use henosis_types::ContentDigest;
-    use henosis_types::ControllerCommand;
-    use henosis_types::ControllerSlice;
     use henosis_types::Generation;
     use henosis_types::KindName;
     use henosis_types::KindVersion;
     use henosis_types::NewResource;
     use henosis_types::OutputDeclaration;
     use henosis_types::ResourceAddress;
+    use henosis_types::ResourceId;
     use henosis_types::ResourceName;
     use henosis_types::ResourcePath;
     use henosis_types::Retirement;
@@ -250,71 +332,66 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn publishes_idempotently_and_retires_the_branch() {
-        let remote = tempfile::tempdir().unwrap();
-        git(remote.path(), ["init", "--bare", "--quiet"]);
+    async fn converges_one_action_at_a_time_without_flapping() {
+        let remote = bare_repository();
         let controller = K8sController::new(GitRepository::new(remote.path()));
         let slice = slice();
-        let report = controller
+        let first = reconcile_slice(&controller, &slice).await.unwrap();
+        assert_eq!((first.actions, first.passes), (1, 2));
+        let second = reconcile_slice(&controller, &slice).await.unwrap();
+        assert_eq!((second.actions, second.passes), (0, 1));
+    }
+
+    #[tokio::test]
+    async fn fresh_controller_retires_from_target_observation() {
+        let remote = bare_repository();
+        let slice = slice();
+        K8sController::new(GitRepository::new(remote.path()))
             .execute(&ControllerCommand::Reconcile(slice.clone()))
             .await
-            .unwrap()
             .unwrap();
-        assert_eq!(report.dispositions().len(), 1);
-        assert!(report.outputs().next().is_none());
-        let branch = branch(slice.graph_id());
-        let first = revision(remote.path(), &branch);
-        controller
-            .execute(&ControllerCommand::Reconcile(slice.clone()))
-            .await
-            .unwrap();
-        assert_eq!(revision(remote.path(), &branch), first);
-        let checkout = tempfile::tempdir().unwrap();
-        git(
-            checkout.path(),
-            [
-                "clone",
-                "--quiet",
-                "--branch",
-                &branch,
-                remote.path().to_str().unwrap(),
-                ".",
-            ],
-        );
-        let component_directory = checkout.path().join("components/api");
-        let yaml_files = std::fs::read_dir(component_directory)
-            .unwrap()
-            .filter_map(Result::ok)
-            .filter(|entry| {
-                entry
-                    .path()
-                    .extension()
-                    .is_some_and(|extension| extension == "yaml")
-            })
-            .count();
-        assert_eq!(yaml_files, 1);
-        controller
+        let restarted = K8sController::new(GitRepository::new(remote.path()));
+        restarted
             .execute(&ControllerCommand::Retire(Retirement {
                 graph_id: slice.graph_id(),
                 last_generation: slice.generation(),
-                controller: controller.name().clone(),
-                resources: vec![slice.resources()[0].clone()],
+                controller: restarted.name().clone(),
+                resources: slice.resources().to_vec(),
             }))
             .await
             .unwrap();
-        let status = Command::new("git")
-            .args([
-                "--git-dir",
-                remote.path().to_str().unwrap(),
-                "rev-parse",
-                "--verify",
-                "--quiet",
-                &format!("refs/heads/{branch}"),
-            ])
-            .output()
-            .unwrap()
-            .status;
-        assert!(!status.success());
+        assert!(!branch_exists(remote.path(), &branch(slice.graph_id())));
+    }
+
+    #[tokio::test]
+    async fn refuses_matching_path_with_wrong_ownership_labels() {
+        let remote = bare_repository();
+        let slice = slice();
+        let resource = &slice.resources()[0];
+        let repository = GitRepository::new(remote.path());
+        repository
+            .publish(
+                &branch(slice.graph_id()),
+                PublicationMode::ReplaceDirectory(&resource_directory(resource)),
+                &BTreeMap::from([(
+                    format!("{}/resource.yaml", resource_directory(resource)),
+                    b"---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  labels:\n    henosis.dev/graph-id: graph_wrong\n    henosis.dev/resource-id: resource_wrong\n".to_vec(),
+                )]),
+                "Seed foreign resource",
+            )
+            .unwrap();
+        let before = revision(remote.path(), &branch(slice.graph_id()));
+        let error = reconcile_slice(&K8sController::new(repository), &slice)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("ownership labels do not match"));
+        assert_eq!(revision(remote.path(), &branch(slice.graph_id())), before);
+    }
+
+    fn bare_repository() -> tempfile::TempDir {
+        let remote = tempfile::tempdir().unwrap();
+        git(remote.path(), ["init", "--bare", "--quiet"]);
+        remote
     }
 
     fn slice() -> ControllerSlice {
@@ -363,6 +440,21 @@ mod tests {
         .unwrap()
         .trim()
         .into()
+    }
+
+    fn branch_exists(remote: &std::path::Path, branch: &str) -> bool {
+        Command::new("git")
+            .args([
+                "--git-dir",
+                remote.to_str().unwrap(),
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                &format!("refs/heads/{branch}"),
+            ])
+            .status()
+            .unwrap()
+            .success()
     }
 
     fn git<'a>(current: &std::path::Path, args: impl IntoIterator<Item = &'a str>) {

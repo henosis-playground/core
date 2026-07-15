@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use base64::Engine as _;
+use futures::future::BoxFuture;
 use henosis_types::ArtifactDigest;
 use henosis_types::ArtifactStore;
 use henosis_types::ArtifactStoreError;
@@ -17,6 +18,7 @@ use henosis_types::ControllerName;
 use henosis_types::ControllerReport;
 use henosis_types::ControllerReportError;
 use henosis_types::ControllerSlice;
+use henosis_types::GraphId;
 use henosis_types::NativeValue;
 use henosis_types::NewControllerReport;
 use henosis_types::ObservedOutput;
@@ -30,6 +32,172 @@ use serde::Deserialize;
 use sha2::Digest as _;
 use sha2::Sha256;
 use thiserror::Error;
+
+// === PER-RESOURCE RECONCILIATION ===
+
+const MAX_ACTIONS_PER_RESOURCE: usize = 1_024;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ResourceGoal {
+    Present,
+    Absent,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ReconcileDecision<Action> {
+    Act(Action),
+    Converged(ResourceConvergence),
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ResourceConvergence {
+    pub outputs: Vec<ObservedOutput>,
+    pub evidence: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct SliceConvergence {
+    pub outputs: Vec<ObservedOutput>,
+    pub evidence: Vec<u8>,
+    pub actions: usize,
+    pub passes: usize,
+}
+
+pub trait PerResourceReconciler: Send + Sync {
+    type Observation: Send;
+    type Action: Send;
+    type Error;
+
+    fn observe<'a>(
+        &'a self,
+        graph_id: GraphId,
+        resource: &'a Resource,
+    ) -> BoxFuture<'a, Result<Self::Observation, Self::Error>>;
+
+    fn diff(
+        &self,
+        graph_id: GraphId,
+        resource: &Resource,
+        goal: ResourceGoal,
+        observed: &Self::Observation,
+    ) -> Result<ReconcileDecision<Self::Action>, Self::Error>;
+
+    fn act<'a>(
+        &'a self,
+        graph_id: GraphId,
+        resource: &'a Resource,
+        action: Self::Action,
+    ) -> BoxFuture<'a, Result<(), Self::Error>>;
+}
+
+pub async fn reconcile_slice<R>(
+    reconciler: &R,
+    slice: &ControllerSlice,
+) -> Result<SliceConvergence, ReconcileLoopError<R::Error>>
+where
+    R: PerResourceReconciler,
+{
+    let mut convergence = SliceConvergence::default();
+    for resource in slice.resources() {
+        let resource_convergence = reconcile_resource(
+            reconciler,
+            slice.graph_id(),
+            resource,
+            ResourceGoal::Present,
+            &mut convergence,
+        )
+        .await?;
+        convergence.outputs.extend(resource_convergence.outputs);
+        convergence
+            .evidence
+            .extend_from_slice(resource.id().to_string().as_bytes());
+        convergence.evidence.push(b'=');
+        convergence
+            .evidence
+            .extend_from_slice(&resource_convergence.evidence);
+        convergence.evidence.push(b';');
+    }
+    for resource in slice.superseded() {
+        reconcile_resource(
+            reconciler,
+            slice.graph_id(),
+            resource,
+            ResourceGoal::Absent,
+            &mut convergence,
+        )
+        .await?;
+    }
+    Ok(convergence)
+}
+
+pub async fn reconcile_absent<R>(
+    reconciler: &R,
+    graph_id: GraphId,
+    resources: &[Resource],
+) -> Result<SliceConvergence, ReconcileLoopError<R::Error>>
+where
+    R: PerResourceReconciler,
+{
+    let mut convergence = SliceConvergence::default();
+    for resource in resources {
+        reconcile_resource(
+            reconciler,
+            graph_id,
+            resource,
+            ResourceGoal::Absent,
+            &mut convergence,
+        )
+        .await?;
+    }
+    Ok(convergence)
+}
+
+async fn reconcile_resource<R>(
+    reconciler: &R,
+    graph_id: GraphId,
+    resource: &Resource,
+    goal: ResourceGoal,
+    totals: &mut SliceConvergence,
+) -> Result<ResourceConvergence, ReconcileLoopError<R::Error>>
+where
+    R: PerResourceReconciler,
+{
+    let mut resource_actions = 0;
+    loop {
+        totals.passes += 1;
+        let observed = reconciler
+            .observe(graph_id, resource)
+            .await
+            .map_err(ReconcileLoopError::Target)?;
+        match reconciler
+            .diff(graph_id, resource, goal, &observed)
+            .map_err(ReconcileLoopError::Target)?
+        {
+            ReconcileDecision::Converged(convergence) => return Ok(convergence),
+            ReconcileDecision::Act(action) => {
+                if resource_actions == MAX_ACTIONS_PER_RESOURCE {
+                    return Err(ReconcileLoopError::DidNotConverge {
+                        resource: resource.id().to_string(),
+                    });
+                }
+                reconciler
+                    .act(graph_id, resource, action)
+                    .await
+                    .map_err(ReconcileLoopError::Target)?;
+                resource_actions += 1;
+                totals.actions += 1;
+            }
+        }
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum ReconcileLoopError<E> {
+    #[error("target reconciliation failed: {0}")]
+    Target(E),
+    #[error("resource {resource} did not converge after {MAX_ACTIONS_PER_RESOURCE} actions")]
+    DidNotConverge { resource: String },
+}
 
 // === ATOMIC REPORTS ===
 
@@ -150,7 +318,7 @@ impl ArtifactStore for DirectoryArtifactStore {
     fn fetch(
         &self,
         digest: ArtifactDigest,
-    ) -> futures::future::BoxFuture<'_, Result<std::sync::Arc<[u8]>, ArtifactStoreError>> {
+    ) -> BoxFuture<'_, Result<std::sync::Arc<[u8]>, ArtifactStoreError>> {
         let path = self.path(digest);
         Box::pin(async move {
             let bytes = match fs::read(&path) {
@@ -202,7 +370,7 @@ impl ConfigClosureReader for DirectoryConfigClosureReader {
         &'a self,
         bundle: BundleRef,
         path: &'a str,
-    ) -> futures::future::BoxFuture<'a, Result<std::sync::Arc<[u8]>, ConfigClosureError>> {
+    ) -> BoxFuture<'a, Result<std::sync::Arc<[u8]>, ConfigClosureError>> {
         Box::pin(async move {
             if !valid_relative_path(path) {
                 return Err(ConfigClosureError::InvalidManifest {
@@ -413,6 +581,19 @@ impl GitRepository {
         branch: &str,
         prefix: &str,
     ) -> Result<BTreeMap<String, Vec<u8>>, GitError> {
+        let exists = run_git_status(
+            None,
+            [
+                "ls-remote",
+                "--exit-code",
+                "--heads",
+                remote_text(&self.remote)?,
+                &format!("refs/heads/{branch}"),
+            ],
+        )?;
+        if !exists {
+            return Ok(BTreeMap::new());
+        }
         let directory = tempfile::tempdir().map_err(GitError::Io)?;
         run_git(
             None,
@@ -523,8 +704,8 @@ fn run_git_status<'a>(
     if let Some(current_dir) = current_dir {
         command.current_dir(current_dir);
     }
-    let status = command.status().map_err(GitError::Io)?;
-    Ok(status.success())
+    let output = command.output().map_err(GitError::Io)?;
+    Ok(output.status.success())
 }
 
 fn git_output<'a>(
