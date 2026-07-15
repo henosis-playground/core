@@ -1,4 +1,4 @@
-//! Deterministic coordination state machine for the D26 plan/controller model.
+//! Deterministic command/state/effect core for the D26 plan/controller model.
 
 mod telemetry;
 
@@ -14,6 +14,7 @@ use iddqd::id_upcast;
 use thiserror::Error as ThisError;
 use tracing::instrument;
 
+use henosis_types::BlockedMarker;
 use henosis_types::ComponentIntent;
 use henosis_types::ComponentName;
 use henosis_types::ControllerCommand;
@@ -21,19 +22,24 @@ use henosis_types::ControllerName;
 use henosis_types::ControllerReport;
 use henosis_types::ControllerSlice;
 use henosis_types::CoreEvent;
+use henosis_types::EvaluationAttempt;
 use henosis_types::EvaluationRequest;
+use henosis_types::EvaluationSnapshot;
 use henosis_types::Evaluator;
 use henosis_types::Generation;
 use henosis_types::GraphId;
 use henosis_types::GraphIntent;
+use henosis_types::InputCell;
+use henosis_types::InputCellState;
 use henosis_types::NewGraphIntent;
 use henosis_types::NewPlan;
+use henosis_types::ObservedOutputBinding;
+use henosis_types::ObservedOutputKey;
+use henosis_types::OutputAvailability;
 use henosis_types::OutputKey;
-use henosis_types::OutputMode;
 use henosis_types::OutputPublication;
 use henosis_types::OutputRecord;
 use henosis_types::OutputRef;
-use henosis_types::OutputSnapshot;
 use henosis_types::OutputSource;
 use henosis_types::Plan;
 use henosis_types::PublicationId;
@@ -128,10 +134,12 @@ pub enum CommandError {
     StaleControllerReport,
     #[error("controller report does not cover exactly its current holistic slice")]
     IncompleteControllerReport,
-    #[error("controller published an undeclared or non-observed output")]
+    #[error("controller published an undeclared or unbound observed output")]
     InvalidObservedOutput,
     #[error("component evaluation failed: {0}")]
     Evaluation(String),
+    #[error("component result violates the host protocol: {0}")]
+    EvaluationProtocol(String),
     #[error("graph intent is invalid: {0}")]
     InvalidIntent(String),
 }
@@ -141,6 +149,7 @@ pub enum CommandError {
 pub struct Core {
     evaluator: Arc<dyn Evaluator>,
     state: MaterializedCore,
+    runtime: BTreeMap<GraphId, GraphRuntime>,
 }
 
 impl Core {
@@ -149,6 +158,7 @@ impl Core {
         Self {
             evaluator,
             state: MaterializedCore::default(),
+            runtime: BTreeMap::new(),
         }
     }
 
@@ -196,17 +206,15 @@ impl Core {
         if self.state.graphs.contains_key(&new.id) {
             return Err(Error::<CommandError, Never, anyhow::Error>::Domain(CommandError::GraphAlreadyExists));
         }
-        let graph = GraphIntent::new(new)
-            .map_err(|error| {
-                Error::<CommandError, Never, anyhow::Error>::Domain(CommandError::InvalidIntent(
-                    error.to_string(),
-                ))
-            })?;
+        let graph = GraphIntent::new(new).map_err(|error| {
+            Error::<CommandError, Never, anyhow::Error>::Domain(CommandError::InvalidIntent(error.to_string()))
+        })?;
         let graph_id = graph.id();
         self.state
             .graphs
             .insert_unique(GraphState::new(graph.clone()))
             .expect("graph absence was checked");
+        self.runtime.insert(graph_id, GraphRuntime::default());
         let mut transition = Transition {
             events: vec![CoreEvent::GraphCreated(graph)],
             effects: Vec::new(),
@@ -234,16 +242,9 @@ impl Core {
         let updated = graph
             .intent
             .replace_components(components)
-            .map_err(|error| {
-                Error::<CommandError, Never, anyhow::Error>::Domain(CommandError::InvalidIntent(
-                    error.to_string(),
-                ))
-            })?;
-        {
-            let mut graph = self.graph_mut(graph_id)?;
-            graph.intent = updated.clone();
-            graph.pending.clear();
-        }
+            .map_err(|error| Error::<CommandError, Never, anyhow::Error>::Domain(CommandError::InvalidIntent(error.to_string())))?;
+        self.graph_mut(graph_id)?.intent = updated.clone();
+        self.runtime.insert(graph_id, GraphRuntime::default());
         let mut transition = Transition {
             events: vec![CoreEvent::GraphUpdated(updated)],
             effects: Vec::new(),
@@ -284,6 +285,12 @@ impl Core {
             return Ok(Transition::default());
         }
 
+        let bindings = self
+            .runtime
+            .get(&graph_id)
+            .expect("runtime exists for every graph")
+            .bindings
+            .clone();
         let mut published = Vec::new();
         for output in report.outputs() {
             let resource = plan
@@ -295,20 +302,19 @@ impl Core {
             let declaration = resource
                 .output(output.key_value().output())
                 .ok_or(Error::<CommandError, Never, anyhow::Error>::Domain(CommandError::InvalidObservedOutput))?;
-            if !matches!(declaration.mode(), OutputMode::Observed) {
+            if declaration.availability() != OutputAvailability::Observed {
                 return Err(Error::<CommandError, Never, anyhow::Error>::Domain(CommandError::InvalidObservedOutput));
             }
+            let component_output = bindings
+                .get(output.key_value())
+                .ok_or(Error::<CommandError, Never, anyhow::Error>::Domain(CommandError::InvalidObservedOutput))?
+                .clone();
             published.push(OutputRecord::new(
-                OutputKey::new(
-                    report.generation(),
-                    OutputRef::new(
-                        resource.path().instance().clone(),
-                        output.key_value().output().clone(),
-                    ),
-                ),
+                OutputKey::new(report.generation(), component_output),
                 output.value().clone(),
                 OutputSource::Observed {
                     resource_id: resource.id(),
+                    resource_output: output.key_value().output().clone(),
                 },
             ));
         }
@@ -327,7 +333,6 @@ impl Core {
             graph
                 .reports
                 .insert_overwrite(LatestControllerReport(report.clone()));
-            graph.pending.remove(report.controller());
             if let Some(publication_id) = report.publication_id() {
                 graph.publications.insert(publication_id);
             }
@@ -335,6 +340,11 @@ impl Core {
                 graph.outputs.insert_overwrite(output);
             }
         }
+        self.runtime
+            .get_mut(&graph_id)
+            .expect("runtime exists for every graph")
+            .pending
+            .remove(report.controller());
 
         let mut transition = Transition {
             events: vec![CoreEvent::ControllerReported(report)],
@@ -354,7 +364,12 @@ impl Core {
         graph_id: GraphId,
     ) -> Result<Transition, Error<CommandError, Never, anyhow::Error>> {
         let graph = self.graph(graph_id)?;
-        if graph.pending.is_empty()
+        let pending = &self
+            .runtime
+            .get(&graph_id)
+            .expect("runtime exists for every graph")
+            .pending;
+        if pending.is_empty()
             && let Some(plan) = &graph.plan
             && !plan.is_complete()
             && let Some(cycle) = blocked_cycle(plan)
@@ -389,16 +404,13 @@ impl Core {
             .as_ref()
             .into_iter()
             .flat_map(Plan::resources)
-            .fold(
-                BTreeMap::<ControllerName, Vec<ResourceId>>::new(),
-                |mut grouped, resource| {
-                    grouped
-                        .entry(resource.controller().clone())
-                        .or_default()
-                        .push(resource.id());
-                    grouped
-                },
-            );
+            .fold(BTreeMap::<ControllerName, Vec<ResourceId>>::new(), |mut grouped, resource| {
+                grouped
+                    .entry(resource.controller().clone())
+                    .or_default()
+                    .push(resource.id());
+                grouped
+            });
         let effects = resources
             .into_iter()
             .map(|(controller, resources)| {
@@ -429,71 +441,44 @@ impl Core {
     ) -> Result<Transition, Error<CommandError, Never, anyhow::Error>> {
         let intent = self.graph(graph_id)?.intent.clone();
         let generation = intent.generation();
-        let mut rounds = 0_usize;
-        let plan = loop {
-            rounds = rounds.saturating_add(1);
-            if rounds > intent.components().len().saturating_add(1) {
-                return Err(Error::<CommandError, Never, anyhow::Error>::Invariant(anyhow::anyhow!(
-                    "static output fixed point exceeded component count"
-                )));
-            }
-            let snapshot = OutputSnapshot::for_generation(&self.graph(graph_id)?.outputs, generation);
-            let mut resources = Vec::new();
-            let mut blocked = Vec::new();
+        let max_rounds = intent.components().len().saturating_add(1);
+        let mut final_plan = None;
+
+        for _ in 0..max_rounds {
+            let before = self
+                .runtime
+                .get(&graph_id)
+                .expect("runtime exists for every graph")
+                .interpretations
+                .clone();
             for component in intent.components() {
-                let evaluated = self
+                let snapshot = self.snapshot_for(graph_id, component)?;
+                let attempt = self
                     .evaluator
                     .evaluate(EvaluationRequest::new(
                         graph_id,
                         generation,
                         component.name().clone(),
                         component.bundle(),
-                        snapshot.clone(),
+                        snapshot,
                     ))
                     .await
                     .map_err(|error| Error::<CommandError, Never, anyhow::Error>::Domain(CommandError::Evaluation(error.to_string())))?;
-                resources.extend_from_slice(evaluated.resources());
-                if let Some(marker) = evaluated.blocked_marker() {
-                    blocked.push(marker);
-                }
+                self.accept_interpretation(graph_id, component, attempt)?;
             }
-            let mut inserted_static = false;
-            {
-                let mut graph = self.graph_mut(graph_id)?;
-                for resource in &resources {
-                    for declaration in resource.outputs() {
-                        if let OutputMode::Static(value) = declaration.mode() {
-                            let record = OutputRecord::new(
-                                OutputKey::new(
-                                    generation,
-                                    OutputRef::new(
-                                        resource.path().instance().clone(),
-                                        declaration.name().clone(),
-                                    ),
-                                ),
-                                value.clone(),
-                                OutputSource::Static,
-                            );
-                            let key = record.key_value().clone();
-                            if graph.outputs.get(&key) != Some(&record) {
-                                graph.outputs.insert_overwrite(record);
-                                inserted_static = true;
-                            }
-                        }
-                    }
-                }
+            let plan = self.plan_from_interpretations(graph_id, generation)?;
+            final_plan = Some(plan);
+            let after = &self
+                .runtime
+                .get(&graph_id)
+                .expect("runtime exists for every graph")
+                .interpretations;
+            if &before == after {
+                break;
             }
-            let plan = Plan::new(NewPlan {
-                generation,
-                resources,
-                blocked,
-            })
-            .map_err(|error| Error::<CommandError, Never, anyhow::Error>::Invariant(anyhow::Error::new(error)))?;
-            if !inserted_static {
-                break plan;
-            }
-        };
+        }
 
+        let plan = final_plan.expect("graphs contain at least one component");
         let previous = self.graph(graph_id)?.plan.clone();
         if previous
             .as_ref()
@@ -509,10 +494,13 @@ impl Core {
                 ControllerCommand::Supersede(_) | ControllerCommand::Retire(_) => None,
             })
             .collect();
+        self.runtime
+            .get_mut(&graph_id)
+            .expect("runtime exists for every graph")
+            .pending = pending;
         {
             let mut graph = self.graph_mut(graph_id)?;
             graph.plan = Some(plan.clone());
-            graph.pending = pending;
             graph.stall = None;
         }
         let mut transition = Transition {
@@ -521,6 +509,241 @@ impl Core {
         };
         transition.extend(self.check_quiescence(graph_id)?);
         Ok(transition)
+    }
+
+    fn snapshot_for(
+        &self,
+        graph_id: GraphId,
+        component: &ComponentIntent,
+    ) -> Result<EvaluationSnapshot, Error<CommandError, Never, anyhow::Error>> {
+        let graph = self.graph(graph_id)?;
+        let runtime = self
+            .runtime
+            .get(&graph_id)
+            .expect("runtime exists for every graph");
+        let generation = graph.intent.generation();
+        let mut cells = Vec::new();
+        for input in component.inputs() {
+            let key = OutputKey::new(generation, input.source().clone());
+            let state = if let Some(record) = graph.outputs.get(&key) {
+                InputCellState::Available(record.value().clone())
+            } else {
+                let producer = graph
+                    .intent
+                    .component(input.source().component())
+                    .expect("graph validation proved producer existence");
+                let declaration = producer
+                    .output(input.source().output())
+                    .expect("graph validation proved output existence");
+                match runtime.interpretations.get(input.source().component()) {
+                    Some(interpretation) if interpretation.complete => {
+                        if declaration.is_optional()
+                            && !interpretation.declared_outputs.contains(input.source().output())
+                        {
+                            InputCellState::Absent
+                        } else {
+                            InputCellState::Blocked
+                        }
+                    }
+                    Some(_) | None => InputCellState::Blocked,
+                }
+            };
+            cells.push(
+                InputCell::new(
+                    input.name().clone(),
+                    input.source().clone(),
+                    input.is_optional(),
+                    state,
+                )
+                .map_err(|error| Error::<CommandError, Never, anyhow::Error>::Invariant(anyhow::Error::new(error)))?,
+            );
+        }
+        EvaluationSnapshot::new(cells)
+            .map_err(|error| Error::<CommandError, Never, anyhow::Error>::Invariant(anyhow::Error::new(error)))
+    }
+
+    fn accept_interpretation(
+        &mut self,
+        graph_id: GraphId,
+        component: &ComponentIntent,
+        attempt: EvaluationAttempt,
+    ) -> Result<(), Error<CommandError, Never, anyhow::Error>> {
+        if attempt.resources().iter().any(|resource| {
+            resource.resource().path().instance() != component.name()
+        }) {
+            return Err(Error::<CommandError, Never, anyhow::Error>::Domain(CommandError::EvaluationProtocol(
+                "resource belongs to another component".to_owned(),
+            )));
+        }
+
+        let mut interpretation = ComponentInterpretation {
+            resources: attempt
+                .resources()
+                .iter()
+                .map(|resource| resource.resource().clone())
+                .collect(),
+            complete: attempt.complete_result().is_some(),
+            blocked_on: attempt
+                .blocked_result()
+                .map(|blocked| blocked.blocked().source().clone()),
+            declared_outputs: BTreeSet::new(),
+            bindings: BTreeMap::new(),
+        };
+
+        let generation = self.graph(graph_id)?.intent.generation();
+        if let Some(complete) = attempt.complete_result() {
+            for output in complete.outputs() {
+                let declaration = component.output(output.name()).ok_or_else(|| {
+                    Error::<CommandError, Never, anyhow::Error>::Domain(CommandError::EvaluationProtocol(format!(
+                        "undeclared static output {}",
+                        output.name()
+                    )))
+                })?;
+                if declaration.availability() != OutputAvailability::Static {
+                    return Err(Error::<CommandError, Never, anyhow::Error>::Domain(CommandError::EvaluationProtocol(format!(
+                        "observed output {} returned as static",
+                        output.name()
+                    ))));
+                }
+                interpretation.declared_outputs.insert(output.name().clone());
+            }
+            for binding in complete.observed_outputs() {
+                self.validate_binding(component, &interpretation.resources, binding)?;
+                interpretation.declared_outputs.insert(binding.name().clone());
+                let resource = interpretation
+                    .resources
+                    .iter()
+                    .find(|resource| resource.path().address() == binding.resource())
+                    .expect("binding validation found the resource");
+                interpretation.bindings.insert(
+                    ObservedOutputKey::new(resource.id(), binding.output().clone()),
+                    OutputRef::new(component.name().clone(), binding.name().clone()),
+                );
+            }
+            for declaration in component.outputs() {
+                if !declaration.is_optional()
+                    && !interpretation.declared_outputs.contains(declaration.name())
+                {
+                    return Err(Error::<CommandError, Never, anyhow::Error>::Domain(CommandError::EvaluationProtocol(format!(
+                        "required output {} was omitted",
+                        declaration.name()
+                    ))));
+                }
+            }
+
+            let output_keys = self
+                .graph(graph_id)?
+                .outputs
+                .iter()
+                .filter(|record| {
+                    record.key_value().generation() == generation
+                        && record.key_value().reference().component() == component.name()
+                        && matches!(record.source(), OutputSource::Static)
+                })
+                .map(|record| record.key_value().clone())
+                .collect::<Vec<_>>();
+            let mut graph = self.graph_mut(graph_id)?;
+            for key in output_keys {
+                graph.outputs.remove(&key);
+            }
+            for output in complete.outputs() {
+                graph.outputs.insert_overwrite(OutputRecord::new(
+                    OutputKey::new(
+                        generation,
+                        OutputRef::new(component.name().clone(), output.name().clone()),
+                    ),
+                    output.value().clone(),
+                    OutputSource::Static,
+                ));
+            }
+        }
+
+        let runtime = self
+            .runtime
+            .get_mut(&graph_id)
+            .expect("runtime exists for every graph");
+        runtime
+            .interpretations
+            .insert(component.name().clone(), interpretation);
+        runtime.bindings = runtime
+            .interpretations
+            .values()
+            .flat_map(|value| value.bindings.clone())
+            .collect();
+        Ok(())
+    }
+
+    fn validate_binding(
+        &self,
+        component: &ComponentIntent,
+        resources: &[Resource],
+        binding: &ObservedOutputBinding,
+    ) -> Result<(), Error<CommandError, Never, anyhow::Error>> {
+        let declaration = component.output(binding.name()).ok_or_else(|| {
+            Error::<CommandError, Never, anyhow::Error>::Domain(CommandError::EvaluationProtocol(format!(
+                "undeclared observed output {}",
+                binding.name()
+            )))
+        })?;
+        if declaration.availability() != OutputAvailability::Observed {
+            return Err(Error::<CommandError, Never, anyhow::Error>::Domain(CommandError::EvaluationProtocol(format!(
+                "static output {} returned as observed",
+                binding.name()
+            ))));
+        }
+        let resource = resources
+            .iter()
+            .find(|resource| resource.path().address() == binding.resource())
+            .ok_or_else(|| {
+                Error::<CommandError, Never, anyhow::Error>::Domain(CommandError::EvaluationProtocol(
+                    "observed binding points outside the component result".to_owned(),
+                ))
+            })?;
+        let output = resource.output(binding.output()).ok_or_else(|| {
+            Error::<CommandError, Never, anyhow::Error>::Domain(CommandError::EvaluationProtocol(format!(
+                "resource does not declare observed output {}",
+                binding.output()
+            )))
+        })?;
+        if output.availability() != OutputAvailability::Observed {
+            return Err(Error::<CommandError, Never, anyhow::Error>::Domain(CommandError::EvaluationProtocol(format!(
+                "resource output {} is not observed",
+                binding.output()
+            ))));
+        }
+        Ok(())
+    }
+
+    fn plan_from_interpretations(
+        &self,
+        graph_id: GraphId,
+        generation: Generation,
+    ) -> Result<Plan, Error<CommandError, Never, anyhow::Error>> {
+        let runtime = self
+            .runtime
+            .get(&graph_id)
+            .expect("runtime exists for every graph");
+        let resources = runtime
+            .interpretations
+            .values()
+            .flat_map(|interpretation| interpretation.resources.clone())
+            .collect();
+        let blocked = runtime
+            .interpretations
+            .iter()
+            .filter_map(|(component, interpretation)| {
+                interpretation.blocked_on.as_ref().map(|source| {
+                    BlockedMarker::new(component.clone(), vec![source.clone()])
+                        .expect("blocked interpretation has one source")
+                })
+            })
+            .collect();
+        Plan::new(NewPlan {
+            generation,
+            resources,
+            blocked,
+        })
+        .map_err(|error| Error::<CommandError, Never, anyhow::Error>::Invariant(anyhow::Error::new(error)))
     }
 
     fn graph(
@@ -536,15 +759,29 @@ impl Core {
     fn graph_mut(
         &mut self,
         graph_id: GraphId,
-    ) -> Result<
-        iddqd::id_ord_map::RefMut<'_, GraphState>,
-        Error<CommandError, Never, anyhow::Error>,
-    > {
+    ) -> Result<iddqd::id_ord_map::RefMut<'_, GraphState>, Error<CommandError, Never, anyhow::Error>>
+    {
         self.state
             .graphs
             .get_mut(&graph_id)
             .ok_or(Error::<CommandError, Never, anyhow::Error>::Domain(CommandError::GraphNotFound))
     }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct GraphRuntime {
+    interpretations: BTreeMap<ComponentName, ComponentInterpretation>,
+    bindings: BTreeMap<ObservedOutputKey, OutputRef>,
+    pending: BTreeSet<ControllerName>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ComponentInterpretation {
+    resources: Vec<Resource>,
+    complete: bool,
+    blocked_on: Option<OutputRef>,
+    declared_outputs: BTreeSet<henosis_types::OutputName>,
+    bindings: BTreeMap<ObservedOutputKey, OutputRef>,
 }
 
 fn dispatch_effects(
@@ -743,7 +980,6 @@ pub struct GraphState {
     outputs: IdOrdMap<OutputRecord>,
     reports: IdOrdMap<LatestControllerReport>,
     publications: BTreeSet<PublicationId>,
-    pending: BTreeSet<ControllerName>,
     stall: Option<Stall>,
     retired: bool,
 }
@@ -756,7 +992,6 @@ impl GraphState {
             outputs: IdOrdMap::new(),
             reports: IdOrdMap::new(),
             publications: BTreeSet::new(),
-            pending: BTreeSet::new(),
             stall: None,
             retired: false,
         }

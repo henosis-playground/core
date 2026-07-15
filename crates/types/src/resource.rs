@@ -17,7 +17,7 @@ use crate::OutputName;
 use crate::ResourceId;
 use crate::ResourceName;
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct KindVersion {
     name: KindName,
     version: NonZeroU32,
@@ -46,30 +46,20 @@ impl fmt::Display for KindVersion {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct ResourcePath {
-    instance: ComponentName,
-    kind: KindName,
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub struct ResourceAddress {
+    kind: KindVersion,
     name: ResourceName,
 }
 
-impl ResourcePath {
+impl ResourceAddress {
     #[must_use]
-    pub const fn new(instance: ComponentName, kind: KindName, name: ResourceName) -> Self {
-        Self {
-            instance,
-            kind,
-            name,
-        }
+    pub const fn new(kind: KindVersion, name: ResourceName) -> Self {
+        Self { kind, name }
     }
 
     #[must_use]
-    pub const fn instance(&self) -> &ComponentName {
-        &self.instance
-    }
-
-    #[must_use]
-    pub const fn kind(&self) -> &KindName {
+    pub const fn kind(&self) -> &KindVersion {
         &self.kind
     }
 
@@ -79,28 +69,57 @@ impl ResourcePath {
     }
 }
 
-impl fmt::Display for ResourcePath {
+impl fmt::Display for ResourceAddress {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{}/{}/{}", self.instance, self.kind, self.name)
+        write!(formatter, "{}/{}", self.kind, self.name)
     }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum OutputMode {
-    Static(NativeValue),
+pub struct ResourcePath {
+    instance: ComponentName,
+    address: ResourceAddress,
+}
+
+impl ResourcePath {
+    #[must_use]
+    pub const fn new(instance: ComponentName, address: ResourceAddress) -> Self {
+        Self { instance, address }
+    }
+
+    #[must_use]
+    pub const fn instance(&self) -> &ComponentName {
+        &self.instance
+    }
+
+    #[must_use]
+    pub const fn address(&self) -> &ResourceAddress {
+        &self.address
+    }
+}
+
+impl fmt::Display for ResourcePath {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}/{}", self.instance, self.address)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum OutputAvailability {
+    Static,
     Observed,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct OutputDeclaration {
     name: OutputName,
-    mode: OutputMode,
+    availability: OutputAvailability,
 }
 
 impl OutputDeclaration {
     #[must_use]
-    pub const fn new(name: OutputName, mode: OutputMode) -> Self {
-        Self { name, mode }
+    pub const fn new(name: OutputName, availability: OutputAvailability) -> Self {
+        Self { name, availability }
     }
 
     #[must_use]
@@ -109,8 +128,8 @@ impl OutputDeclaration {
     }
 
     #[must_use]
-    pub const fn mode(&self) -> &OutputMode {
-        &self.mode
+    pub const fn availability(&self) -> OutputAvailability {
+        self.availability
     }
 }
 
@@ -129,7 +148,6 @@ pub struct NewResource {
     pub id: ResourceId,
     pub path: ResourcePath,
     pub controller: ControllerName,
-    pub kind: KindVersion,
     pub body: NativeValue,
     pub outputs: Vec<OutputDeclaration>,
 }
@@ -139,16 +157,12 @@ pub struct Resource {
     id: ResourceId,
     path: ResourcePath,
     controller: ControllerName,
-    kind: KindVersion,
     body: NativeValue,
     outputs: IdOrdMap<OutputDeclaration>,
 }
 
 impl Resource {
     pub fn new(new: NewResource) -> Result<Self, ResourceError> {
-        if new.path.kind() != new.kind.name() {
-            return Err(ResourceError::PathKindMismatch);
-        }
         let mut outputs = IdOrdMap::with_capacity(new.outputs.len());
         for output in new.outputs {
             outputs
@@ -159,7 +173,6 @@ impl Resource {
             id: new.id,
             path: new.path,
             controller: new.controller,
-            kind: new.kind,
             body: new.body,
             outputs,
         })
@@ -182,7 +195,7 @@ impl Resource {
 
     #[must_use]
     pub const fn kind(&self) -> &KindVersion {
-        &self.kind
+        self.path.address().kind()
     }
 
     #[must_use]
@@ -201,8 +214,7 @@ impl Resource {
 
     #[must_use]
     pub fn digest(&self) -> ContentDigest {
-        let bytes = serde_json::to_vec(self).expect("validated resource serializes");
-        ContentDigest::digest(&bytes)
+        ContentDigest::digest(self.body.canonical().as_bytes())
     }
 }
 
@@ -218,8 +230,6 @@ impl IdOrdItem for Resource {
 
 #[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
 pub enum ResourceError {
-    #[error("resource path kind must match kind@version")]
-    PathKindMismatch,
     #[error("resource declares an output more than once")]
     DuplicateOutput,
 }

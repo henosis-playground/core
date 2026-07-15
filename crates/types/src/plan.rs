@@ -71,7 +71,10 @@ impl OutputKey {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum OutputSource {
     Static,
-    Observed { resource_id: ResourceId },
+    Observed {
+        resource_id: ResourceId,
+        resource_output: OutputName,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -110,35 +113,6 @@ impl IdOrdItem for OutputRecord {
 
     fn key(&self) -> Self::Key<'_> {
         &self.key
-    }
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-pub struct OutputSnapshot {
-    records: IdOrdMap<OutputRecord>,
-}
-
-impl OutputSnapshot {
-    #[must_use]
-    pub fn for_generation(records: &IdOrdMap<OutputRecord>, generation: Generation) -> Self {
-        let mut selected = IdOrdMap::new();
-        for record in records {
-            if record.key_value().generation() == generation {
-                selected
-                    .insert_unique(record.clone())
-                    .expect("source output records are unique");
-            }
-        }
-        Self { records: selected }
-    }
-
-    #[must_use]
-    pub fn get(&self, reference: &OutputRef, generation: Generation) -> Option<&OutputRecord> {
-        self.records.get(&OutputKey::new(generation, reference.clone()))
-    }
-
-    pub fn iter(&self) -> impl ExactSizeIterator<Item = &OutputRecord> {
-        self.records.iter()
     }
 }
 
@@ -218,7 +192,7 @@ impl Plan {
                 .insert_unique(marker)
                 .map_err(|_| PlanError::DuplicateBlockedComponent)?;
         }
-        let encoded = serde_json::to_vec(&(&resources, &blocked))
+        let encoded = serde_json::to_vec(&(new.generation, &resources, &blocked))
             .expect("validated plan contents serialize");
         Ok(Self {
             generation: new.generation,
@@ -261,10 +235,7 @@ impl Plan {
         let mut added_or_changed = Vec::new();
         let mut removed = Vec::new();
         for resource in self.resources() {
-            if previous
-                .and_then(|plan| plan.resource(resource.id()))
-                != Some(resource)
-            {
+            if previous.and_then(|plan| plan.resource(resource.id())) != Some(resource) {
                 added_or_changed.push(resource.clone());
             }
         }

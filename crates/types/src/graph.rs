@@ -10,6 +10,10 @@ use crate::ContentDigest;
 use crate::Generation;
 use crate::GraphId;
 use crate::GraphName;
+use crate::InputName;
+use crate::OutputAvailability;
+use crate::OutputName;
+use crate::OutputRef;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -28,15 +32,131 @@ impl BundleRef {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ComponentInput {
+    name: InputName,
+    source: OutputRef,
+    optional: bool,
+}
+
+impl ComponentInput {
+    #[must_use]
+    pub const fn new(name: InputName, source: OutputRef, optional: bool) -> Self {
+        Self {
+            name,
+            source,
+            optional,
+        }
+    }
+
+    #[must_use]
+    pub const fn name(&self) -> &InputName {
+        &self.name
+    }
+
+    #[must_use]
+    pub const fn source(&self) -> &OutputRef {
+        &self.source
+    }
+
+    #[must_use]
+    pub const fn is_optional(&self) -> bool {
+        self.optional
+    }
+}
+
+impl IdOrdItem for ComponentInput {
+    type Key<'a> = &'a InputName;
+
+    id_upcast!();
+
+    fn key(&self) -> Self::Key<'_> {
+        &self.name
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ComponentOutput {
+    name: OutputName,
+    availability: OutputAvailability,
+    optional: bool,
+}
+
+impl ComponentOutput {
+    #[must_use]
+    pub const fn new(
+        name: OutputName,
+        availability: OutputAvailability,
+        optional: bool,
+    ) -> Self {
+        Self {
+            name,
+            availability,
+            optional,
+        }
+    }
+
+    #[must_use]
+    pub const fn name(&self) -> &OutputName {
+        &self.name
+    }
+
+    #[must_use]
+    pub const fn availability(&self) -> OutputAvailability {
+        self.availability
+    }
+
+    #[must_use]
+    pub const fn is_optional(&self) -> bool {
+        self.optional
+    }
+}
+
+impl IdOrdItem for ComponentOutput {
+    type Key<'a> = &'a OutputName;
+
+    id_upcast!();
+
+    fn key(&self) -> Self::Key<'_> {
+        &self.name
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct NewComponentIntent {
+    pub name: ComponentName,
+    pub bundle: BundleRef,
+    pub inputs: Vec<ComponentInput>,
+    pub outputs: Vec<ComponentOutput>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ComponentIntent {
     name: ComponentName,
     bundle: BundleRef,
+    inputs: IdOrdMap<ComponentInput>,
+    outputs: IdOrdMap<ComponentOutput>,
 }
 
 impl ComponentIntent {
-    #[must_use]
-    pub const fn new(name: ComponentName, bundle: BundleRef) -> Self {
-        Self { name, bundle }
+    pub fn new(new: NewComponentIntent) -> Result<Self, ComponentIntentError> {
+        let mut inputs = IdOrdMap::with_capacity(new.inputs.len());
+        for input in new.inputs {
+            inputs
+                .insert_unique(input)
+                .map_err(|_| ComponentIntentError::DuplicateInput)?;
+        }
+        let mut outputs = IdOrdMap::with_capacity(new.outputs.len());
+        for output in new.outputs {
+            outputs
+                .insert_unique(output)
+                .map_err(|_| ComponentIntentError::DuplicateOutput)?;
+        }
+        Ok(Self {
+            name: new.name,
+            bundle: new.bundle,
+            inputs,
+            outputs,
+        })
     }
 
     #[must_use]
@@ -48,6 +168,24 @@ impl ComponentIntent {
     pub const fn bundle(&self) -> BundleRef {
         self.bundle
     }
+
+    pub fn inputs(&self) -> impl ExactSizeIterator<Item = &ComponentInput> {
+        self.inputs.iter()
+    }
+
+    #[must_use]
+    pub fn input(&self, name: &InputName) -> Option<&ComponentInput> {
+        self.inputs.get(name)
+    }
+
+    pub fn outputs(&self) -> impl ExactSizeIterator<Item = &ComponentOutput> {
+        self.outputs.iter()
+    }
+
+    #[must_use]
+    pub fn output(&self, name: &OutputName) -> Option<&ComponentOutput> {
+        self.outputs.get(name)
+    }
 }
 
 impl IdOrdItem for ComponentIntent {
@@ -58,6 +196,14 @@ impl IdOrdItem for ComponentIntent {
     fn key(&self) -> Self::Key<'_> {
         &self.name
     }
+}
+
+#[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
+pub enum ComponentIntentError {
+    #[error("component declares an input name more than once")]
+    DuplicateInput,
+    #[error("component declares an output name more than once")]
+    DuplicateOutput,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -112,6 +258,16 @@ impl GraphIntent {
                 .insert_unique(component)
                 .map_err(|_| GraphIntentError::DuplicateComponent)?;
         }
+        for component in &keyed {
+            for input in component.inputs() {
+                let producer = keyed
+                    .get(input.source().component())
+                    .ok_or(GraphIntentError::UnknownInputComponent)?;
+                if producer.output(input.source().output()).is_none() {
+                    return Err(GraphIntentError::UnknownInputOutput);
+                }
+            }
+        }
         Ok(Self {
             id,
             name,
@@ -161,4 +317,8 @@ pub enum GraphIntentError {
     Empty,
     #[error("graph intent contains a component name more than once")]
     DuplicateComponent,
+    #[error("component input refers to an unknown producer component")]
+    UnknownInputComponent,
+    #[error("component input refers to an unknown producer output")]
+    UnknownInputOutput,
 }
