@@ -30,6 +30,9 @@ newtype-uuid = { git = "https://github.com/henosis-playground/newtype-uuid.git",
   "v7",
 ] }
 proptest = "1"
+proptest-state-machine = "0.8"
+rand = "0.9"
+rand_chacha = "0.9"
 ryu-js = "1.0.3"
 s2-sdk = "=0.31.9"
 serde = { version = "1", features = ["derive"] }
@@ -49,6 +52,8 @@ uuid = { version = "1", features = ["serde", "v7"] }
 
 henosis-journal = { path = "crates/journal" }
 henosis-multi-stream-merge = { path = "crates/multi-stream-merge" }
+henosis-testkit = { path = "crates/henosis-testkit" }
+henosis-sim = { path = "crates/henosis-sim" }
 henosis-orchestrator = { path = "crates/orchestrator" }
 henosis-proto = { path = "crates/proto" }
 henosis-storage = { path = "crates/storage" }
