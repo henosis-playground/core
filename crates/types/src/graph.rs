@@ -259,8 +259,11 @@ impl GraphIntent {
                 let producer = keyed
                     .get(input.source().component())
                     .ok_or(GraphIntentError::UnknownInputComponent)?;
-                if producer.output(input.source().output()).is_none() {
-                    return Err(GraphIntentError::UnknownInputOutput);
+                let output = producer
+                    .output(input.source().output())
+                    .ok_or(GraphIntentError::UnknownInputOutput)?;
+                if output.is_optional() && !input.is_optional() {
+                    return Err(GraphIntentError::RequiredInputFromOptionalOutput);
                 }
             }
         }
@@ -317,4 +320,6 @@ pub enum GraphIntentError {
     UnknownInputComponent,
     #[error("component input refers to an unknown producer output")]
     UnknownInputOutput,
+    #[error("a required input cannot consume an optional producer output")]
+    RequiredInputFromOptionalOutput,
 }

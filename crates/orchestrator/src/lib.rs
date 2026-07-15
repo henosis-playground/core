@@ -586,7 +586,8 @@ impl Core {
                     .expect("graph validation proved output existence");
                 match runtime.interpretations.get(input.source().component()) {
                     Some(interpretation) if interpretation.complete => {
-                        if declaration.is_optional()
+                        if input.is_optional()
+                            && declaration.is_optional()
                             && !interpretation
                                 .declared_outputs
                                 .contains(input.source().output())

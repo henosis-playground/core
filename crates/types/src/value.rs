@@ -76,7 +76,16 @@ fn write_canonical(value: &serde_json::Value, target: &mut String) -> Result<(),
     match value {
         serde_json::Value::Null => target.push_str("null"),
         serde_json::Value::Bool(value) => target.push_str(if *value { "true" } else { "false" }),
-        serde_json::Value::Number(value) => target.push_str(&value.to_string()),
+        serde_json::Value::Number(value) => {
+            if let Some(value) = value.as_i64() {
+                target.push_str(&value.to_string());
+            } else if let Some(value) = value.as_u64() {
+                target.push_str(&value.to_string());
+            } else {
+                let value = value.as_f64().ok_or(NativeValueError::Serialization)?;
+                target.push_str(ryu_js::Buffer::new().format_finite(value));
+            }
+        }
         serde_json::Value::String(value) => target
             .push_str(&serde_json::to_string(value).map_err(|_| NativeValueError::Serialization)?),
         serde_json::Value::Array(values) => {

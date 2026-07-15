@@ -637,11 +637,21 @@ mod tests {
         let body = serde_json::json!({"\u{e000}": 1, "\u{10000}": 2});
         let value = NativeValue::new(body.clone()).expect("finite JSON canonicalizes");
         assert_eq!(value.canonical(), "{\"𐀀\":2,\"\":1}");
+        assert_eq!(
+            NativeValue::new(serde_json::json!([1.0, 1e21, 1e-7]))
+                .expect("finite JSON canonicalizes")
+                .canonical(),
+            "[1,1e+21,1e-7]"
+        );
         assert!(NativeValue::from_canonical(body, "{}").is_err());
     }
 
     #[test]
     fn generation_constructor_rejects_zero() {
         assert!(Generation::new(0).is_err());
+        let id = graph_id();
+        let wire = id.to_string();
+        assert!(wire.starts_with("graph_"));
+        assert_eq!(wire.parse::<GraphId>().expect("TypeID round trips"), id);
     }
 }
