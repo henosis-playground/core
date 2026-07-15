@@ -1292,6 +1292,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-stream",
+ "base64",
  "buffa",
  "connectrpc",
  "faultline",
@@ -1305,6 +1306,7 @@ dependencies = [
  "henosis-proto",
  "henosis-storage",
  "henosis-types",
+ "reqwest",
  "serde_json",
  "tokio",
  "tracing",

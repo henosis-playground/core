@@ -33,14 +33,11 @@ pub(crate) struct ApplyResult {
 }
 
 impl MaterializedGraphs {
-    pub(crate) async fnboot(
+    pub(crate) async fn boot(
         evaluator: Arc<dyn Evaluator>,
         journal: Journal,
     ) -> anyhow::Result<(Self, Vec<ControllerEffect>)> {
-        let (registry_events, tail) = journal
-            .load_registry()
-            .await
-            .map_err(storage_error)?;
+        let (registry_events, tail) = journal.load_registry().await.map_err(storage_error)?;
         let registry = RegistryState::fold(tail, &registry_events);
         let registered = registry.graphs.values().cloned().collect::<Vec<_>>();
         let materialized = Self {
@@ -52,9 +49,7 @@ impl MaterializedGraphs {
 
         let mut effects = Vec::new();
         for registration in registered {
-            let (actor, resumed) = materialized
-                .load_actor(registration.intent.clone())
-                .await?;
+            let (actor, resumed) = materialized.load_actor(registration.intent.clone()).await?;
             effects.extend(resumed);
             materialized
                 .actors
@@ -65,7 +60,7 @@ impl MaterializedGraphs {
         Ok((materialized, effects))
     }
 
-    pub(crate) async fnapply(&self, command: Command) -> anyhow::Result<ApplyResult> {
+    pub(crate) async fn apply(&self, command: Command) -> anyhow::Result<ApplyResult> {
         match command {
             Command::CreateGraph(new) => self.create_graph(new).await,
             Command::RetireGraph {
@@ -86,7 +81,8 @@ impl MaterializedGraphs {
                     .graph(graph_id)
                     .is_some_and(henosis_orchestrator::GraphState::is_retired)
                 {
-                    self.record_retirement(graph_id, expected_generation).await?;
+                    self.record_retirement(graph_id, expected_generation)
+                        .await?;
                 }
                 Ok(result)
             }
@@ -117,12 +113,12 @@ impl MaterializedGraphs {
         }
     }
 
-    pub(crate) async fnsnapshot(&self, graph_id: GraphId) -> Option<MaterializedCore> {
+    pub(crate) async fn snapshot(&self, graph_id: GraphId) -> Option<MaterializedCore> {
         let actor = self.actors.read().await.get(&graph_id).cloned()?;
         Some(actor.snapshot().await)
     }
 
-    pub(crate) async fnsnapshots(&self) -> Vec<MaterializedCore> {
+    pub(crate) async fn snapshots(&self) -> Vec<MaterializedCore> {
         let actors = self
             .actors
             .read()
@@ -196,14 +192,15 @@ impl MaterializedGraphs {
         }
 
         let result = actor.commit(prepared).await?;
-        self.actors
-            .write()
-            .await
-            .insert(graph_id, Arc::new(actor));
+        self.actors.write().await.insert(graph_id, Arc::new(actor));
         Ok(result)
     }
 
-    async fn apply_existing(&self, graph_id: GraphId, command: Command) -> anyhow::Result<ApplyResult> {
+    async fn apply_existing(
+        &self,
+        graph_id: GraphId,
+        command: Command,
+    ) -> anyhow::Result<ApplyResult> {
         let actor = self
             .actors
             .read()
