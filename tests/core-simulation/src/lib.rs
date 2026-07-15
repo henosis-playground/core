@@ -11,6 +11,11 @@ mod tests {
     use faultline::Error;
     use futures::StreamExt;
     use futures::future::BoxFuture;
+    use henosis_evaluation_engine::BundleSource;
+    use henosis_evaluation_engine::EngineConfig;
+    use henosis_evaluation_engine::EvaluationEngine;
+    use henosis_evaluation_engine::ResourceContract;
+    use henosis_evaluation_engine::ResourceRegistry;
     use henosis_journal::Journal;
     use henosis_multi_stream_merge::StreamCatalog;
     use henosis_orchestrator::Command;
@@ -79,6 +84,44 @@ mod tests {
         ) -> Result<Vec<StreamName>, Error<faultline::Never, anyhow::Error, anyhow::Error>>
         {
             Ok(self.0.clone())
+        }
+    }
+
+    const REAL_PRODUCER_BUNDLE: &str =
+        include_str!("../../../crates/evaluation-engine/fixtures/producer.bundle.js");
+    const REAL_CONSUMER_BUNDLE: &str =
+        include_str!("../../../crates/evaluation-engine/fixtures/consumer.bundle.js");
+
+    struct FixtureBundleSource {
+        bundles: BTreeMap<BundleRef, Arc<[u8]>>,
+    }
+
+    impl BundleSource for FixtureBundleSource {
+        fn load(&self, bundle: BundleRef) -> BoxFuture<'_, Result<Arc<[u8]>, EvaluationError>> {
+            let result = self
+                .bundles
+                .get(&bundle)
+                .cloned()
+                .ok_or_else(|| EvaluationError::new("fixture bundle is missing"));
+            Box::pin(async move { result })
+        }
+    }
+
+    struct TestResourceRegistry;
+
+    impl ResourceRegistry for TestResourceRegistry {
+        fn validate(
+            &self,
+            kind: &KindVersion,
+            body: &serde_json::Value,
+        ) -> Result<ResourceContract, String> {
+            if kind.to_string() != "test/item@1" || !body.is_object() {
+                return Err("expected a test/item@1 object".to_owned());
+            }
+            Ok(ResourceContract::new(
+                controller_name("test"),
+                vec![output_name("result")],
+            ))
         }
     }
 
@@ -265,6 +308,21 @@ mod tests {
         .expect("fixture component is valid")
     }
 
+    fn component_bundle(
+        name: &str,
+        bundle: BundleRef,
+        inputs: Vec<ComponentInput>,
+        outputs: Vec<ComponentOutput>,
+    ) -> ComponentIntent {
+        ComponentIntent::new(NewComponentIntent {
+            name: component_name(name),
+            bundle,
+            inputs,
+            outputs,
+        })
+        .expect("fixture component is valid")
+    }
+
     fn observed_component_output(name: &str) -> ComponentOutput {
         ComponentOutput::new(output_name(name), OutputAvailability::Observed, false)
     }
@@ -356,6 +414,67 @@ mod tests {
             outputs,
         })
         .expect("fake controller emits one atomic holistic report")
+    }
+
+    #[tokio::test]
+    async fn core_loop_accepts_the_real_isolate_evaluator() {
+        let producer_bundle =
+            BundleRef::new(ContentDigest::digest(REAL_PRODUCER_BUNDLE.as_bytes()));
+        let consumer_bundle =
+            BundleRef::new(ContentDigest::digest(REAL_CONSUMER_BUNDLE.as_bytes()));
+        let source = Arc::new(FixtureBundleSource {
+            bundles: BTreeMap::from([
+                (producer_bundle, Arc::from(REAL_PRODUCER_BUNDLE.as_bytes())),
+                (consumer_bundle, Arc::from(REAL_CONSUMER_BUNDLE.as_bytes())),
+            ]),
+        });
+        let engine = EvaluationEngine::new(
+            source,
+            Arc::new(TestResourceRegistry),
+            EngineConfig {
+                workers: 1,
+                ..EngineConfig::default()
+            },
+        )
+        .expect("real evaluator starts");
+        let producer = component_bundle(
+            "producer",
+            producer_bundle,
+            Vec::new(),
+            vec![static_component_output("value")],
+        );
+        let consumer = component_bundle(
+            "consumer",
+            consumer_bundle,
+            vec![input("source", "producer", "value")],
+            vec![
+                static_component_output("summary"),
+                observed_component_output("result"),
+            ],
+        );
+        let mut core = Core::new(Arc::new(engine));
+
+        let transition = core
+            .handle(Command::CreateGraph(graph(vec![producer, consumer])))
+            .await
+            .expect("real bundles evaluate through the core seam");
+        let plan = core
+            .state()
+            .graph(graph_id())
+            .and_then(|state| state.plan())
+            .expect("plan exists");
+        assert!(plan.is_complete());
+        assert_eq!(plan.resources().len(), 1);
+        assert_eq!(
+            plan.resources()
+                .next()
+                .expect("one resource")
+                .path()
+                .address()
+                .to_string(),
+            "test/item@1/main"
+        );
+        assert_eq!(transition.effects().len(), 1);
     }
 
     #[tokio::test]

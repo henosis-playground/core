@@ -1,42 +1,71 @@
 //! Hermetic JavaScript evaluation for Henosis component bundles.
 
 use std::cell::Cell;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::future::Future;
 use std::num::NonZeroU32;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, mpsc};
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
+use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use deno_core::error::{CoreError, JsError};
+use deno_core::JsRuntime;
+use deno_core::ModuleLoadOptions;
+use deno_core::ModuleLoadResponse;
+use deno_core::ModuleLoader;
+use deno_core::ModuleResolveResponse;
+use deno_core::ModuleSpecifier;
+use deno_core::OpState;
+use deno_core::ResolutionKind;
+use deno_core::RuntimeOptions;
+use deno_core::error::CoreError;
+use deno_core::error::JsError;
+use deno_core::extension;
+use deno_core::op2;
+use deno_core::serde_v8;
 use deno_core::v8;
-use deno_core::{
-    JsRuntime, ModuleLoadOptions, ModuleLoadResponse, ModuleLoader, ModuleResolveResponse,
-    ModuleSpecifier, OpState, ResolutionKind, RuntimeOptions, extension, op2, serde_v8,
-};
 use deno_error::JsErrorBox;
 use futures::FutureExt;
 use futures::future::BoxFuture;
-use henosis_types::{
-    BlockedDetail, BundleRef, ComponentName, ControllerName, EvaluationAttempt, EvaluationError,
-    EvaluationRequest, EvaluationResource, InputCellState, InputName, KindName, KindVersion,
-    NativeValue, NewBlockedEvaluation, NewCompleteEvaluation, NewEvaluationResource,
-    ObservedOutputBinding, OutputAvailability, OutputDeclaration, OutputName, OutputRef,
-    ResourceAddress, ResourceId, ResourceName, StaticOutput,
-};
-use serde::{Deserialize, Serialize};
+use henosis_types::BlockedDetail;
+use henosis_types::BundleRef;
+use henosis_types::ComponentName;
+use henosis_types::ControllerName;
+use henosis_types::EvaluationAttempt;
+use henosis_types::EvaluationError;
+use henosis_types::EvaluationRequest;
+use henosis_types::EvaluationResource;
+use henosis_types::InputCellState;
+use henosis_types::InputName;
+use henosis_types::KindName;
+use henosis_types::KindVersion;
+use henosis_types::NativeValue;
+use henosis_types::NewBlockedEvaluation;
+use henosis_types::NewCompleteEvaluation;
+use henosis_types::NewEvaluationResource;
+use henosis_types::ObservedOutputBinding;
+use henosis_types::OutputAvailability;
+use henosis_types::OutputDeclaration;
+use henosis_types::OutputName;
+use henosis_types::OutputRef;
+use henosis_types::ResourceAddress;
+use henosis_types::ResourceId;
+use henosis_types::ResourceName;
+use henosis_types::StaticOutput;
+use serde::Deserialize;
+use serde::Serialize;
 
 const ENTRY_SPECIFIER: &str = "henosis:component";
 const PROTOCOL_VERSION: u32 = 1;
 
 /// Retrieves exact executable bytes for a content-addressed bundle.
 pub trait BundleSource: Send + Sync + 'static {
-    fn load(
-        &self,
-        bundle: BundleRef,
-    ) -> BoxFuture<'_, Result<Arc<[u8]>, EvaluationError>>;
+    fn load(&self, bundle: BundleRef) -> BoxFuture<'_, Result<Arc<[u8]>, EvaluationError>>;
 }
 
 /// Controller-owned contract for one supported resource kind.
@@ -66,7 +95,8 @@ impl ResourceContract {
     }
 }
 
-/// Validates controller-owned resource bodies and supplies their output contract.
+/// Validates controller-owned resource bodies and supplies their output
+/// contract.
 pub trait ResourceRegistry: Send + Sync + 'static {
     fn validate(
         &self,
@@ -129,8 +159,7 @@ impl EvaluationEngine {
 
         let mut workers = Vec::with_capacity(config.workers);
         for worker_index in 0..config.workers {
-            let (sender, receiver) =
-                mpsc::sync_channel::<Job>(config.queue_capacity_per_worker);
+            let (sender, receiver) = mpsc::sync_channel::<Job>(config.queue_capacity_per_worker);
             let worker_registry = Arc::clone(&registry);
             let worker_config = config.clone();
             thread::Builder::new()
@@ -249,14 +278,20 @@ impl ModuleLoader for DenyModuleLoader {
         _referrer: &str,
         kind: ResolutionKind,
     ) -> ModuleResolveResponse {
+        if matches!(kind, ResolutionKind::MainModule) && specifier == ENTRY_SPECIFIER {
+            return ModuleSpecifier::parse(ENTRY_SPECIFIER)
+                .map_err(|error| JsErrorBox::generic(error.to_string()));
+        }
         if matches!(kind, ResolutionKind::DynamicImport) {
             self.dynamic_import_attempted.set(true);
             return Err(JsErrorBox::generic(format!(
-                "error[HENOSIS_DYNAMIC_IMPORT]: dynamic import of {specifier:?} is unavailable in component evaluation"
+                "error[HENOSIS_DYNAMIC_IMPORT]: dynamic import of {specifier:?} is unavailable in \
+                 component evaluation"
             )));
         }
         Err(JsErrorBox::generic(format!(
-            "error[HENOSIS_EXTERNAL_IMPORT]: bundle contains unresolved import {specifier:?}; the executable must be one closed ESM file"
+            "error[HENOSIS_EXTERNAL_IMPORT]: bundle contains unresolved import {specifier:?}; the \
+             executable must be one closed ESM file"
         )))
     }
 
@@ -361,7 +396,8 @@ fn evaluate_in_runtime(
         Some(Err(error)) => return Err(core_failure("evaluating component module")(error)),
         None => {
             return Err(EvaluationError::new(
-                "error[HENOSIS_TOP_LEVEL_AWAIT]: top-level await is unavailable in component bundles",
+                "error[HENOSIS_TOP_LEVEL_AWAIT]: top-level await is unavailable in component \
+                 bundles",
             ));
         }
     }
@@ -369,8 +405,10 @@ fn evaluate_in_runtime(
     let namespace = runtime
         .get_module_namespace(module_id)
         .map_err(core_failure("reading component exports"))?;
-    let (metadata, wire_result) = invoke_bundle(runtime, namespace, request)?;
+    let metadata = read_metadata(runtime, &namespace)?;
     validate_metadata(&metadata, request)?;
+    let wire_result = invoke_bundle(runtime, &namespace, request)?;
+    verify_policy_guards(runtime)?;
 
     if dynamic_import_attempted.get() {
         return Err(EvaluationError::new(
@@ -390,7 +428,8 @@ fn evaluate_in_runtime(
         .len();
     if encoded_size > max_output_bytes {
         return Err(EvaluationError::new(format!(
-            "evaluation result is {encoded_size} bytes, exceeding the {max_output_bytes} byte limit"
+            "evaluation result is {encoded_size} bytes, exceeding the {max_output_bytes} byte \
+             limit"
         )));
     }
 
@@ -427,8 +466,20 @@ const BOOTSTRAP: &str = r#"
   const forbidden = (name) => function () {
     throw new Error(`error[HENOSIS_NONDETERMINISTIC_API]: ${name} is unavailable in component evaluation`);
   };
-  Object.defineProperty(globalThis, "Date", { value: forbidden("Date"), configurable: false });
-  Object.defineProperty(Math, "random", { value: forbidden("Math.random"), configurable: false });
+  const deterministicDate = forbidden("Date");
+  const deterministicNow = forbidden("Date.now");
+  const deterministicRandom = forbidden("Math.random");
+  Object.defineProperty(deterministicDate, "now", {
+    value: deterministicNow, writable: true, configurable: false
+  });
+  Object.defineProperty(globalThis, "Date", { value: deterministicDate, configurable: false });
+  Object.defineProperty(Math, "random", {
+    value: deterministicRandom, writable: true, configurable: false
+  });
+  Object.defineProperty(globalThis, "__henosis_policy", {
+    value: Object.freeze({ date: deterministicDate, now: deterministicNow, random: deterministicRandom }),
+    writable: false, configurable: false, enumerable: false
+  });
   for (const name of [
     "performance", "setTimeout", "setInterval", "clearTimeout", "clearInterval",
     "queueMicrotask", "fetch", "crypto", "WeakRef", "FinalizationRegistry",
@@ -446,20 +497,35 @@ const BOOTSTRAP: &str = r#"
       Object.defineProperty(prototype, method, { value: forbidden(method), configurable: false });
     }
   }
-  Object.freeze(Math);
   Object.freeze(JSON);
 })();
 "#;
 
-fn invoke_bundle(
+fn verify_policy_guards(runtime: &mut JsRuntime) -> Result<(), EvaluationError> {
+    let value = runtime
+        .execute_script(
+            "henosis:verify-policy",
+            "Date === __henosis_policy.date && Date.now === __henosis_policy.now && Math.random \
+             === __henosis_policy.random",
+        )
+        .map_err(js_failure("verifying deterministic runtime policy"))?;
+    deno_core::scope!(scope, runtime);
+    let value = v8::Local::new(scope, value);
+    if value.is_true() {
+        Ok(())
+    } else {
+        Err(EvaluationError::new(
+            "error[HENOSIS_POLICY_TAMPERED]: component modified a deterministic runtime guard",
+        ))
+    }
+}
+
+fn read_metadata(
     runtime: &mut JsRuntime,
-    namespace: v8::Global<v8::Object>,
-    request: &EvaluationRequest,
-) -> Result<(ComponentMetadataWire, EvaluationResultWire), EvaluationError> {
-    let snapshot = snapshot_wire(request)?;
+    namespace: &v8::Global<v8::Object>,
+) -> Result<ComponentMetadataWire, EvaluationError> {
     deno_core::scope!(scope, runtime);
     let namespace = v8::Local::new(scope, namespace);
-
     let protocol = export(scope, namespace, "protocolVersion")?;
     let protocol: u32 = serde_v8::from_v8(scope, protocol).map_err(|error| {
         EvaluationError::new(format!(
@@ -471,14 +537,22 @@ fn invoke_bundle(
             "unsupported bundle protocol version {protocol}; expected {PROTOCOL_VERSION}"
         )));
     }
-
     let component = export(scope, namespace, "component")?;
-    let metadata = serde_v8::from_v8(scope, component).map_err(|error| {
+    serde_v8::from_v8(scope, component).map_err(|error| {
         EvaluationError::new(format!(
             "bundle export `component` is not plain JSON-compatible metadata: {error}"
         ))
-    })?;
+    })
+}
 
+fn invoke_bundle(
+    runtime: &mut JsRuntime,
+    namespace: &v8::Global<v8::Object>,
+    request: &EvaluationRequest,
+) -> Result<EvaluationResultWire, EvaluationError> {
+    let snapshot = snapshot_wire(request)?;
+    deno_core::scope!(scope, runtime);
+    let namespace = v8::Local::new(scope, namespace);
     let evaluate = export(scope, namespace, "evaluate")?;
     let evaluate = v8::Local::<v8::Function>::try_from(evaluate)
         .map_err(|_| EvaluationError::new("bundle export `evaluate` is not a function"))?;
@@ -499,7 +573,8 @@ fn invoke_bundle(
     };
     if result.is_promise() {
         return Err(EvaluationError::new(
-            "error[HENOSIS_ASYNC_EVALUATION]: evaluate returned a Promise; components must be synchronous",
+            "error[HENOSIS_ASYNC_EVALUATION]: evaluate returned a Promise; components must be \
+             synchronous",
         ));
     }
     let wire = serde_v8::from_v8(try_catch, result).map_err(|error| {
@@ -507,7 +582,7 @@ fn invoke_bundle(
             "evaluation result is not protocol JSON data: {error}"
         ))
     })?;
-    Ok((metadata, wire))
+    Ok(wire)
 }
 
 fn export<'s>(
@@ -567,12 +642,20 @@ enum SchemaWire {
     Number,
     Boolean,
     Json,
-    Array { element: Box<SchemaWire> },
-    Object { fields: BTreeMap<String, SchemaWire> },
+    Array {
+        element: Box<SchemaWire>,
+    },
+    Object {
+        fields: BTreeMap<String, SchemaWire>,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(tag = "status", rename_all = "lowercase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "status",
+    rename_all = "lowercase",
+    rename_all_fields = "camelCase"
+)]
 enum EvaluationResultWire {
     Complete {
         protocol_version: u32,
@@ -635,6 +718,7 @@ fn validate_metadata(
     metadata: &ComponentMetadataWire,
     request: &EvaluationRequest,
 ) -> Result<(), EvaluationError> {
+    validate_logical_name(&metadata.name, "component name")?;
     let component = ComponentName::new(metadata.name.clone())
         .map_err(|error| EvaluationError::new(format!("invalid component name: {error}")))?;
     if &component != request.component() {
@@ -649,6 +733,9 @@ fn validate_metadata(
         ));
     }
     for (name, declaration) in &metadata.inputs {
+        validate_logical_name(name, "input name")?;
+        validate_logical_name(&declaration.component, "source component name")?;
+        validate_logical_name(&declaration.output, "source output name")?;
         let input = InputName::new(name.clone())
             .map_err(|error| EvaluationError::new(format!("invalid input name: {error}")))?;
         let source = output_ref(&declaration.component, &declaration.output)?;
@@ -667,6 +754,7 @@ fn validate_metadata(
         }
     }
     for (name, declaration) in &metadata.outputs {
+        validate_logical_name(name, "output name")?;
         OutputName::new(name.clone())
             .map_err(|error| EvaluationError::new(format!("invalid output name: {error}")))?;
         validate_schema_shape(&declaration.schema)?;
@@ -678,10 +766,7 @@ fn validate_schema_shape(schema: &SchemaWire) -> Result<(), EvaluationError> {
     match schema {
         SchemaWire::Array { element } => validate_schema_shape(element),
         SchemaWire::Object { fields } => {
-            for (name, child) in fields {
-                OutputName::new(name.clone()).map_err(|error| {
-                    EvaluationError::new(format!("invalid schema field name: {error}"))
-                })?;
+            for child in fields.values() {
                 validate_schema_shape(child)?;
             }
             Ok(())
@@ -851,6 +936,7 @@ fn convert_resources(
     let mut contracts = BTreeMap::new();
     for resource in resources {
         let kind = parse_kind(&resource.kind)?;
+        validate_logical_name(&resource.name, "resource name")?;
         let name = ResourceName::new(resource.name.clone())
             .map_err(|error| EvaluationError::new(format!("invalid resource name: {error}")))?;
         let address = ResourceAddress::new(kind.clone(), name.clone());
@@ -864,8 +950,13 @@ fn convert_resources(
             .map_err(|error| EvaluationError::new(error.to_string()))?;
         let contract = registry
             .validate(&kind, native.as_json())
-            .map_err(|error| EvaluationError::new(format!("resource {address} is invalid: {error}")))?;
-        if contracts.insert(address.clone(), contract.clone()).is_some() {
+            .map_err(|error| {
+                EvaluationError::new(format!("resource {address} is invalid: {error}"))
+            })?;
+        if contracts
+            .insert(address.clone(), contract.clone())
+            .is_some()
+        {
             return Err(EvaluationError::new(format!(
                 "resource address {address} was emitted more than once"
             )));
@@ -925,7 +1016,9 @@ fn convert_observed_outputs(
     let mut converted = Vec::with_capacity(outputs.len());
     for (name, binding) in outputs {
         let declaration = metadata.outputs.get(&name).ok_or_else(|| {
-            EvaluationError::new(format!("result contains undeclared observed output {name:?}"))
+            EvaluationError::new(format!(
+                "result contains undeclared observed output {name:?}"
+            ))
         })?;
         if declaration.availability != AvailabilityWire::Observed {
             return Err(EvaluationError::new(format!(
@@ -1000,15 +1093,17 @@ fn validate_schema_value(
 ) -> Result<(), EvaluationError> {
     let valid = match schema {
         SchemaWire::String => value.is_string(),
-        SchemaWire::Url => value.as_str().is_some_and(|value| {
-            value.starts_with("https://") || value.starts_with("http://")
-        }),
+        SchemaWire::Url => value
+            .as_str()
+            .is_some_and(|value| value.starts_with("https://") || value.starts_with("http://")),
         SchemaWire::Number => value.is_number(),
         SchemaWire::Boolean => value.is_boolean(),
         SchemaWire::Json => true,
-        SchemaWire::Array { element } => value
-            .as_array()
-            .is_some_and(|values| values.iter().all(|value| validate_schema_value(element, value, path).is_ok())),
+        SchemaWire::Array { element } => value.as_array().is_some_and(|values| {
+            values
+                .iter()
+                .all(|value| validate_schema_value(element, value, path).is_ok())
+        }),
         SchemaWire::Object { fields } => value.as_object().is_some_and(|object| {
             fields.iter().all(|(name, schema)| {
                 object
@@ -1022,6 +1117,43 @@ fn validate_schema_value(
     } else {
         Err(EvaluationError::new(format!(
             "{path} does not satisfy its declared schema"
+        )))
+    }
+}
+
+fn validate_logical_name(value: &str, label: &str) -> Result<(), EvaluationError> {
+    let mut bytes = value.bytes();
+    let valid = value.len() <= 63
+        && bytes.next().is_some_and(|byte| byte.is_ascii_lowercase())
+        && bytes.all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-')
+        });
+    if valid {
+        Ok(())
+    } else {
+        Err(EvaluationError::new(format!(
+            "invalid {label} {value:?}; expected 1-63 lowercase letters, digits, underscores, or \
+             hyphens, beginning with a letter"
+        )))
+    }
+}
+
+fn validate_kind_name(value: &str) -> Result<(), EvaluationError> {
+    let mut segments = value.split('/');
+    let valid_segment = |segment: &str| {
+        let mut bytes = segment.bytes();
+        bytes.next().is_some_and(|byte| byte.is_ascii_lowercase())
+            && bytes.all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+    };
+    let valid = segments.next().is_some_and(valid_segment)
+        && segments.next().is_some_and(valid_segment)
+        && segments.next().is_none();
+    if valid {
+        Ok(())
+    } else {
+        Err(EvaluationError::new(format!(
+            "invalid resource kind {value:?}; expected namespace/kind with lowercase letters, \
+             digits, and hyphens"
         )))
     }
 }
@@ -1041,6 +1173,7 @@ fn parse_kind(value: &str) -> Result<KindVersion, EvaluationError> {
     let (name, version) = value.rsplit_once('@').ok_or_else(|| {
         EvaluationError::new(format!("resource kind {value:?} has no version suffix"))
     })?;
+    validate_kind_name(name)?;
     let version = version
         .parse::<u32>()
         .ok()
@@ -1052,9 +1185,9 @@ fn parse_kind(value: &str) -> Result<KindVersion, EvaluationError> {
 }
 
 fn parse_address(value: &str) -> Result<ResourceAddress, EvaluationError> {
-    let (kind, name) = value.rsplit_once('/').ok_or_else(|| {
-        EvaluationError::new(format!("invalid resource address {value:?}"))
-    })?;
+    let (kind, name) = value
+        .rsplit_once('/')
+        .ok_or_else(|| EvaluationError::new(format!("invalid resource address {value:?}")))?;
     Ok(ResourceAddress::new(
         parse_kind(kind)?,
         ResourceName::new(name.to_owned())
@@ -1078,12 +1211,332 @@ fn protocol_failure(error: impl std::fmt::Display) -> EvaluationError {
     EvaluationError::new(format!("bundle/host protocol failure: {error}"))
 }
 
-fn js_failure(
-    context: &'static str,
-) -> impl FnOnce(Box<JsError>) -> EvaluationError {
+fn js_failure(context: &'static str) -> impl FnOnce(Box<JsError>) -> EvaluationError {
     move |error| EvaluationError::new(format!("{context}: {error}"))
 }
 
 fn core_failure(context: &'static str) -> impl FnOnce(CoreError) -> EvaluationError {
     move |error| EvaluationError::new(format!("{context}: {error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use henosis_types::ContentDigest;
+    use henosis_types::EvaluationSnapshot;
+    use henosis_types::Evaluator;
+    use henosis_types::Generation;
+    use henosis_types::GraphId;
+    use henosis_types::InputCell;
+    use pretty_assertions::assert_eq;
+
+    const CONSUMER_BUNDLE: &str = include_str!("../fixtures/consumer.bundle.js");
+
+    struct MemorySource {
+        bundle: Arc<[u8]>,
+    }
+
+    impl BundleSource for MemorySource {
+        fn load(&self, _bundle: BundleRef) -> BoxFuture<'_, Result<Arc<[u8]>, EvaluationError>> {
+            let bundle = Arc::clone(&self.bundle);
+            Box::pin(async move { Ok(bundle) })
+        }
+    }
+
+    struct TestRegistry;
+
+    impl ResourceRegistry for TestRegistry {
+        fn validate(
+            &self,
+            kind: &KindVersion,
+            body: &serde_json::Value,
+        ) -> Result<ResourceContract, String> {
+            if kind.to_string() != "test/item@1" {
+                return Err(format!("unsupported kind {kind}"));
+            }
+            if !body.is_object() {
+                return Err("item body must be an object".to_owned());
+            }
+            Ok(ResourceContract::new(
+                ControllerName::new("test").expect("valid controller"),
+                vec![OutputName::new("result").expect("valid output")],
+            ))
+        }
+    }
+
+    fn bundle_ref(source: &str) -> BundleRef {
+        BundleRef::new(ContentDigest::digest(source.as_bytes()))
+    }
+
+    fn request(source: &str, component: &str, cells: Vec<InputCell>) -> EvaluationRequest {
+        EvaluationRequest::new(
+            GraphId::from_bytes([7; 16]),
+            Generation::new(1).expect("valid generation"),
+            ComponentName::new(component).expect("valid component"),
+            bundle_ref(source),
+            EvaluationSnapshot::new(cells).expect("valid snapshot"),
+        )
+    }
+
+    fn input(name: &str, component: &str, output: &str, state: InputCellState) -> InputCell {
+        InputCell::new(
+            InputName::new(name).expect("valid input"),
+            OutputRef::new(
+                ComponentName::new(component).expect("valid component"),
+                OutputName::new(output).expect("valid output"),
+            ),
+            false,
+            state,
+        )
+        .expect("valid cell")
+    }
+
+    fn available(value: serde_json::Value) -> InputCellState {
+        InputCellState::Available(NativeValue::new(value).expect("valid JSON"))
+    }
+
+    fn evaluate_direct(
+        source: &str,
+        request: &EvaluationRequest,
+    ) -> Result<EvaluationAttempt, EvaluationError> {
+        evaluate_job(
+            request,
+            source.as_bytes(),
+            &TestRegistry,
+            &EngineConfig::default(),
+        )
+    }
+
+    #[test]
+    fn actual_cli_bundle_blocks_then_completes() {
+        let blocked_request = request(
+            CONSUMER_BUNDLE,
+            "consumer",
+            vec![input(
+                "source",
+                "producer",
+                "value",
+                InputCellState::Blocked,
+            )],
+        );
+        let blocked = evaluate_direct(CONSUMER_BUNDLE, &blocked_request)
+            .expect("real bundle should return blocked");
+        assert_eq!(
+            blocked
+                .blocked_result()
+                .expect("blocked result")
+                .blocked()
+                .input()
+                .as_str(),
+            "source"
+        );
+        assert_eq!(
+            blocked
+                .reads()
+                .iter()
+                .map(InputName::as_str)
+                .collect::<Vec<_>>(),
+            vec!["source"]
+        );
+
+        let complete_request = request(
+            CONSUMER_BUNDLE,
+            "consumer",
+            vec![input(
+                "source",
+                "producer",
+                "value",
+                available(serde_json::json!("ready")),
+            )],
+        );
+        let complete = evaluate_direct(CONSUMER_BUNDLE, &complete_request)
+            .expect("real bundle should complete");
+        assert_eq!(complete.resources().len(), 1);
+        assert_eq!(
+            complete.resources()[0].address().to_string(),
+            "test/item@1/main"
+        );
+        assert_eq!(
+            complete
+                .reads()
+                .iter()
+                .map(InputName::as_str)
+                .collect::<Vec<_>>(),
+            vec!["source"]
+        );
+        let result = complete.complete_result().expect("complete result");
+        assert_eq!(result.outputs().count(), 1);
+        assert_eq!(result.observed_outputs().count(), 1);
+    }
+
+    #[test]
+    fn fresh_isolates_produce_byte_identical_results() {
+        let request = request(
+            CONSUMER_BUNDLE,
+            "consumer",
+            vec![input(
+                "source",
+                "producer",
+                "value",
+                available(serde_json::json!("ready")),
+            )],
+        );
+        let first = evaluate_direct(CONSUMER_BUNDLE, &request).expect("first evaluation");
+        let second = evaluate_direct(CONSUMER_BUNDLE, &request).expect("second evaluation");
+        assert_eq!(
+            serde_json::to_vec(&first).expect("serialize first"),
+            serde_json::to_vec(&second).expect("serialize second")
+        );
+    }
+
+    #[tokio::test]
+    async fn evaluator_trait_runs_on_the_bounded_worker_pool() {
+        let source = Arc::new(MemorySource {
+            bundle: Arc::from(CONSUMER_BUNDLE.as_bytes()),
+        });
+        let engine = EvaluationEngine::new(
+            source,
+            Arc::new(TestRegistry),
+            EngineConfig {
+                workers: 1,
+                ..EngineConfig::default()
+            },
+        )
+        .expect("engine starts");
+        let request = request(
+            CONSUMER_BUNDLE,
+            "consumer",
+            vec![input(
+                "source",
+                "producer",
+                "value",
+                available(serde_json::json!("ready")),
+            )],
+        );
+        let result = engine.evaluate(request).await.expect("pool evaluation");
+        assert!(result.complete_result().is_some());
+    }
+
+    #[test]
+    fn sticky_blocked_signal_overrides_catch_and_swallow() {
+        let source = r#"
+          export const protocolVersion = 1;
+          export const component = {
+            name: "consumer",
+            inputs: { value: { component: "producer", output: "value", optional: false } },
+            outputs: {}
+          };
+          export function evaluate() {
+            try {
+              __henosis_mark_blocked({
+                input: "value", source: "producer.value", operation: "reading `.value`",
+                message: "blocked even when swallowed"
+              });
+              throw new Error("sentinel");
+            } catch (_) {}
+            return { protocolVersion: 1, status: "complete", resources: [], outputs: {}, observedOutputs: {}, reads: [] };
+          }
+        "#;
+        let request = request(
+            source,
+            "consumer",
+            vec![input("value", "producer", "value", InputCellState::Blocked)],
+        );
+        let result = evaluate_direct(source, &request).expect("sticky signal is a blocked result");
+        assert_eq!(
+            result
+                .blocked_result()
+                .expect("blocked")
+                .blocked()
+                .message(),
+            "blocked even when swallowed"
+        );
+    }
+
+    #[test]
+    fn rejects_returned_promises() {
+        let source = minimal_bundle("return Promise.resolve({});");
+        let error = evaluate_direct(&source, &request(&source, "hostile", Vec::new()))
+            .expect_err("promise must fail");
+        assert!(error.to_string().contains("HENOSIS_ASYNC_EVALUATION"));
+    }
+
+    #[test]
+    fn hostile_ambient_apis_fail_closed_with_diagnostics() {
+        for (name, body, expected) in [
+            ("Date.now", "Date.now();", "HENOSIS_NONDETERMINISTIC_API"),
+            (
+                "Math.random",
+                "Math.random();",
+                "HENOSIS_NONDETERMINISTIC_API",
+            ),
+            (
+                "fetch",
+                "fetch('https://example.test');",
+                "fetch is not defined",
+            ),
+            (
+                "dynamic import",
+                "return import('data:text/javascript,export default 1');",
+                "HENOSIS_ASYNC_EVALUATION",
+            ),
+        ] {
+            let source = minimal_bundle(body);
+            let error =
+                evaluate_direct(&source, &request(&source, "hostile", Vec::new())).expect_err(name);
+            assert!(
+                error.to_string().contains(expected),
+                "{name} diagnostic was: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn canonical_body_mismatch_fails_closed() {
+        let source = r#"
+          export const protocolVersion = 1;
+          export const component = { name: "hostile", inputs: {}, outputs: {} };
+          export function evaluate() {
+            return {
+              protocolVersion: 1,
+              status: "complete",
+              resources: [{ address: "test/item@1/main", kind: "test/item@1", name: "main", body: { a: 1 }, canonical: "{\"a\":2}" }],
+              outputs: {}, observedOutputs: {}, reads: []
+            };
+          }
+        "#;
+        let error = evaluate_direct(source, &request(source, "hostile", Vec::new()))
+            .expect_err("canonical mismatch must fail");
+        assert!(error.to_string().contains("canonical JSON"));
+    }
+
+    #[test]
+    fn timeout_is_a_host_failure() {
+        let source = minimal_bundle("for (;;) {}");
+        let request = request(&source, "hostile", Vec::new());
+        let error = evaluate_job(
+            &request,
+            source.as_bytes(),
+            &TestRegistry,
+            &EngineConfig {
+                timeout: Duration::from_millis(20),
+                ..EngineConfig::default()
+            },
+        )
+        .expect_err("infinite loop must time out");
+        assert!(error.to_string().contains("execution deadline"));
+    }
+
+    fn minimal_bundle(body: &str) -> String {
+        format!(
+            r#"
+              export const protocolVersion = 1;
+              export const component = {{ name: "hostile", inputs: {{}}, outputs: {{}} }};
+              export function evaluate(snapshot) {{
+                {body}
+                return {{ protocolVersion: 1, status: "complete", resources: [], outputs: {{}}, observedOutputs: {{}}, reads: [] }};
+              }}
+            "#
+        )
+    }
 }
