@@ -43,6 +43,7 @@ use henosis_proto::connect::henosis::v1::GraphServiceExt;
 use henosis_proto::proto::henosis::v1 as proto;
 use henosis_types::BundleRef;
 use henosis_types::ComponentInputBinding;
+use henosis_types::ComponentInputSource;
 use henosis_types::ComponentIntent;
 use henosis_types::ContentDigest;
 use henosis_types::Controller;
@@ -750,7 +751,43 @@ fn component_wire(component: &ComponentIntent) -> proto::ComponentIntent {
     proto::ComponentIntent {
         name: Some(component.name().to_string()),
         bundle_digest: Some(component.bundle().digest().as_bytes().to_vec()),
+        inputs: component
+            .inputs()
+            .filter_map(|input| match input.source() {
+                ComponentInputSource::Output { source, optional } => Some(proto::ComponentInput {
+                    name: Some(input.name().to_string()),
+                    source_component: Some(source.component().to_string()),
+                    source_output: Some(source.output().to_string()),
+                    optional: Some(*optional),
+                    ..Default::default()
+                }),
+                ComponentInputSource::Config { .. } => None,
+            })
+            .collect(),
+        outputs: component
+            .outputs()
+            .map(|output| proto::ComponentOutput {
+                name: Some(output.name().to_string()),
+                availability: Some(
+                    match output.availability() {
+                        OutputAvailability::Static => proto::OutputAvailability::Static,
+                        OutputAvailability::Observed => proto::OutputAvailability::Observed,
+                    }
+                    .into(),
+                ),
+                optional: Some(output.is_optional()),
+                ..Default::default()
+            })
+            .collect(),
         source: component.source().map(source_wire).into(),
+        input_bindings: component
+            .input_bindings()
+            .map(|binding| proto::InputBinding {
+                name: Some(binding.name().to_string()),
+                value_json: Some(binding.value().canonical().as_bytes().to_vec()),
+                ..Default::default()
+            })
+            .collect(),
         ..Default::default()
     }
 }

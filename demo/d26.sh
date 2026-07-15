@@ -46,8 +46,9 @@ run env S2_LITE_PORT="$S2_PORT" docker compose -p "$COMPOSE_PROJECT" -f "$COMPOS
 run cargo build --manifest-path "$BOT_ROOT/Cargo.toml" -p henosis-cli
 run cargo build --manifest-path "$CORE_ROOT/Cargo.toml" -p henosis-core-server -p henosis-frontend-git-sync
 
-BUNDLES="$DEMO_ROOT/bundles"
-run "$BOT_ROOT/target/debug/henosis" bundle "$PLATFORM_ROOT/examples/benchmark" --output "$BUNDLES"
+BUNDLES="$PLATFORM_ROOT/examples/benchmark/.henosis/bundles"
+rm -rf "$BUNDLES"
+run "$BOT_ROOT/target/debug/henosis" debug bundle "$PLATFORM_ROOT/examples/benchmark" --output "$BUNDLES"
 
 DEPLOY_REMOTE="$DEMO_ROOT/deploy.git"
 run git init --bare --initial-branch=main "$DEPLOY_REMOTE"
@@ -71,8 +72,7 @@ for _ in $(seq 1 120); do
   sleep 0.25
 done
 
-run "$BOT_ROOT/target/debug/henosis" submit "$GRAPH" --manifest "$BUNDLES/manifest.json" --core "$CORE_URL" --demo-targets
-run "$BOT_ROOT/target/debug/henosis" watch "$GRAPH" --core "$CORE_URL" --demo-targets
+run "$BOT_ROOT/target/debug/henosis" deploy "$PLATFORM_ROOT/examples/benchmark" --graph "$GRAPH" --core "$CORE_URL" --create --demo-targets
 
 printf '\nKubernetes file:// publication\n'
 run git --git-dir="$DEPLOY_REMOTE" for-each-ref '--format=%(refname:short)' refs/heads
@@ -111,6 +111,6 @@ run "$CORE_ROOT/target/debug/henosis-frontend-git-sync" "$INTENT_REMOTE" "$CORE_
 
 printf '\nGit-sync acknowledgement written through the public GraphService\n'
 run git --git-dir="$INTENT_REMOTE" show "main:henosis/graphs/$GIT_SYNC_GRAPH.toml"
-run "$BOT_ROOT/target/debug/henosis" status "$GIT_SYNC_GRAPH" --core "$CORE_URL" --demo-targets
+run "$BOT_ROOT/target/debug/henosis" status --graph "$GIT_SYNC_GRAPH" --core "$CORE_URL" --demo-targets
 
 printf '\nDemo complete. Transcript: %s\n' "$TRANSCRIPT"
