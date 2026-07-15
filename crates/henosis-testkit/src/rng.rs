@@ -1,7 +1,8 @@
 use rand::RngCore;
 use rand::SeedableRng;
 use rand_chacha::ChaCha12Rng;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct Seed([u8; 32]);

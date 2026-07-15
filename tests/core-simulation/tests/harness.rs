@@ -1,19 +1,49 @@
 use std::collections::BTreeMap;
 
-use henosis_sim::{RunStatus, Scenario, SimAction, SimWorld, run_seed};
-use henosis_storage::{AppendRecord, StreamName, StreamPosition};
-use henosis_testkit::{
-    AppendFault, ComponentProgram, MemS2, ProgramEvaluator, Quiescence, ResourceProgram, Seed,
-    WaitGraph, WaitNode,
-};
-use henosis_types::{
-    ComponentName, ControllerName, EvaluationRequest, EvaluationSnapshot, Evaluator, Generation,
-    GraphId, InputCell, InputCellState, InputName, NativeValue, OutputName, OutputRef, ResourceId,
-    ResourceName,
-};
+use henosis_sim::RunStatus;
+use henosis_sim::Scenario;
+use henosis_sim::SimAction;
+use henosis_sim::SimWorld;
+use henosis_sim::run_seed;
+use henosis_storage::AppendRecord;
+use henosis_storage::StreamName;
+use henosis_storage::StreamPosition;
+use henosis_testkit::AppendFault;
+use henosis_testkit::ComponentProgram;
+use henosis_testkit::MemS2;
+use henosis_testkit::ProgramEvaluator;
+use henosis_testkit::Quiescence;
+use henosis_testkit::ResourceProgram;
+use henosis_testkit::Seed;
+use henosis_testkit::WaitGraph;
+use henosis_testkit::WaitNode;
+use henosis_types::ComponentName;
+use henosis_types::ControllerName;
+use henosis_types::EvaluationRequest;
+use henosis_types::EvaluationSnapshot;
+use henosis_types::Evaluator;
+use henosis_types::Generation;
+use henosis_types::GraphId;
+use henosis_types::InputCell;
+use henosis_types::InputCellState;
+use henosis_types::InputName;
+use henosis_types::NativeValue;
+use henosis_types::OutputName;
+use henosis_types::OutputRef;
+use henosis_types::ResourceId;
+use henosis_types::ResourceName;
 use proptest::prelude::*;
 use proptest::test_runner::Config;
-use proptest_state_machine::{ReferenceStateMachine, StateMachineTest, prop_state_machine};
+use proptest_state_machine::ReferenceStateMachine;
+use proptest_state_machine::StateMachineTest;
+use proptest_state_machine::prop_state_machine;
+
+fn property_cases() -> u32 {
+    std::env::var("HENOSIS_PROPTEST_CASES")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(32)
+}
 
 fn runtime() -> tokio::runtime::Runtime {
     tokio::runtime::Builder::new_current_thread()
@@ -24,7 +54,7 @@ fn runtime() -> tokio::runtime::Runtime {
 
 proptest! {
     #![proptest_config(Config {
-        cases: 32,
+        cases: property_cases(),
         max_shrink_iters: 2_048,
         .. Config::default()
     })]
@@ -53,7 +83,7 @@ proptest! {
 
 proptest! {
     #![proptest_config(Config {
-        cases: 32,
+        cases: property_cases(),
         .. Config::default()
     })]
 
@@ -154,16 +184,21 @@ fn timeout_after_commit_is_observable_and_cas_safe() {
             vec![AppendRecord::new(b"durable".to_vec())],
         )
         .expect_err("caller sees timeout ambiguity");
-    assert_eq!(error.to_string(), "append timed out after commit; durability is ambiguous to the caller");
+    assert_eq!(
+        error.to_string(),
+        "append timed out after commit; durability is ambiguous to the caller"
+    );
     assert_eq!(storage.tail(&stream).sequence(), 1);
     let before = storage.read(&stream, StreamPosition::default(), 10);
-    assert!(storage
-        .append(
-            &stream,
-            StreamPosition::default(),
-            vec![AppendRecord::new(b"stale".to_vec())],
-        )
-        .is_err());
+    assert!(
+        storage
+            .append(
+                &stream,
+                StreamPosition::default(),
+                vec![AppendRecord::new(b"stale".to_vec())],
+            )
+            .is_err()
+    );
     assert_eq!(storage.read(&stream, StreamPosition::default(), 10), before);
 }
 
@@ -181,7 +216,10 @@ fn stall_diagnostics_distinguish_external_block_from_internal_cycle() {
     );
 
     let mut cycle = WaitGraph::default();
-    cycle.add_edge(component.clone(), WaitNode::Component("database".to_owned()));
+    cycle.add_edge(
+        component.clone(),
+        WaitNode::Component("database".to_owned()),
+    );
     cycle.add_edge(WaitNode::Component("database".to_owned()), component);
     let report = cycle.classify(false, false);
     assert_eq!(report.classification, Quiescence::Deadlocked);
@@ -270,8 +308,8 @@ struct StorageSut {
 }
 
 impl StateMachineTest for StorageSut {
-    type SystemUnderTest = Self;
     type Reference = StorageMachine;
+    type SystemUnderTest = Self;
 
     fn init_test(_: &StorageModel) -> Self::SystemUnderTest {
         Self {
@@ -294,20 +332,26 @@ impl StateMachineTest for StorageSut {
             }
             StorageTransition::StaleAppend => {
                 if reference.expected > 0 {
-                    assert!(state
-                        .storage
-                        .append(
-                            &state.stream,
-                            StreamPosition::new(reference.expected - 1),
-                            vec![AppendRecord::new(vec![255])],
-                        )
-                        .is_err());
+                    assert!(
+                        state
+                            .storage
+                            .append(
+                                &state.stream,
+                                StreamPosition::new(reference.expected - 1),
+                                vec![AppendRecord::new(vec![255])],
+                            )
+                            .is_err()
+                    );
                 }
             }
             StorageTransition::Read(from, limit) => {
                 let actual = state
                     .storage
-                    .read(&state.stream, StreamPosition::new(u64::from(from)), usize::from(limit))
+                    .read(
+                        &state.stream,
+                        StreamPosition::new(u64::from(from)),
+                        usize::from(limit),
+                    )
                     .into_iter()
                     .map(|record| record.body().to_vec())
                     .collect::<Vec<_>>();
@@ -325,7 +369,10 @@ impl StateMachineTest for StorageSut {
     }
 
     fn check_invariants(state: &Self, reference: &StorageModel) {
-        assert_eq!(state.storage.tail(&state.stream).sequence(), reference.expected);
+        assert_eq!(
+            state.storage.tail(&state.stream).sequence(),
+            reference.expected
+        );
         let all = state
             .storage
             .read(&state.stream, StreamPosition::default(), usize::MAX)
@@ -338,7 +385,7 @@ impl StateMachineTest for StorageSut {
 
 prop_state_machine! {
     #![proptest_config(Config {
-        cases: 32,
+        cases: property_cases(),
         max_shrink_iters: 2_048,
         .. Config::default()
     })]

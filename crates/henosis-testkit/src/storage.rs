@@ -1,6 +1,11 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
+use std::collections::VecDeque;
 
-use henosis_storage::{AppendAck, AppendRecord, StoredRecord, StreamName, StreamPosition};
+use henosis_storage::AppendAck;
+use henosis_storage::AppendRecord;
+use henosis_storage::StoredRecord;
+use henosis_storage::StreamName;
+use henosis_storage::StreamPosition;
 use thiserror::Error;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -80,7 +85,12 @@ impl MemS2 {
     }
 
     #[must_use]
-    pub fn read(&self, stream: &StreamName, from: StreamPosition, limit: usize) -> Vec<StoredRecord> {
+    pub fn read(
+        &self,
+        stream: &StreamName,
+        from: StreamPosition,
+        limit: usize,
+    ) -> Vec<StoredRecord> {
         self.streams
             .get(stream)
             .into_iter()

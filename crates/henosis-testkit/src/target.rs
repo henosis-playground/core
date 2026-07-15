@@ -1,6 +1,11 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
+use std::collections::VecDeque;
 
-use henosis_types::{ControllerName, Generation, NativeValue, OutputName, ResourceId};
+use henosis_types::ControllerName;
+use henosis_types::Generation;
+use henosis_types::NativeValue;
+use henosis_types::OutputName;
+use henosis_types::ResourceId;
 use thiserror::Error;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -69,7 +74,10 @@ impl FakeTarget {
         for resource in operation.resources.into_iter().take(apply_count) {
             self.applied.insert(resource, operation.generation);
         }
-        Ok(!matches!(fault, TargetFault::FailBeforeApply | TargetFault::ApplyThenTimeout))
+        Ok(!matches!(
+            fault,
+            TargetFault::FailBeforeApply | TargetFault::ApplyThenTimeout
+        ))
     }
 
     pub fn delay(&mut self, output: OutputDelivery) {

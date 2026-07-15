@@ -4,6 +4,7 @@
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::collections::BTreeSet;
     use std::num::NonZeroU32;
     use std::sync::Arc;
 
@@ -510,6 +511,31 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(names.contains(&"left"));
         assert!(names.contains(&"right"));
+
+        let mut wait_graph = henosis_testkit::WaitGraph::default();
+        wait_graph.add_edge(
+            henosis_testkit::WaitNode::Component("left".to_owned()),
+            henosis_testkit::WaitNode::Component("right".to_owned()),
+        );
+        wait_graph.add_edge(
+            henosis_testkit::WaitNode::Component("right".to_owned()),
+            henosis_testkit::WaitNode::Component("left".to_owned()),
+        );
+        let classified = wait_graph.classify(false, false);
+        assert_eq!(
+            classified.classification,
+            henosis_testkit::Quiescence::Deadlocked
+        );
+        let classified_names = classified
+            .cycle
+            .iter()
+            .filter_map(|node| match node {
+                henosis_testkit::WaitNode::Component(name) => Some(name.as_str()),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(classified_names, names.into_iter().collect());
+
         assert!(
             transition
                 .events()

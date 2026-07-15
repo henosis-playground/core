@@ -1,20 +1,53 @@
 //! Seeded, explicit-transition simulation around the real Henosis core loop.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use faultline::Error;
-use henosis_orchestrator::{Command, ControllerEffect, Core, MaterializedCore, Transition};
-use henosis_testkit::{NamedRng, NormalizedTrace, Seed, TraceRecorder};
-use henosis_types::{
-    BundleRef, ComponentInput, ComponentIntent, ComponentName, ComponentOutput, ContentDigest,
-    ControllerCommand, ControllerName, ControllerReport, GraphId, GraphName, InputName,
-    NativeValue, NewComponentIntent, NewControllerReport, NewGraphIntent, ObservedOutput,
-    ObservedOutputKey, OutputAvailability, OutputName, OutputRef, Plan, PublicationId,
-    ResourceDisposition, ResourceDispositionKind, ResourceId,
-};
+use henosis_orchestrator::Command;
+use henosis_orchestrator::ControllerEffect;
+use henosis_orchestrator::Core;
+use henosis_orchestrator::MaterializedCore;
+use henosis_orchestrator::Transition;
+use henosis_testkit::NamedRng;
+use henosis_testkit::NormalizedTrace;
+use henosis_testkit::Seed;
+use henosis_testkit::TraceRecorder;
+use henosis_types::BundleRef;
+use henosis_types::ComponentInput;
+use henosis_types::ComponentIntent;
+use henosis_types::ComponentName;
+use henosis_types::ComponentOutput;
+use henosis_types::ContentDigest;
+use henosis_types::ControllerCommand;
+use henosis_types::ControllerName;
+use henosis_types::ControllerReport;
+use henosis_types::GraphId;
+use henosis_types::GraphName;
+use henosis_types::InputName;
+use henosis_types::NativeValue;
+use henosis_types::NewComponentIntent;
+use henosis_types::NewControllerReport;
+use henosis_types::NewGraphIntent;
+use henosis_types::ObservedOutput;
+use henosis_types::ObservedOutputKey;
+use henosis_types::OutputAvailability;
+use henosis_types::OutputName;
+use henosis_types::OutputRef;
+use henosis_types::Plan;
+use henosis_types::PublicationId;
+use henosis_types::ResourceDisposition;
+use henosis_types::ResourceDispositionKind;
+use henosis_types::ResourceId;
 
-pub use henosis_testkit::{ComponentProgram, ProgramEvaluator, Quiescence, ResourceProgram, StallReport, WaitGraph, WaitNode};
+pub use henosis_testkit::ComponentProgram;
+pub use henosis_testkit::ProgramEvaluator;
+pub use henosis_testkit::Quiescence;
+pub use henosis_testkit::ResourceProgram;
+pub use henosis_testkit::StallReport;
+pub use henosis_testkit::WaitGraph;
+pub use henosis_testkit::WaitNode;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Scenario {
@@ -43,6 +76,7 @@ pub enum SimAction {
 pub enum RunStatus {
     Converged,
     Stalled,
+    Livelocked,
     BudgetExhausted,
 }
 
@@ -118,12 +152,17 @@ impl SimWorld {
 
     pub async fn run(mut self, step_budget: usize) -> RunResult {
         let mut duplicate_budget = self.delivered.len().saturating_add(2);
+        let mut fingerprints = BTreeSet::new();
+        fingerprints.insert(self.world_fingerprint());
         for _ in 0..step_budget {
             let enabled = self.enabled_actions();
             let progress_actions = enabled
                 .iter()
                 .filter(|action| {
-                    matches!(action, SimAction::CompleteTarget(_) | SimAction::DeliverOutput(_))
+                    matches!(
+                        action,
+                        SimAction::CompleteTarget(_) | SimAction::DeliverOutput(_)
+                    )
                 })
                 .cloned()
                 .collect::<Vec<_>>();
@@ -141,11 +180,15 @@ impl SimWorld {
                 .choose_index(progress_actions.len())
                 .expect("progress actions are non-empty");
             self.apply(progress_actions[index].clone()).await;
-            if duplicate_budget > 0 && self.scheduler.next_u64().is_multiple_of(4) {
-                if let Some(controller) = self.delivered.keys().next().cloned() {
-                    self.apply(SimAction::DeliverDuplicate(controller)).await;
-                    duplicate_budget -= 1;
-                }
+            if duplicate_budget > 0
+                && self.scheduler.next_u64().is_multiple_of(4)
+                && let Some(controller) = self.delivered.keys().next().cloned()
+            {
+                self.apply(SimAction::DeliverDuplicate(controller)).await;
+                duplicate_budget -= 1;
+            }
+            if !fingerprints.insert(self.world_fingerprint()) {
+                return self.finish(RunStatus::Livelocked);
             }
         }
         self.finish(RunStatus::BudgetExhausted)
@@ -232,6 +275,27 @@ impl SimWorld {
     }
 
     #[must_use]
+    fn world_fingerprint(&self) -> String {
+        let queues = (
+            self.pending
+                .keys()
+                .map(ControllerName::as_str)
+                .collect::<Vec<_>>(),
+            self.ready
+                .keys()
+                .map(ControllerName::as_str)
+                .collect::<Vec<_>>(),
+            self.delivered
+                .keys()
+                .map(ControllerName::as_str)
+                .collect::<Vec<_>>(),
+        );
+        let encoded = serde_json::to_vec(&(self.canonical_state(), queues))
+            .expect("simulation fingerprint serializes");
+        blake3::hash(&encoded).to_hex().to_string()
+    }
+
+    #[must_use]
     pub fn canonical_state(&self) -> Vec<u8> {
         let plan = self.plan();
         let resources = plan
@@ -303,8 +367,10 @@ impl SimWorld {
             .resources()
             .iter()
             .flat_map(|resource| {
-                resource.outputs().filter_map(|output| {
-                    (output.availability() == OutputAvailability::Observed).then(|| {
+                resource
+                    .outputs()
+                    .filter(|output| output.availability() == OutputAvailability::Observed)
+                    .map(|output| {
                         ObservedOutput::new(
                             ObservedOutputKey::new(resource.id(), output.name().clone()),
                             NativeValue::new(serde_json::json!(format!(
@@ -315,15 +381,12 @@ impl SimWorld {
                             .expect("generated output is finite JSON"),
                         )
                     })
-                })
             })
             .collect();
         let dispositions = slice
             .resources()
             .iter()
-            .map(|resource| {
-                ResourceDisposition::new(resource.id(), ResourceDispositionKind::Ready)
-            })
+            .map(|resource| ResourceDisposition::new(resource.id(), ResourceDispositionKind::Ready))
             .collect();
         let publication_id = PublicationId::from_bytes([self.publication_counter; 16]);
         self.publication_counter = self.publication_counter.wrapping_add(1).max(1);
@@ -342,7 +405,11 @@ impl SimWorld {
     }
 
     fn record_presence(&mut self) {
-        let present = self.plan().resources().map(|resource| resource.id()).collect::<BTreeSet<_>>();
+        let present = self
+            .plan()
+            .resources()
+            .map(|resource| resource.id())
+            .collect::<BTreeSet<_>>();
         let known = self
             .presence_history
             .keys()
@@ -367,7 +434,9 @@ impl SimWorld {
         );
         for history in self.presence_history.values() {
             assert!(
-                !history.windows(3).any(|window| window == [true, false, true]),
+                !history
+                    .windows(3)
+                    .any(|window| window == [true, false, true]),
                 "resource presence must not flap within a generation"
             );
         }
@@ -403,14 +472,21 @@ fn build_graph(evaluator: &ProgramEvaluator, scenario: &Scenario) -> NewGraphInt
             component,
             bundle,
             Vec::new(),
-            vec![ComponentOutput::new(output, OutputAvailability::Observed, false)],
+            vec![ComponentOutput::new(
+                output,
+                OutputAvailability::Observed,
+                false,
+            )],
         ));
     }
     let inputs = (0..scenario.source_count)
         .map(|index| {
             ComponentInput::new(
                 input_name(&format!("input-{index}")),
-                OutputRef::new(component_name(&format!("source-{index}")), output_name("value")),
+                OutputRef::new(
+                    component_name(&format!("source-{index}")),
+                    output_name("value"),
+                ),
                 false,
             )
         })

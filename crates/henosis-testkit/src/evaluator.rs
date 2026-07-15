@@ -3,13 +3,32 @@ use std::num::NonZeroU32;
 use std::sync::RwLock;
 
 use futures::future::BoxFuture;
-use henosis_types::{
-    BlockedDetail, BundleRef, ComponentName, ContentDigest, ControllerName, EvaluationAttempt,
-    EvaluationError, EvaluationRequest, EvaluationResource, Evaluator, InputCellState, InputName,
-    KindName, KindVersion, NativeValue, NewBlockedEvaluation, NewCompleteEvaluation,
-    NewEvaluationResource, ObservedOutputBinding, OutputAvailability, OutputDeclaration, OutputName,
-    ResourceAddress, ResourceId, ResourceName, StaticOutput,
-};
+use henosis_types::BlockedDetail;
+use henosis_types::BundleRef;
+use henosis_types::ComponentName;
+use henosis_types::ContentDigest;
+use henosis_types::ControllerName;
+use henosis_types::EvaluationAttempt;
+use henosis_types::EvaluationError;
+use henosis_types::EvaluationRequest;
+use henosis_types::EvaluationResource;
+use henosis_types::Evaluator;
+use henosis_types::InputCellState;
+use henosis_types::InputName;
+use henosis_types::KindName;
+use henosis_types::KindVersion;
+use henosis_types::NativeValue;
+use henosis_types::NewBlockedEvaluation;
+use henosis_types::NewCompleteEvaluation;
+use henosis_types::NewEvaluationResource;
+use henosis_types::ObservedOutputBinding;
+use henosis_types::OutputAvailability;
+use henosis_types::OutputDeclaration;
+use henosis_types::OutputName;
+use henosis_types::ResourceAddress;
+use henosis_types::ResourceId;
+use henosis_types::ResourceName;
+use henosis_types::StaticOutput;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResourceProgram {
@@ -82,9 +101,10 @@ impl ProgramEvaluator {
                     InputCellState::Blocked | InputCellState::Absent => None,
                 })
                 .collect::<serde_json::Map<_, _>>();
-            let observed = resource.observed_component_output.as_ref().map(|name| {
-                OutputDeclaration::new(name.clone(), OutputAvailability::Observed)
-            });
+            let observed = resource
+                .observed_component_output
+                .as_ref()
+                .map(|name| OutputDeclaration::new(name.clone(), OutputAvailability::Observed));
             let address = ResourceAddress::new(kind(), resource.name.clone());
             let value = serde_json::Value::Object(body);
             let native = NativeValue::new(value.clone())
