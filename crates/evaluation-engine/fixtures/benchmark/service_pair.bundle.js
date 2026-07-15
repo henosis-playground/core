@@ -38,10 +38,13 @@ var inputValueSymbol = Symbol("henosis.input-value");
 var bindingSymbol = Symbol("henosis.output-binding");
 var input = Object.freeze({
   required(source) {
-    return Object.freeze({ source, optional: false });
+    return Object.freeze({ kind: "output", source, optional: false });
   },
   optional(source) {
-    return Object.freeze({ source, optional: true });
+    return Object.freeze({ kind: "output", source, optional: true });
+  },
+  config(schema, options = {}) {
+    return Object.freeze({ kind: "config", schema, optional: false, ...options });
   }
 });
 function defineResource(spec) {
@@ -62,11 +65,16 @@ function defineComponent(spec) {
   const outputs = freezeOutputs(spec.outputs);
   for (const [name, declaration] of Object.entries(inputs)) {
     assertApiName(name, "input name");
-    if (!isOutputHandle(declaration.source)) {
-      throw diagnostic("HENOSIS_INPUT_SOURCE", `Input ${quoted(name)} does not reference a component output.`, "Import the producer and use input.required(producer.outputs.<name>) or input.optional(...).");
-    }
-    if (declaration.optional && !declaration.source.optional) {
-      throw diagnostic("HENOSIS_OPTIONAL_INPUT", `Input ${quoted(name)} is optional, but ${sourceLabel(declaration)} is required.`, "Make the producer output optional or consume it with input.required(...).");
+    if (declaration.kind === "output") {
+      if (!isOutputHandle(declaration.source)) {
+        throw diagnostic("HENOSIS_INPUT_SOURCE", `Input ${quoted(name)} does not reference a component output.`, "Import the producer and use input.required(producer.outputs.<name>) or input.optional(...).");
+      }
+      if (declaration.optional && !declaration.source.optional) {
+        throw diagnostic("HENOSIS_OPTIONAL_INPUT", `Input ${quoted(name)} is optional, but ${sourceLabel(name, declaration)} is required.`, "Make the producer output optional or consume it with input.required(...).");
+      }
+    } else if ("default" in declaration) {
+      const defaultValue = snapshotJson(declaration.default, `default for config input ${name}`);
+      assertSchemaValue(declaration.schema, defaultValue, `default for config input ${name}`);
     }
   }
   const definition = Object.freeze({ protocolVersion: 1, name: spec.name, inputs, outputs, build: spec.build });
@@ -208,20 +216,20 @@ function materializeInputs(declarations, snapshot, reads) {
     if (cell === void 0)
       throw diagnostic("HENOSIS_SNAPSHOT_MISSING_INPUT", `The host omitted declared input ${quoted(name)}.`, "Provide exactly one available, blocked, or absent cell for every declared input.");
     if (cell.state === "absent" && !declaration.optional)
-      throw diagnostic("HENOSIS_REQUIRED_INPUT_ABSENT", `Required input ${quoted(name)} (${sourceLabel(declaration)}) is absent.`, "Only optional producer outputs may be absent.");
+      throw diagnostic("HENOSIS_REQUIRED_INPUT_ABSENT", `Required input ${quoted(name)} (${sourceLabel(name, declaration)}) is absent.`, "Only optional producer outputs may be absent.");
     const handle = {
       ...declaration.optional ? { present: cell.state !== "absent" } : {},
       get value() {
         reads.add(name);
         if (cell.state === "blocked")
-          throwBlocked(name, sourceLabel(declaration), "reading `.value`");
+          throwBlocked(name, sourceLabel(name, declaration), "reading `.value`");
         if (cell.state === "absent")
           throw diagnostic("HENOSIS_ABSENT_INPUT_READ", `Optional input ${quoted(name)} is absent, but its .value was read.`, `Branch on inputs.${name}.present before reading inputs.${name}.value.`);
         return cell.value;
       },
       [inputValueSymbol]: Object.freeze({
         name,
-        source: sourceLabel(declaration),
+        source: sourceLabel(name, declaration),
         state: cell.state,
         markRead: () => {
           reads.add(name);
@@ -318,7 +326,17 @@ function guardDeterminism(run) {
 function metadata(definition) {
   return Object.freeze({
     name: definition.name,
-    inputs: Object.freeze(Object.fromEntries(Object.entries(definition.inputs).map(([name, declaration]) => [name, Object.freeze({ component: declaration.source.component, output: declaration.source.output, optional: declaration.optional })]))),
+    inputs: Object.freeze(Object.fromEntries(Object.entries(definition.inputs).map(([name, declaration]) => {
+      if (declaration.kind === "output") {
+        return [name, Object.freeze({ component: declaration.source.component, output: declaration.source.output, optional: declaration.optional })];
+      }
+      const config = {
+        source: "config",
+        schema: schemaWire(declaration.schema),
+        ...declaration.default === void 0 ? {} : { default: Object.freeze({ value: snapshotJson(declaration.default, `default for config input ${name}`) }) }
+      };
+      return [name, Object.freeze(config)];
+    }))),
     outputs: Object.freeze(Object.fromEntries(Object.entries(definition.outputs).map(([name, declaration]) => [name, Object.freeze({ availability: declaration.availability, optional: declaration.optional, schema: schemaWire(declaration.schema) })])))
   });
 }
@@ -381,8 +399,8 @@ function isOutputHandle(candidate) {
 function isBinding(candidate) {
   return isRecord(candidate) && bindingSymbol in candidate;
 }
-function sourceLabel(declaration) {
-  return `${declaration.source.component}.${declaration.source.output}`;
+function sourceLabel(name, declaration) {
+  return declaration.kind === "output" ? `${declaration.source.component}.${declaration.source.output}` : `graph config ${name}`;
 }
 function assertKind(kind) {
   if (!/^[a-z][a-z0-9-]*\/[a-z][a-z0-9-]*@[1-9][0-9]*$/u.test(kind))
@@ -476,11 +494,14 @@ function assertDnsLabel(name, label) {
 // src/k8s-services.ts
 var k8s_services_default = defineComponent({
   name: "service_pair",
+  inputs: {
+    replicas: input.config(value.number(), { default: 1 })
+  },
   outputs: {
     apiUrl: output.static(value.url()),
     webUrl: output.static(value.url())
   },
-  build(context) {
+  build(context, inputs) {
     emitObject(context, "namespace", {
       apiVersion: "v1",
       kind: "Namespace",
@@ -490,12 +511,14 @@ var k8s_services_default = defineComponent({
       namespace: "benchmark",
       image: "registry.example/api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       targetPort: 3e3,
+      replicas: inputs.replicas.value,
       resources: { requests: { cpu: "100m", memory: "128Mi" } }
     });
     const web = emitServicePair(context, "web", {
       namespace: "benchmark",
       image: "registry.example/web@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       targetPort: 8080,
+      replicas: inputs.replicas.value,
       env: { API_URL: api.url },
       resources: { requests: { cpu: "50m", memory: "64Mi" } }
     });

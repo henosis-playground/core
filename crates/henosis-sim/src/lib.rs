@@ -562,6 +562,7 @@ fn build_graph(evaluator: &ProgramEvaluator, scenario: &Scenario) -> NewGraphInt
         id: GraphId::from_bytes([7; 16]),
         name: GraphName::new("simulated-graph").expect("fixture graph name is valid"),
         components,
+        source_policy: henosis_types::GraphSourcePolicy::AcceptLocal,
     }
 }
 
@@ -576,6 +577,7 @@ fn component_intent(
         bundle,
         inputs,
         outputs,
+        source: None,
     })
     .expect("generated component is valid")
 }

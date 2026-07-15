@@ -36,9 +36,15 @@ pub enum InputCellState {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum InputCellSource {
+    Output(OutputRef),
+    Config,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct InputCell {
     name: InputName,
-    source: OutputRef,
+    source: InputCellSource,
     optional: bool,
     state: InputCellState,
 }
@@ -55,10 +61,20 @@ impl InputCell {
         }
         Ok(Self {
             name,
-            source,
+            source: InputCellSource::Output(source),
             optional,
             state,
         })
+    }
+
+    #[must_use]
+    pub const fn config(name: InputName, value: NativeValue) -> Self {
+        Self {
+            name,
+            source: InputCellSource::Config,
+            optional: false,
+            state: InputCellState::Available(value),
+        }
     }
 
     #[must_use]
@@ -67,8 +83,16 @@ impl InputCell {
     }
 
     #[must_use]
-    pub const fn source(&self) -> &OutputRef {
+    pub const fn source(&self) -> &InputCellSource {
         &self.source
+    }
+
+    #[must_use]
+    pub const fn output_source(&self) -> Option<&OutputRef> {
+        match &self.source {
+            InputCellSource::Output(source) => Some(source),
+            InputCellSource::Config => None,
+        }
     }
 
     #[must_use]
@@ -419,7 +443,8 @@ impl EvaluationAttempt {
         let cell = snapshot
             .get(new.blocked.input())
             .ok_or(EvaluationProtocolError::UnknownRead)?;
-        if cell.source() != new.blocked.source() || !matches!(cell.state(), InputCellState::Blocked)
+        if cell.output_source() != Some(new.blocked.source())
+            || !matches!(cell.state(), InputCellState::Blocked)
         {
             return Err(EvaluationProtocolError::BlockedSourceMismatch);
         }

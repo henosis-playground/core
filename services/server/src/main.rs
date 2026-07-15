@@ -42,6 +42,7 @@ use henosis_proto::connect::henosis::v1::GraphService;
 use henosis_proto::connect::henosis::v1::GraphServiceExt;
 use henosis_proto::proto::henosis::v1 as proto;
 use henosis_types::BundleRef;
+use henosis_types::ComponentInputBinding;
 use henosis_types::ComponentIntent;
 use henosis_types::ContentDigest;
 use henosis_types::Controller;
@@ -53,13 +54,18 @@ use henosis_types::ControllerSlice;
 use henosis_types::Generation;
 use henosis_types::GraphId;
 use henosis_types::GraphName;
+use henosis_types::GraphSourcePolicy;
+use henosis_types::InputName;
 use henosis_types::KindVersion;
+use henosis_types::NativeValue;
 use henosis_types::NewGraphIntent;
 use henosis_types::OutputAvailability;
 use henosis_types::OutputName;
 use henosis_types::OutputSource;
 use henosis_types::Resource;
+use henosis_types::ResourceDispositionKind;
 use henosis_types::ResourceId;
+use henosis_types::SourceProvenance;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
 use tracing::error;
@@ -134,27 +140,53 @@ impl CoreService {
     ) -> Result<Vec<ComponentIntent>, ConnectError> {
         let mut inspected = Vec::with_capacity(components.len());
         for component in components {
-            let name = component.name.unwrap_or_default();
+            let name = component.name.clone().unwrap_or_default();
+            let provenance = source_from_wire(component.source.into_option())?;
+            let bindings = component
+                .input_bindings
+                .into_iter()
+                .map(|binding| {
+                    let binding_name = binding.name.unwrap_or_default();
+                    let value =
+                        serde_json::from_slice(binding.value_json.as_deref().unwrap_or_default())
+                            .map_err(|error| {
+                            invalid(format!(
+                                "component {name:?} input {binding_name:?} has invalid JSON: \
+                                 {error}"
+                            ))
+                        })?;
+                    Ok(ComponentInputBinding::new(
+                        InputName::new(binding_name).map_err(|error| invalid(error.to_string()))?,
+                        NativeValue::new(value).map_err(|error| invalid(error.to_string()))?,
+                    ))
+                })
+                .collect::<Result<Vec<_>, ConnectError>>()?;
             let digest = digest(component.bundle_digest.as_deref().unwrap_or_default())?;
             let path = self
                 .bundle_root
                 .join(hex(digest.as_bytes()))
                 .join("module.js");
-            let source = tokio::fs::read(&path).await.map_err(|error| {
+            let bundle_source = tokio::fs::read(&path).await.map_err(|error| {
                 invalid(format!(
                     "cannot read bundle for {name:?} at {}: {error}",
                     path.display()
                 ))
             })?;
-            let intent = inspect_bundle(BundleRef::new(digest), &source, &self.engine_config)
-                .map_err(|error| invalid(error.to_string()))?;
+            let intent =
+                inspect_bundle(BundleRef::new(digest), &bundle_source, &self.engine_config)
+                    .map_err(|error| invalid(error.to_string()))?;
             if intent.name().as_str() != name {
                 return Err(invalid(format!(
                     "submitted component {name:?} contains bundle for {:?}",
                     intent.name().as_str()
                 )));
             }
-            inspected.push(intent);
+            inspected.push(
+                intent
+                    .with_source(provenance)
+                    .with_input_bindings(bindings)
+                    .map_err(|error| invalid(error.to_string()))?,
+            );
         }
         Ok(inspected)
     }
@@ -247,6 +279,7 @@ impl GraphService for CoreService {
                 id: graph_id,
                 name,
                 components,
+                source_policy: source_policy(request.source_policy.as_ref())?,
             }))
             .await?;
         Ok(proto::CreateGraphResponse {
@@ -553,6 +586,55 @@ impl CloudflareTransport for RecordedCloudflareTransport {
     }
 }
 
+fn source_policy(
+    value: Option<&buffa::EnumValue<proto::GraphSourcePolicy>>,
+) -> Result<GraphSourcePolicy, ConnectError> {
+    match value.and_then(buffa::EnumValue::as_known) {
+        None
+        | Some(proto::GraphSourcePolicy::Unspecified | proto::GraphSourcePolicy::AcceptLocal) => {
+            Ok(GraphSourcePolicy::AcceptLocal)
+        }
+        Some(proto::GraphSourcePolicy::RequireVcs) => Ok(GraphSourcePolicy::RequireVcs),
+    }
+}
+
+fn source_from_wire(
+    source: Option<proto::SourceProvenance>,
+) -> Result<Option<SourceProvenance>, ConnectError> {
+    let Some(source) = source else {
+        return Ok(None);
+    };
+    match source.source {
+        Some(proto::__buffa::oneof::source_provenance::Source::Local(local)) => {
+            Ok(Some(SourceProvenance::Local {
+                repository: nonempty(local.repository),
+                base_revision: nonempty(local.base_revision),
+                dirty: local.dirty.unwrap_or(false),
+            }))
+        }
+        Some(proto::__buffa::oneof::source_provenance::Source::Vcs(vcs)) => {
+            let repository = vcs
+                .repository
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| invalid("Vcs source provenance requires repository"))?;
+            let revision = vcs
+                .revision
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| invalid("Vcs source provenance requires revision"))?;
+            Ok(Some(SourceProvenance::Vcs {
+                repository,
+                revision,
+                reference: nonempty(vcs.reference),
+            }))
+        }
+        None => Err(invalid("source provenance omitted its Local or Vcs value")),
+    }
+}
+
+fn nonempty(value: Option<String>) -> Option<String> {
+    value.filter(|value| !value.is_empty())
+}
+
 fn digest(bytes: &[u8]) -> Result<ContentDigest, ConnectError> {
     let bytes: [u8; 32] = bytes
         .try_into()
@@ -622,6 +704,23 @@ fn graph_status(
             ..Default::default()
         })
         .collect();
+    let dispositions = graph
+        .reports()
+        .filter(|report| report.generation() == graph.intent().generation())
+        .flat_map(|report| report.dispositions())
+        .map(disposition_wire)
+        .collect();
+    let diagnostic = graph.stall().map(|stall| {
+        format!(
+            "stall: {}",
+            stall
+                .cycle()
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(" -> ")
+        )
+    });
     Ok(proto::GraphStatus {
         graph_id: Some(graph_id.to_string()),
         name: Some(graph.intent().name().to_string()),
@@ -633,8 +732,74 @@ fn graph_status(
             .map(|stall| stall.cycle().iter().map(ToString::to_string).collect())
             .unwrap_or_default(),
         retired: Some(graph.is_retired()),
+        components: graph.intent().components().map(component_wire).collect(),
+        diagnostic,
+        source_policy: Some(
+            match graph.intent().source_policy() {
+                GraphSourcePolicy::AcceptLocal => proto::GraphSourcePolicy::AcceptLocal,
+                GraphSourcePolicy::RequireVcs => proto::GraphSourcePolicy::RequireVcs,
+            }
+            .into(),
+        ),
+        dispositions,
         ..Default::default()
     })
+}
+
+fn component_wire(component: &ComponentIntent) -> proto::ComponentIntent {
+    proto::ComponentIntent {
+        name: Some(component.name().to_string()),
+        bundle_digest: Some(component.bundle().digest().as_bytes().to_vec()),
+        source: component.source().map(source_wire).into(),
+        ..Default::default()
+    }
+}
+
+fn source_wire(source: &SourceProvenance) -> proto::SourceProvenance {
+    use proto::__buffa::oneof::source_provenance::Source;
+
+    let source = match source {
+        SourceProvenance::Local {
+            repository,
+            base_revision,
+            dirty,
+        } => Source::Local(Box::new(proto::LocalSource {
+            repository: repository.clone(),
+            base_revision: base_revision.clone(),
+            dirty: Some(*dirty),
+            ..Default::default()
+        })),
+        SourceProvenance::Vcs {
+            repository,
+            revision,
+            reference,
+        } => Source::Vcs(Box::new(proto::VcsSource {
+            repository: Some(repository.clone()),
+            revision: Some(revision.clone()),
+            reference: reference.clone(),
+            ..Default::default()
+        })),
+    };
+    proto::SourceProvenance {
+        source: Some(source),
+        ..Default::default()
+    }
+}
+
+fn disposition_wire(
+    disposition: &henosis_types::ResourceDisposition,
+) -> proto::ResourceDisposition {
+    let (state, message) = match disposition.kind() {
+        ResourceDispositionKind::Ready => ("ready", None),
+        ResourceDispositionKind::Reconciling { message } => ("reconciling", Some(message.clone())),
+        ResourceDispositionKind::Failed { message } => ("failed", Some(message.clone())),
+    };
+    proto::ResourceDisposition {
+        resource_id: Some(disposition.resource_id().to_string()),
+        state: Some(state.to_owned()),
+        message,
+        ..Default::default()
+    }
 }
 
 fn resource_wire(resource: &Resource) -> proto::Resource {

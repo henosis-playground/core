@@ -15,6 +15,7 @@ use thiserror::Error as ThisError;
 use tracing::instrument;
 
 use henosis_types::BlockedMarker;
+use henosis_types::ComponentInputSource;
 use henosis_types::ComponentIntent;
 use henosis_types::ComponentName;
 use henosis_types::ComponentOutputs;
@@ -566,46 +567,51 @@ impl Core {
         let generation = graph.intent.generation();
         let mut cells = Vec::new();
         for input in component.inputs() {
-            let key = OutputKey::new(generation, input.source().clone());
-            let state = if let Some(record) = graph.outputs.get(&key) {
-                InputCellState::Available(record.value().clone())
-            } else {
-                let producer = graph
-                    .intent
-                    .component(input.source().component())
-                    .expect("graph validation proved producer existence");
-                let declaration = producer
-                    .output(input.source().output())
-                    .expect("graph validation proved output existence");
-                match runtime.interpretations.get(input.source().component()) {
-                    Some(interpretation) if interpretation.complete => {
-                        if input.is_optional()
-                            && declaration.is_optional()
-                            && !interpretation
-                                .declared_outputs
-                                .contains(input.source().output())
-                        {
-                            InputCellState::Absent
-                        } else {
-                            InputCellState::Blocked
-                        }
-                    }
-                    Some(_) | None => InputCellState::Blocked,
+            match input.source() {
+                ComponentInputSource::Config { default, .. } => {
+                    let value = component
+                        .input_binding(input.name())
+                        .map(|binding| binding.value().clone())
+                        .or_else(|| default.clone())
+                        .expect("graph validation proved config input availability");
+                    cells.push(InputCell::config(input.name().clone(), value));
                 }
-            };
-            cells.push(
-                InputCell::new(
-                    input.name().clone(),
-                    input.source().clone(),
-                    input.is_optional(),
-                    state,
-                )
-                .map_err(|error| {
-                    Error::<CommandError, Never, anyhow::Error>::Invariant(anyhow::Error::new(
-                        error,
-                    ))
-                })?,
-            );
+                ComponentInputSource::Output { source, optional } => {
+                    let key = OutputKey::new(generation, source.clone());
+                    let state = if let Some(record) = graph.outputs.get(&key) {
+                        InputCellState::Available(record.value().clone())
+                    } else {
+                        let producer = graph
+                            .intent
+                            .component(source.component())
+                            .expect("graph validation proved producer existence");
+                        let declaration = producer
+                            .output(source.output())
+                            .expect("graph validation proved output existence");
+                        match runtime.interpretations.get(source.component()) {
+                            Some(interpretation) if interpretation.complete => {
+                                if *optional
+                                    && declaration.is_optional()
+                                    && !interpretation.declared_outputs.contains(source.output())
+                                {
+                                    InputCellState::Absent
+                                } else {
+                                    InputCellState::Blocked
+                                }
+                            }
+                            Some(_) | None => InputCellState::Blocked,
+                        }
+                    };
+                    cells.push(
+                        InputCell::new(input.name().clone(), source.clone(), *optional, state)
+                            .map_err(|error| {
+                                Error::<CommandError, Never, anyhow::Error>::Invariant(
+                                    anyhow::Error::new(error),
+                                )
+                            })?,
+                    );
+                }
+            }
         }
         EvaluationSnapshot::new(cells).map_err(|error| {
             Error::<CommandError, Never, anyhow::Error>::Invariant(anyhow::Error::new(error))
@@ -1152,6 +1158,10 @@ impl GraphState {
 
     pub fn outputs(&self) -> impl ExactSizeIterator<Item = &OutputRecord> {
         self.outputs.iter()
+    }
+
+    pub fn reports(&self) -> impl ExactSizeIterator<Item = &ControllerReport> {
+        self.reports.iter().map(|report| &report.0)
     }
 
     #[must_use]

@@ -78,7 +78,9 @@ impl ProgramEvaluator {
                     resources: Vec::new(),
                     blocked: BlockedDetail::new(
                         cell.name().clone(),
-                        cell.source().clone(),
+                        cell.output_source()
+                            .expect("only output-sourced inputs can block")
+                            .clone(),
                         "read value",
                         "waiting for deterministic input",
                     ),

@@ -135,3 +135,66 @@ impl std::fmt::Display for NativeValue {
         formatter.write_str(&self.canonical)
     }
 }
+
+/// JSON-compatible value contract carried by component metadata.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum ValueSchema {
+    String,
+    Url,
+    Number,
+    Boolean,
+    Json,
+    Array {
+        element: Box<Self>,
+    },
+    Object {
+        fields: std::collections::BTreeMap<String, Self>,
+    },
+}
+
+impl ValueSchema {
+    #[must_use]
+    pub fn accepts(&self, value: &serde_json::Value) -> bool {
+        match self {
+            Self::String => value.is_string(),
+            Self::Url => value
+                .as_str()
+                .is_some_and(|value| value.starts_with("http://") || value.starts_with("https://")),
+            Self::Number => value.is_number(),
+            Self::Boolean => value.is_boolean(),
+            Self::Json => true,
+            Self::Array { element } => value
+                .as_array()
+                .is_some_and(|values| values.iter().all(|value| element.accepts(value))),
+            Self::Object { fields } => value.as_object().is_some_and(|value| {
+                fields.iter().all(|(name, schema)| {
+                    value.get(name).is_some_and(|value| schema.accepts(value))
+                })
+            }),
+        }
+    }
+}
+
+impl std::fmt::Display for ValueSchema {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::String => formatter.write_str("string"),
+            Self::Url => formatter.write_str("absolute HTTP(S) URL"),
+            Self::Number => formatter.write_str("number"),
+            Self::Boolean => formatter.write_str("boolean"),
+            Self::Json => formatter.write_str("JSON value"),
+            Self::Array { element } => write!(formatter, "array of {element}"),
+            Self::Object { fields } => {
+                formatter.write_str("object { ")?;
+                for (index, (name, schema)) in fields.iter().enumerate() {
+                    if index != 0 {
+                        formatter.write_str(", ")?;
+                    }
+                    write!(formatter, "{name}: {schema}")?;
+                }
+                formatter.write_str(" }")
+            }
+        }
+    }
+}

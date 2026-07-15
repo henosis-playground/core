@@ -21,11 +21,43 @@ message ComponentOutput {
   bool optional = 3;
 }
 
+enum GraphSourcePolicy {
+  GRAPH_SOURCE_POLICY_UNSPECIFIED = 0;
+  GRAPH_SOURCE_POLICY_ACCEPT_LOCAL = 1;
+  GRAPH_SOURCE_POLICY_REQUIRE_VCS = 2;
+}
+
+message LocalSource {
+  string repository = 1;
+  string base_revision = 2;
+  bool dirty = 3;
+}
+
+message VcsSource {
+  string repository = 1;
+  string revision = 2;
+  string reference = 3;
+}
+
+message SourceProvenance {
+  oneof source {
+    LocalSource local = 1;
+    VcsSource vcs = 2;
+  }
+}
+
+message InputBinding {
+  string name = 1;
+  bytes value_json = 2;
+}
+
 message ComponentIntent {
   string name = 1;
   bytes bundle_digest = 2;
   repeated ComponentInput inputs = 3;
   repeated ComponentOutput outputs = 4;
+  SourceProvenance source = 5;
+  repeated InputBinding input_bindings = 6;
 }
 
 message ResourceOutput {
@@ -69,6 +101,10 @@ message GraphStatus {
   repeated OutputRecord outputs = 5;
   repeated string stall_cycle = 6;
   bool retired = 7;
+  repeated ComponentIntent components = 8;
+  string diagnostic = 9;
+  GraphSourcePolicy source_policy = 10;
+  repeated ResourceDisposition dispositions = 11;
 }
 
 message ControllerSlice {

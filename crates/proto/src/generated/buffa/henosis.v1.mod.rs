@@ -21,11 +21,25 @@ pub mod __buffa {
         use super::*;
         include!("henosis.v1.types.__view.rs");
         include!("henosis.v1.graph_service.__view.rs");
+        pub mod oneof {
+            #[allow(unused_imports)]
+            use super::*;
+            include!("henosis.v1.types.__view_oneof.rs");
+        }
+    }
+    pub mod oneof {
+        #[allow(unused_imports)]
+        use super::*;
+        include!("henosis.v1.types.__oneof.rs");
     }
     /// Register this package's `Any` type entries and extension entries.
     pub fn register_types(reg: &mut ::buffa::type_registry::TypeRegistry) {
         reg.register_json_any(super::__COMPONENT_INPUT_JSON_ANY);
         reg.register_json_any(super::__COMPONENT_OUTPUT_JSON_ANY);
+        reg.register_json_any(super::__LOCAL_SOURCE_JSON_ANY);
+        reg.register_json_any(super::__VCS_SOURCE_JSON_ANY);
+        reg.register_json_any(super::__SOURCE_PROVENANCE_JSON_ANY);
+        reg.register_json_any(super::__INPUT_BINDING_JSON_ANY);
         reg.register_json_any(super::__COMPONENT_INTENT_JSON_ANY);
         reg.register_json_any(super::__RESOURCE_OUTPUT_JSON_ANY);
         reg.register_json_any(super::__RESOURCE_JSON_ANY);
@@ -61,6 +75,22 @@ pub use self::__buffa::view::ComponentInputOwnedView;
 pub use self::__buffa::view::ComponentOutputView;
 #[doc(inline)]
 pub use self::__buffa::view::ComponentOutputOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::LocalSourceView;
+#[doc(inline)]
+pub use self::__buffa::view::LocalSourceOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::VcsSourceView;
+#[doc(inline)]
+pub use self::__buffa::view::VcsSourceOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::SourceProvenanceView;
+#[doc(inline)]
+pub use self::__buffa::view::SourceProvenanceOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::InputBindingView;
+#[doc(inline)]
+pub use self::__buffa::view::InputBindingOwnedView;
 #[doc(inline)]
 pub use self::__buffa::view::ComponentIntentView;
 #[doc(inline)]

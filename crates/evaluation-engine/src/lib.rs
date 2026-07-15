@@ -43,6 +43,7 @@ use henosis_types::EvaluationAttempt;
 use henosis_types::EvaluationError;
 use henosis_types::EvaluationRequest;
 use henosis_types::EvaluationResource;
+use henosis_types::InputCellSource;
 use henosis_types::InputCellState;
 use henosis_types::InputName;
 use henosis_types::KindName;
@@ -61,6 +62,7 @@ use henosis_types::ResourceAddress;
 use henosis_types::ResourceId;
 use henosis_types::ResourceName;
 use henosis_types::StaticOutput;
+use henosis_types::ValueSchema;
 use oxc_allocator::Allocator;
 use oxc_ast::ast::ArrowFunctionExpression;
 use oxc_ast::ast::AwaitExpression;
@@ -779,17 +781,30 @@ struct ComponentMetadataWire {
 }
 
 #[derive(Clone, Debug, Deserialize)]
-struct InputMetadataWire {
-    component: String,
-    output: String,
-    optional: bool,
+#[serde(untagged)]
+enum InputMetadataWire {
+    Output {
+        component: String,
+        output: String,
+        optional: bool,
+    },
+    Config {
+        source: String,
+        schema: ValueSchema,
+        default: Option<ConfigDefaultWire>,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct ConfigDefaultWire {
+    value: serde_json::Value,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 struct OutputMetadataWire {
     availability: AvailabilityWire,
     optional: bool,
-    schema: SchemaWire,
+    schema: ValueSchema,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
@@ -797,22 +812,6 @@ struct OutputMetadataWire {
 enum AvailabilityWire {
     Static,
     Observed,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(tag = "kind", rename_all = "lowercase")]
-enum SchemaWire {
-    String,
-    Url,
-    Number,
-    Boolean,
-    Json,
-    Array {
-        element: Box<SchemaWire>,
-    },
-    Object {
-        fields: BTreeMap<String, SchemaWire>,
-    },
 }
 
 fn component_intent(
@@ -825,19 +824,52 @@ fn component_intent(
     let mut inputs = Vec::with_capacity(metadata.inputs.len());
     for (input_name, declaration) in metadata.inputs {
         validate_api_name(&input_name, "input name")?;
-        validate_logical_name(&declaration.component, "source component name")?;
-        validate_api_name(&declaration.output, "source output name")?;
-        inputs.push(ComponentInput::new(
-            InputName::new(input_name)
-                .map_err(|error| EvaluationError::new(format!("invalid input name: {error}")))?,
-            output_ref(&declaration.component, &declaration.output)?,
-            declaration.optional,
-        ));
+        let input_name = InputName::new(input_name)
+            .map_err(|error| EvaluationError::new(format!("invalid input name: {error}")))?;
+        match declaration {
+            InputMetadataWire::Output {
+                component,
+                output,
+                optional,
+            } => {
+                validate_logical_name(&component, "source component name")?;
+                validate_api_name(&output, "source output name")?;
+                inputs.push(ComponentInput::new(
+                    input_name,
+                    output_ref(&component, &output)?,
+                    optional,
+                ));
+            }
+            InputMetadataWire::Config {
+                source,
+                schema,
+                default,
+            } => {
+                if source != "config" {
+                    return Err(EvaluationError::new(format!(
+                        "config input {:?} has unknown source {source:?}",
+                        input_name.as_str()
+                    )));
+                }
+                let default = default
+                    .map(|default| {
+                        if !schema.accepts(&default.value) {
+                            return Err(EvaluationError::new(format!(
+                                "default for config input {:?} expected {schema}",
+                                input_name.as_str()
+                            )));
+                        }
+                        NativeValue::new(default.value)
+                            .map_err(|error| EvaluationError::new(error.to_string()))
+                    })
+                    .transpose()?;
+                inputs.push(ComponentInput::config(input_name, schema, default));
+            }
+        }
     }
     let mut outputs = Vec::with_capacity(metadata.outputs.len());
     for (output_name, declaration) in metadata.outputs {
         validate_api_name(&output_name, "output name")?;
-        validate_schema_shape(&declaration.schema)?;
         outputs.push(ComponentOutput::new(
             OutputName::new(output_name)
                 .map_err(|error| EvaluationError::new(format!("invalid output name: {error}")))?,
@@ -853,6 +885,7 @@ fn component_intent(
         bundle,
         inputs,
         outputs,
+        source: None,
     })
     .map_err(|error| EvaluationError::new(format!("invalid component metadata: {error}")))
 }
@@ -941,49 +974,58 @@ fn validate_metadata(
     }
     for (name, declaration) in &metadata.inputs {
         validate_api_name(name, "input name")?;
-        validate_logical_name(&declaration.component, "source component name")?;
-        validate_api_name(&declaration.output, "source output name")?;
         let input = InputName::new(name.clone())
             .map_err(|error| EvaluationError::new(format!("invalid input name: {error}")))?;
-        let source = output_ref(&declaration.component, &declaration.output)?;
         let cell = request.snapshot().get(&input).ok_or_else(|| {
             EvaluationError::new(format!("snapshot omitted declared input {name:?}"))
         })?;
-        if cell.source() != &source || cell.is_optional() != declaration.optional {
-            return Err(EvaluationError::new(format!(
-                "snapshot cell {name:?} does not agree with bundle metadata"
-            )));
-        }
-        if matches!(cell.state(), InputCellState::Absent) && !declaration.optional {
-            return Err(EvaluationError::new(format!(
-                "required input {name:?} cannot be absent"
-            )));
+        match declaration {
+            InputMetadataWire::Output {
+                component,
+                output,
+                optional,
+            } => {
+                validate_logical_name(component, "source component name")?;
+                validate_api_name(output, "source output name")?;
+                let source = output_ref(component, output)?;
+                if cell.output_source() != Some(&source) || cell.is_optional() != *optional {
+                    return Err(EvaluationError::new(format!(
+                        "snapshot cell {name:?} does not agree with bundle metadata"
+                    )));
+                }
+                if matches!(cell.state(), InputCellState::Absent) && !*optional {
+                    return Err(EvaluationError::new(format!(
+                        "required input {name:?} cannot be absent"
+                    )));
+                }
+            }
+            InputMetadataWire::Config { source, schema, .. } => {
+                if source != "config" {
+                    return Err(EvaluationError::new(format!(
+                        "config input {name:?} has unknown source {source:?}"
+                    )));
+                }
+                let InputCellState::Available(value) = cell.state() else {
+                    return Err(EvaluationError::new(format!(
+                        "config input {name:?} must be delivered as available"
+                    )));
+                };
+                if !matches!(cell.source(), InputCellSource::Config)
+                    || !schema.accepts(value.as_json())
+                {
+                    return Err(EvaluationError::new(format!(
+                        "snapshot config input {name:?} does not agree with bundle metadata"
+                    )));
+                }
+            }
         }
     }
-    for (name, declaration) in &metadata.outputs {
+    for name in metadata.outputs.keys() {
         validate_api_name(name, "output name")?;
         OutputName::new(name.clone())
             .map_err(|error| EvaluationError::new(format!("invalid output name: {error}")))?;
-        validate_schema_shape(&declaration.schema)?;
     }
     Ok(())
-}
-
-fn validate_schema_shape(schema: &SchemaWire) -> Result<(), EvaluationError> {
-    match schema {
-        SchemaWire::Array { element } => validate_schema_shape(element),
-        SchemaWire::Object { fields } => {
-            for child in fields.values() {
-                validate_schema_shape(child)?;
-            }
-            Ok(())
-        }
-        SchemaWire::String
-        | SchemaWire::Url
-        | SchemaWire::Number
-        | SchemaWire::Boolean
-        | SchemaWire::Json => Ok(()),
-    }
 }
 
 fn apply_sticky_blocked(
@@ -1088,11 +1130,15 @@ fn convert_result(
             let cell = request.snapshot().get(&input).ok_or_else(|| {
                 EvaluationError::new("blocked result refers to an undeclared input")
             })?;
-            let expected_source = metadata
-                .inputs
-                .get(input.as_str())
-                .map(|input| format!("{}.{}", input.component, input.output))
-                .ok_or_else(|| EvaluationError::new("blocked input missing from metadata"))?;
+            let expected_source = match metadata.inputs.get(input.as_str()) {
+                Some(InputMetadataWire::Output {
+                    component, output, ..
+                }) => format!("{component}.{output}"),
+                Some(InputMetadataWire::Config { .. }) => {
+                    return Err(EvaluationError::new("config inputs cannot be blocked"));
+                }
+                None => return Err(EvaluationError::new("blocked input missing from metadata")),
+            };
             if blocked.source != expected_source {
                 return Err(EvaluationError::new(format!(
                     "blocked source {:?} does not match declared source {:?}",
@@ -1101,7 +1147,9 @@ fn convert_result(
             }
             let detail = BlockedDetail::new(
                 input,
-                cell.source().clone(),
+                cell.output_source()
+                    .expect("metadata proved blocked input is output-sourced")
+                    .clone(),
                 blocked.operation,
                 blocked.message,
             );
@@ -1294,37 +1342,14 @@ fn convert_reads(reads: Vec<String>) -> Result<Vec<InputName>, EvaluationError> 
 }
 
 fn validate_schema_value(
-    schema: &SchemaWire,
+    schema: &ValueSchema,
     value: &serde_json::Value,
     path: &str,
 ) -> Result<(), EvaluationError> {
-    let valid = match schema {
-        SchemaWire::String => value.is_string(),
-        SchemaWire::Url => value
-            .as_str()
-            .is_some_and(|value| value.starts_with("https://") || value.starts_with("http://")),
-        SchemaWire::Number => value.is_number(),
-        SchemaWire::Boolean => value.is_boolean(),
-        SchemaWire::Json => true,
-        SchemaWire::Array { element } => value.as_array().is_some_and(|values| {
-            values
-                .iter()
-                .all(|value| validate_schema_value(element, value, path).is_ok())
-        }),
-        SchemaWire::Object { fields } => value.as_object().is_some_and(|object| {
-            fields.iter().all(|(name, schema)| {
-                object
-                    .get(name)
-                    .is_some_and(|value| validate_schema_value(schema, value, path).is_ok())
-            })
-        }),
-    };
-    if valid {
+    if schema.accepts(value) {
         Ok(())
     } else {
-        Err(EvaluationError::new(format!(
-            "{path} does not satisfy its declared schema"
-        )))
+        Err(EvaluationError::new(format!("{path} expected {schema}")))
     }
 }
 
@@ -1591,7 +1616,14 @@ mod tests {
         );
 
         let service_pair = evaluate_job(
-            &request(BENCHMARK_SERVICE_PAIR_BUNDLE, "service_pair", Vec::new()),
+            &request(
+                BENCHMARK_SERVICE_PAIR_BUNDLE,
+                "service_pair",
+                vec![InputCell::config(
+                    InputName::new("replicas").expect("valid input"),
+                    NativeValue::new(serde_json::json!(1)).expect("finite JSON"),
+                )],
+            ),
             BENCHMARK_SERVICE_PAIR_BUNDLE.as_bytes(),
             &BenchmarkRegistry,
             &EngineConfig::default(),

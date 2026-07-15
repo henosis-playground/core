@@ -12,6 +12,10 @@ pub struct CreateGraphRequestView<'a> {
         'a,
         super::super::__buffa::view::ComponentIntentView<'a>,
     >,
+    /// Field 4: `source_policy`
+    pub source_policy: ::core::option::Option<
+        ::buffa::EnumValue<super::super::GraphSourcePolicy>,
+    >,
     pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
 }
 impl<'a> ::buffa::MessageView<'a> for CreateGraphRequestView<'a> {
@@ -54,6 +58,15 @@ impl<'a> ::buffa::MessageView<'a> for CreateGraphRequestView<'a> {
                     ::buffa::encoding::WireType::LengthDelimited,
                 )?;
                 view.name = Some(::buffa::types::borrow_str(&mut cur)?);
+            }
+            4u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                view.source_policy = Some(
+                    ::buffa::EnumValue::from(::buffa::types::decode_int32(&mut cur)?),
+                );
             }
             3u32 => {
                 ::buffa::encoding::check_wire_type(
@@ -99,6 +112,7 @@ impl<'a> ::buffa::MessageView<'a> for CreateGraphRequestView<'a> {
                 .iter()
                 .map(|v| v.to_owned_from_source(__buffa_src))
                 .collect::<::core::result::Result<_, ::buffa::DecodeError>>()?,
+            source_policy: self.source_policy,
             __buffa_unknown_fields: self.__buffa_unknown_fields.to_owned()?.into(),
             ..::core::default::Default::default()
         })
@@ -124,6 +138,9 @@ impl<'a> ::buffa::ViewEncode<'a> for CreateGraphRequestView<'a> {
                 += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
                     + inner_size;
         }
+        if let Some(ref v) = self.source_policy {
+            size += 1u32 + ::buffa::types::int32_encoded_len(v.to_i32()) as u32;
+        }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
         size
     }
@@ -144,6 +161,9 @@ impl<'a> ::buffa::ViewEncode<'a> for CreateGraphRequestView<'a> {
         for v in &self.components {
             ::buffa::types::put_len_delimited_header(3u32, __cache.consume_next(), buf);
             v.write_to(__cache, buf);
+        }
+        if let Some(ref v) = self.source_policy {
+            ::buffa::types::put_int32_field(4u32, v.to_i32(), buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
     }
@@ -174,6 +194,9 @@ impl<'__a> ::serde::Serialize for CreateGraphRequestView<'__a> {
         }
         if !self.components.is_empty() {
             __map.serialize_entry("components", &*self.components)?;
+        }
+        if let ::core::option::Option::Some(ref __v) = self.source_policy {
+            __map.serialize_entry("sourcePolicy", __v)?;
         }
         __map.end()
     }
@@ -287,6 +310,13 @@ impl CreateGraphRequestOwnedView {
         super::super::__buffa::view::ComponentIntentView<'_>,
     > {
         &self.0.reborrow().components
+    }
+    /// Field 4: `source_policy`
+    #[must_use]
+    pub fn source_policy(
+        &self,
+    ) -> ::core::option::Option<::buffa::EnumValue<super::super::GraphSourcePolicy>> {
+        self.0.reborrow().source_policy
     }
 }
 impl ::core::convert::From<::buffa::OwnedView<CreateGraphRequestView<'static>>>

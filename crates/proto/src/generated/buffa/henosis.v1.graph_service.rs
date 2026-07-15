@@ -22,6 +22,14 @@ pub struct CreateGraphRequest {
         deserialize_with = "::buffa::json_helpers::null_as_default"
     )]
     pub components: ::buffa::alloc::vec::Vec<ComponentIntent>,
+    /// Field 4: `source_policy`
+    #[serde(
+        rename = "sourcePolicy",
+        alias = "source_policy",
+        with = "::buffa::json_helpers::opt_enum",
+        skip_serializing_if = "::core::option::Option::is_none"
+    )]
+    pub source_policy: ::core::option::Option<::buffa::EnumValue<GraphSourcePolicy>>,
     #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
@@ -32,6 +40,7 @@ impl ::core::fmt::Debug for CreateGraphRequest {
             .field("graph_id", &self.graph_id)
             .field("name", &self.name)
             .field("components", &self.components)
+            .field("source_policy", &self.source_policy)
             .finish()
     }
 }
@@ -61,6 +70,16 @@ impl CreateGraphRequest {
         value: impl Into<::buffa::alloc::string::String>,
     ) -> Self {
         self.name = Some(value.into());
+        self
+    }
+    #[must_use = "with_* setters return `self` by value; assign or chain the result"]
+    #[inline]
+    ///Sets [`Self::source_policy`] to `Some(value)`, consuming and returning `self`.
+    pub fn with_source_policy(
+        mut self,
+        value: impl Into<::buffa::EnumValue<GraphSourcePolicy>>,
+    ) -> Self {
+        self.source_policy = Some(value.into());
         self
     }
 }
@@ -96,6 +115,9 @@ impl ::buffa::Message for CreateGraphRequest {
                 += 1u32 + ::buffa::encoding::varint_len(inner_size as u64) as u32
                     + inner_size;
         }
+        if let Some(ref v) = self.source_policy {
+            size += 1u32 + ::buffa::types::int32_encoded_len(v.to_i32()) as u32;
+        }
         size += self.__buffa_unknown_fields.encoded_len() as u32;
         size
     }
@@ -115,6 +137,9 @@ impl ::buffa::Message for CreateGraphRequest {
         for v in &self.components {
             ::buffa::types::put_len_delimited_header(3u32, __cache.consume_next(), buf);
             v.write_to(__cache, buf);
+        }
+        if let Some(ref v) = self.source_policy {
+            ::buffa::types::put_int32_field(4u32, v.to_i32(), buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
     }
@@ -160,6 +185,15 @@ impl ::buffa::Message for CreateGraphRequest {
                 ::buffa::Message::merge_length_delimited(&mut elem, buf, ctx)?;
                 self.components.push(elem);
             }
+            4u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.source_policy = ::core::option::Option::Some(
+                    ::buffa::EnumValue::from(::buffa::types::decode_int32(buf)?),
+                );
+            }
             _ => {
                 self.__buffa_unknown_fields
                     .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
@@ -171,6 +205,7 @@ impl ::buffa::Message for CreateGraphRequest {
         self.graph_id = ::core::option::Option::None;
         self.name = ::core::option::Option::None;
         self.components.clear();
+        self.source_policy = ::core::option::Option::None;
         self.__buffa_unknown_fields.clear();
     }
 }

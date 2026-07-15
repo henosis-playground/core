@@ -32,6 +32,7 @@ mod tests {
     use henosis_types::BlockedDetail;
     use henosis_types::BundleRef;
     use henosis_types::ComponentInput;
+    use henosis_types::ComponentInputBinding;
     use henosis_types::ComponentIntent;
     use henosis_types::ComponentName;
     use henosis_types::ComponentOutput;
@@ -74,6 +75,7 @@ mod tests {
     use henosis_types::ResourceId;
     use henosis_types::ResourceName;
     use henosis_types::StaticOutput;
+    use henosis_types::ValueSchema;
     use proptest::prelude::*;
 
     #[derive(Debug)]
@@ -293,7 +295,9 @@ mod tests {
                 resources: Vec::new(),
                 blocked: BlockedDetail::new(
                     input_name.clone(),
-                    cell.source().clone(),
+                    cell.output_source()
+                        .expect("only output-sourced inputs can block")
+                        .clone(),
                     "reading `.value`",
                     "waiting for the fake controller output",
                 ),
@@ -350,6 +354,7 @@ mod tests {
             bundle: BundleRef::new(ContentDigest::from_bytes([behavior; 32])),
             inputs,
             outputs,
+            source: None,
         })
         .expect("fixture component is valid")
     }
@@ -365,6 +370,7 @@ mod tests {
             bundle,
             inputs,
             outputs,
+            source: None,
         })
         .expect("fixture component is valid")
     }
@@ -385,11 +391,25 @@ mod tests {
         )
     }
 
+    fn config_input(name: &str, schema: ValueSchema) -> ComponentInput {
+        ComponentInput::config(InputName::new(name).expect("valid input"), schema, None)
+    }
+
+    fn bind(component: ComponentIntent, name: &str, value: serde_json::Value) -> ComponentIntent {
+        component
+            .with_input_bindings(vec![ComponentInputBinding::new(
+                InputName::new(name).expect("valid input"),
+                NativeValue::new(value).expect("binding is finite JSON"),
+            )])
+            .expect("binding name is unique")
+    }
+
     fn graph(components: Vec<ComponentIntent>) -> NewGraphIntent {
         NewGraphIntent {
             id: graph_id(),
             name: GraphName::new("test-graph").expect("valid graph name"),
             components,
+            source_policy: henosis_types::GraphSourcePolicy::AcceptLocal,
         }
     }
 
@@ -503,6 +523,96 @@ mod tests {
             "test/item@1/main"
         );
         assert_eq!(transition.effects().len(), 1);
+    }
+
+    #[test]
+    fn config_binding_rejections_are_aggregated_and_legible() {
+        let configured = component(
+            "configured",
+            3,
+            vec![
+                config_input("replicas", ValueSchema::Number),
+                config_input("region", ValueSchema::String),
+            ],
+            vec![static_component_output("summary")],
+        )
+        .with_input_bindings(vec![ComponentInputBinding::new(
+            InputName::new("replicas").expect("valid input"),
+            NativeValue::new(serde_json::json!("three")).expect("finite JSON"),
+        )])
+        .expect("binding is unique");
+
+        let error = henosis_types::GraphIntent::new(graph(vec![configured]))
+            .expect_err("invalid config bindings must fail at acceptance");
+        insta::assert_snapshot!(error, @r#"
+        graph intent has invalid config input bindings:
+          - component "configured" input "region": missing required binding (expected string)
+          - component "configured" input "replicas": expected number, received string
+        "#);
+    }
+
+    #[test]
+    fn unbound_required_config_input_is_rejected_at_acceptance() {
+        let configured = component(
+            "configured",
+            3,
+            vec![config_input("replicas", ValueSchema::Number)],
+            vec![static_component_output("summary")],
+        );
+
+        let error = henosis_types::GraphIntent::new(graph(vec![configured]))
+            .expect_err("required config input needs a graph binding");
+        assert_eq!(
+            error.to_string(),
+            "graph intent has invalid config input bindings:\n  - component \"configured\" input \
+             \"replicas\": missing required binding (expected number)"
+        );
+    }
+
+    #[tokio::test]
+    async fn two_graphs_binding_different_values_produce_different_plans() {
+        let configured = || {
+            component(
+                "configured",
+                3,
+                vec![config_input("replicas", ValueSchema::Number)],
+                vec![static_component_output("summary")],
+            )
+        };
+        let mut first = Core::new(Arc::new(FakeEvaluator));
+        first
+            .handle(Command::CreateGraph(graph(vec![bind(
+                configured(),
+                "replicas",
+                serde_json::json!(1),
+            )])))
+            .await
+            .expect("first graph is accepted");
+        let mut second = Core::new(Arc::new(FakeEvaluator));
+        second
+            .handle(Command::CreateGraph(graph(vec![bind(
+                configured(),
+                "replicas",
+                serde_json::json!(3),
+            )])))
+            .await
+            .expect("second graph is accepted");
+
+        let first_plan = first
+            .state()
+            .graph(graph_id())
+            .and_then(|graph| graph.plan())
+            .expect("first plan exists");
+        let second_plan = second
+            .state()
+            .graph(graph_id())
+            .and_then(|graph| graph.plan())
+            .expect("second plan exists");
+        assert_ne!(first_plan.digest(), second_plan.digest());
+        assert_ne!(
+            first_plan.resources().next().expect("resource").body(),
+            second_plan.resources().next().expect("resource").body()
+        );
     }
 
     #[tokio::test]
