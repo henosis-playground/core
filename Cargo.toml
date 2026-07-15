@@ -25,6 +25,7 @@ connectrpc = { version = "0.8.1", features = ["server"] }
 faultline = "0.1.0"
 futures = "0.3"
 iddqd = { version = "0.4.5", features = ["serde"] }
+insta = { version = "1.48", features = ["yaml"] }
 newtype-uuid = { git = "https://github.com/henosis-playground/newtype-uuid.git", rev = "f20e0aff365e59de7eadd29e769cf0c93990c587", features = [
   "serde",
   "v7",
