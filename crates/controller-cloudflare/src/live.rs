@@ -1191,7 +1191,7 @@ mod tests {
                     graph_id: graph,
                     last_generation: slice.generation(),
                     controller: controller.name().clone(),
-                    resources: resource_ids.to_vec(),
+                    resources: slice.resources().to_vec(),
                 }))
                 .await
                 .expect("partial live reconciliation must clean up");
@@ -1266,7 +1266,7 @@ mod tests {
                 graph_id: graph,
                 last_generation: slice.generation(),
                 controller: controller.name().clone(),
-                resources: resource_ids.to_vec(),
+                resources: slice.resources().to_vec(),
             }))
             .await
             .unwrap();

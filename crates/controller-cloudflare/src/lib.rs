@@ -284,9 +284,9 @@ where
     async fn remove(
         &self,
         graph: GraphId,
-        resources: &[ResourceId],
+        resources: &[Resource],
     ) -> Result<(), ControllerError> {
-        let mut ordered = resources.to_vec();
+        let mut ordered = resources.iter().map(Resource::id).collect::<Vec<_>>();
         {
             let state = self
                 .state
@@ -314,7 +314,7 @@ where
             .get_mut(&graph)
         {
             for resource in resources {
-                current.remove(resource);
+                current.remove(&resource.id());
             }
         }
         Ok(())
@@ -537,7 +537,7 @@ mod tests {
                 graph_id: slice.graph_id(),
                 last_generation: slice.generation(),
                 controller: controller.name().clone(),
-                resources: vec![slice.resources()[0].id()],
+                resources: vec![slice.resources()[0].clone()],
             }))
             .await
             .unwrap();

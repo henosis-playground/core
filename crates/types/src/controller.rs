@@ -23,7 +23,7 @@ pub struct ControllerSlice {
     plan_digest: ContentDigest,
     controller: ControllerName,
     resources: Vec<Resource>,
-    superseded: Vec<ResourceId>,
+    superseded: Vec<Resource>,
 }
 
 impl ControllerSlice {
@@ -34,11 +34,11 @@ impl ControllerSlice {
         plan_digest: ContentDigest,
         controller: ControllerName,
         mut resources: Vec<Resource>,
-        mut superseded: Vec<ResourceId>,
+        mut superseded: Vec<Resource>,
     ) -> Self {
         resources.sort_by_key(Resource::id);
-        superseded.sort();
-        superseded.dedup();
+        superseded.sort_by_key(Resource::id);
+        superseded.dedup_by_key(|resource| resource.id());
         Self {
             graph_id,
             generation,
@@ -75,7 +75,7 @@ impl ControllerSlice {
     }
 
     #[must_use]
-    pub fn superseded(&self) -> &[ResourceId] {
+    pub fn superseded(&self) -> &[Resource] {
         &self.superseded
     }
 }
@@ -85,7 +85,7 @@ pub struct Supersession {
     pub graph_id: GraphId,
     pub generation: Generation,
     pub controller: ControllerName,
-    pub resources: Vec<ResourceId>,
+    pub resources: Vec<Resource>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -93,7 +93,7 @@ pub struct Retirement {
     pub graph_id: GraphId,
     pub last_generation: Generation,
     pub controller: ControllerName,
-    pub resources: Vec<ResourceId>,
+    pub resources: Vec<Resource>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

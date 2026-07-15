@@ -234,13 +234,19 @@ where
                 ControllerCommand::Reconcile(slice) => self.reconcile(slice).await.map(Some),
                 ControllerCommand::Supersede(supersession) => {
                     self.target
-                        .retire(supersession.graph_id, &supersession.resources)
+                        .retire(
+                            supersession.graph_id,
+                            &supersession.resources.iter().map(Resource::id).collect::<Vec<_>>(),
+                        )
                         .map_err(|error| ControllerError::new(error.to_string()))?;
                     Ok(None)
                 }
                 ControllerCommand::Retire(retirement) => {
                     self.target
-                        .retire(retirement.graph_id, &retirement.resources)
+                        .retire(
+                            retirement.graph_id,
+                            &retirement.resources.iter().map(Resource::id).collect::<Vec<_>>(),
+                        )
                         .map_err(|error| ControllerError::new(error.to_string()))?;
                     self.state
                         .lock()
@@ -872,7 +878,7 @@ mod tests {
                 graph_id: slice.graph_id(),
                 last_generation: slice.generation(),
                 controller: controller.name().clone(),
-                resources: vec![slice.resources()[0].id()],
+                resources: vec![slice.resources()[0].clone()],
             }))
             .await
             .unwrap();

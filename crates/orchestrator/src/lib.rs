@@ -48,7 +48,6 @@ use henosis_types::Plan;
 use henosis_types::PublicationId;
 use henosis_types::Resource;
 use henosis_types::ResourceDisposition;
-use henosis_types::ResourceId;
 use henosis_types::Retirement;
 use henosis_types::Stall;
 use henosis_types::Supersession;
@@ -437,12 +436,12 @@ impl Core {
             .into_iter()
             .flat_map(Plan::resources)
             .fold(
-                BTreeMap::<ControllerName, Vec<ResourceId>>::new(),
+                BTreeMap::<ControllerName, Vec<Resource>>::new(),
                 |mut grouped, resource| {
                     grouped
                         .entry(resource.controller().clone())
                         .or_default()
-                        .push(resource.id());
+                        .push(resource.clone());
                     grouped
                 },
             );
@@ -914,14 +913,14 @@ fn dispatch_effects(
             .or_default()
             .push(resource.clone());
     }
-    let mut removed = BTreeMap::<ControllerName, Vec<ResourceId>>::new();
+    let mut removed = BTreeMap::<ControllerName, Vec<Resource>>::new();
     if let Some(previous) = previous {
         for resource in previous.resources() {
             if plan.resource(resource.id()).is_none() {
                 removed
                     .entry(resource.controller().clone())
                     .or_default()
-                    .push(resource.id());
+                    .push(resource.clone());
             }
         }
     }

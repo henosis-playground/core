@@ -105,7 +105,7 @@ impl K8sController {
     fn supersede(
         &self,
         graph_id: GraphId,
-        resources: &[ResourceId],
+        resources: &[Resource],
     ) -> Result<(), ControllerError> {
         let mut state = self
             .state
@@ -115,7 +115,7 @@ impl K8sController {
             return Ok(());
         };
         for resource in resources {
-            if let Some(path) = graph.resources.remove(resource) {
+            if let Some(path) = graph.resources.remove(&resource.id()) {
                 graph.files.remove(&path);
             }
         }
@@ -298,7 +298,7 @@ mod tests {
                 graph_id: slice.graph_id(),
                 last_generation: slice.generation(),
                 controller: controller.name().clone(),
-                resources: vec![slice.resources()[0].id()],
+                resources: vec![slice.resources()[0].clone()],
             }))
             .await
             .unwrap();
