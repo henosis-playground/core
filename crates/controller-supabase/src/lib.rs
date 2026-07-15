@@ -3,13 +3,14 @@
 //! Reconciliation keeps the proven plan/apply split: desired resources and
 //! fresh target receipts produce an immutable ordered plan, and only that plan
 //! is handed to the target. Applied migration IDs are immutable and
-//! checksummed. The target boundary resolves repository-relative migration
-//! files because `supabase/schema@1` carries path plus digest, not SQL bytes.
+//! checksummed. Migration bytes are read from the component's verified
+//! configuration closure; controllers never fall back to a checkout path.
 
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::Mutex;
 
 use futures::FutureExt as _;
@@ -19,6 +20,9 @@ use henosis_controller_runtime::failed_report;
 use henosis_controller_runtime::output;
 use henosis_controller_runtime::publication_id;
 use henosis_controller_runtime::ready_report;
+use henosis_types::BundleRef;
+use henosis_types::ComponentName;
+use henosis_types::ConfigClosureReader;
 use henosis_types::Controller;
 use henosis_types::ControllerCommand;
 use henosis_types::ControllerError;
@@ -103,9 +107,12 @@ pub enum SupabaseOperation {
     },
 }
 
+pub trait ComponentBundleResolver: Send + Sync {
+    fn resolve(&self, component: &ComponentName) -> Result<BundleRef, SupabaseError>;
+}
+
 pub trait SupabaseTarget: Send + Sync {
     fn observe(&self, graph: GraphId) -> Result<SupabaseObservation, SupabaseError>;
-    fn migration_sql(&self, path: &str) -> Result<String, SupabaseError>;
     fn apply(&self, plan: &SupabasePlan) -> Result<String, SupabaseError>;
     fn retire(&self, graph: GraphId, resources: &[ResourceId]) -> Result<(), SupabaseError>;
     fn api_url(&self) -> &str;
@@ -116,6 +123,8 @@ pub trait SupabaseTarget: Send + Sync {
 pub struct SupabaseController<T> {
     name: ControllerName,
     target: T,
+    config_files: Arc<dyn ConfigClosureReader>,
+    bundles: Arc<dyn ComponentBundleResolver>,
     state: Mutex<BTreeMap<GraphId, Vec<ResourceId>>>,
 }
 
@@ -124,16 +133,25 @@ where
     T: SupabaseTarget,
 {
     #[must_use]
-    pub fn new(target: T) -> Self {
+    pub fn new(
+        target: T,
+        config_files: Arc<dyn ConfigClosureReader>,
+        bundles: Arc<dyn ComponentBundleResolver>,
+    ) -> Self {
         Self {
             name: controller_name(CONTROLLER_NAME),
             target,
+            config_files,
+            bundles,
             state: Mutex::new(BTreeMap::new()),
         }
     }
 
-    fn reconcile(&self, slice: &ControllerSlice) -> Result<ControllerReport, ControllerError> {
-        let result = self.plan_and_apply(slice);
+    async fn reconcile(
+        &self,
+        slice: &ControllerSlice,
+    ) -> Result<ControllerReport, ControllerError> {
+        let result = self.plan_and_apply(slice).await;
         let (outputs, evidence) = match result {
             Ok(result) => result,
             Err(error) => {
@@ -152,12 +170,18 @@ where
             .map_err(|error| ControllerError::new(error.to_string()))
     }
 
-    fn plan_and_apply(
+    async fn plan_and_apply(
         &self,
         slice: &ControllerSlice,
     ) -> Result<(Vec<henosis_types::ObservedOutput>, String), SupabaseError> {
         let observed = self.target.observe(slice.graph_id())?;
-        let (plan, bodies) = build_plan(slice, &observed, &self.target)?;
+        let (plan, bodies) = build_plan(
+            slice,
+            &observed,
+            self.config_files.as_ref(),
+            self.bundles.as_ref(),
+        )
+        .await?;
         let evidence = if plan.operations.is_empty() {
             plan.observed_digest.clone()
         } else {
@@ -207,7 +231,7 @@ where
     ) -> BoxFuture<'a, Result<Option<ControllerReport>, ControllerError>> {
         async move {
             match command {
-                ControllerCommand::Reconcile(slice) => self.reconcile(slice).map(Some),
+                ControllerCommand::Reconcile(slice) => self.reconcile(slice).await.map(Some),
                 ControllerCommand::Supersede(supersession) => {
                     self.target
                         .retire(supersession.graph_id, &supersession.resources)
@@ -230,14 +254,12 @@ where
     }
 }
 
-fn build_plan<T>(
+async fn build_plan(
     slice: &ControllerSlice,
     observed: &SupabaseObservation,
-    target: &T,
-) -> Result<(SupabasePlan, Vec<SchemaBody>), SupabaseError>
-where
-    T: SupabaseTarget,
-{
+    config_files: &dyn ConfigClosureReader,
+    bundles: &dyn ComponentBundleResolver,
+) -> Result<(SupabasePlan, Vec<SchemaBody>), SupabaseError> {
     let mut operations = Vec::new();
     let mut bodies = Vec::new();
     let mut exposed = BTreeSet::from(["public".into()]);
@@ -283,8 +305,12 @@ where
                 }
                 continue;
             }
-            let sql = target.migration_sql(&migration.path)?;
-            let actual = format!("sha256:{}", hex::encode(Sha256::digest(sql.as_bytes())));
+            let bundle = bundles.resolve(resource.path().instance())?;
+            let bytes = config_files
+                .read(bundle, &migration.path)
+                .await
+                .map_err(|error| SupabaseError::Plan(error.to_string()))?;
+            let actual = format!("sha256:{}", hex::encode(Sha256::digest(bytes.as_ref())));
             if actual != migration.sha256 {
                 return Err(SupabaseError::Plan(format!(
                     "error[supabase.plan.checksum]: migration {:?} for {} declares {}, but file \
@@ -297,6 +323,13 @@ where
                     actual
                 )));
             }
+            let sql = String::from_utf8(bytes.to_vec()).map_err(|_| {
+                SupabaseError::Plan(format!(
+                    "error[supabase.plan.migration-encoding]: migration {:?} for {} is not UTF-8",
+                    migration.id,
+                    resource.path()
+                ))
+            })?;
             operations.push(SupabaseOperation::ApplyMigration {
                 resource: resource.id(),
                 schema: body.schema.clone(),
@@ -392,7 +425,6 @@ fn observation_digest(observed: &SupabaseObservation) -> String {
 #[derive(Clone, Debug)]
 pub struct LocalSupabaseConfig {
     pub connection_url_file: PathBuf,
-    pub migration_root: PathBuf,
     pub api_url: String,
     pub database_url_ref: String,
     pub anon_key_ref: String,
@@ -419,12 +451,6 @@ impl LocalSupabaseTarget {
 impl SupabaseTarget for LocalSupabaseTarget {
     fn observe(&self, _graph: GraphId) -> Result<SupabaseObservation, SupabaseError> {
         observe_database(&mut self.connect()?)
-    }
-
-    fn migration_sql(&self, path: &str) -> Result<String, SupabaseError> {
-        fs::read_to_string(self.config.migration_root.join(path)).map_err(|error| {
-            SupabaseError::Plan(format!("cannot read migration {path:?}: {error}"))
-        })
     }
 
     fn apply(&self, plan: &SupabasePlan) -> Result<String, SupabaseError> {
@@ -726,18 +752,44 @@ mod tests {
 
     struct FakeTarget {
         observation: Mutex<SupabaseObservation>,
-        sql: String,
         applies: Mutex<usize>,
         retired: Mutex<Vec<ResourceId>>,
+    }
+
+    struct FakeConfigFiles {
+        sql: Arc<[u8]>,
+    }
+
+    struct FakeBundles;
+
+    impl ComponentBundleResolver for FakeBundles {
+        fn resolve(&self, _component: &ComponentName) -> Result<BundleRef, SupabaseError> {
+            Ok(BundleRef::new(ContentDigest::digest(b"bundle")))
+        }
+    }
+
+    impl ConfigClosureReader for FakeConfigFiles {
+        fn read<'a>(
+            &'a self,
+            _bundle: BundleRef,
+            path: &'a str,
+        ) -> BoxFuture<'a, Result<Arc<[u8]>, henosis_types::ConfigClosureError>> {
+            Box::pin(async move {
+                if path == "migrations/001.sql" {
+                    Ok(Arc::clone(&self.sql))
+                } else {
+                    Err(henosis_types::ConfigClosureError::Missing {
+                        bundle: BundleRef::new(ContentDigest::digest(b"bundle")),
+                        path: path.to_owned(),
+                    })
+                }
+            })
+        }
     }
 
     impl SupabaseTarget for FakeTarget {
         fn observe(&self, _graph: GraphId) -> Result<SupabaseObservation, SupabaseError> {
             Ok(self.observation.lock().unwrap().clone())
-        }
-
-        fn migration_sql(&self, _path: &str) -> Result<String, SupabaseError> {
-            Ok(self.sql.clone())
         }
 
         fn apply(&self, plan: &SupabasePlan) -> Result<String, SupabaseError> {
@@ -788,15 +840,20 @@ mod tests {
     #[tokio::test]
     async fn plans_applies_reports_idempotently_and_retires() {
         let sql = "create table items (id bigint primary key);".to_owned();
-        let controller = SupabaseController::new(FakeTarget {
-            observation: Mutex::new(SupabaseObservation {
-                exposed: BTreeSet::from(["public".into()]),
-                ..SupabaseObservation::default()
+        let controller = SupabaseController::new(
+            FakeTarget {
+                observation: Mutex::new(SupabaseObservation {
+                    exposed: BTreeSet::from(["public".into()]),
+                    ..SupabaseObservation::default()
+                }),
+                applies: Mutex::new(0),
+                retired: Mutex::new(Vec::new()),
+            },
+            Arc::new(FakeConfigFiles {
+                sql: Arc::from(sql.clone().into_bytes()),
             }),
-            sql: sql.clone(),
-            applies: Mutex::new(0),
-            retired: Mutex::new(Vec::new()),
-        });
+            Arc::new(FakeBundles),
+        );
         let slice = slice(&sql);
         let report = controller
             .execute(&ControllerCommand::Reconcile(slice.clone()))
@@ -825,8 +882,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn migration_mutation_diagnostic_is_stable() {
+    #[tokio::test]
+    async fn migration_mutation_diagnostic_is_stable() {
         let sql = "select 1;";
         let slice = slice(sql);
         let resource = &slice.resources()[0];
@@ -835,13 +892,12 @@ mod tests {
             exposed: BTreeSet::from(["public".into()]),
             ..SupabaseObservation::default()
         };
-        let target = FakeTarget {
-            observation: Mutex::new(observed.clone()),
-            sql: sql.into(),
-            applies: Mutex::new(0),
-            retired: Mutex::new(Vec::new()),
+        let files = FakeConfigFiles {
+            sql: Arc::from(sql.as_bytes()),
         };
-        let error = build_plan(&slice, &observed, &target).unwrap_err();
+        let error = build_plan(&slice, &observed, &files, &FakeBundles)
+            .await
+            .unwrap_err();
         insta::assert_snapshot!(error.to_string(), @r###"
         error[supabase.plan.migration-mutated]: migration "001" for catalog/supabase/schema@1/catalog was applied with sha256:old, but desired declares sha256:354b7196c9ba5fb4b21cf615bb6ec4cd5c07503c34229feef033fc081a8c03f4
           --> migrations/001.sql

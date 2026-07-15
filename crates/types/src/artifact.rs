@@ -19,16 +19,16 @@ use crate::BundleRef;
 /// Implementations must resolve `path` inside `bundle`'s manifest, read exactly
 /// that entry from the shared bundle store, and verify its declared SHA-256
 /// before returning bytes. Controllers must never fall back to a checkout path.
-pub trait BundleArtifactReader: Send + Sync {
+pub trait ConfigClosureReader: Send + Sync {
     fn read<'a>(
         &'a self,
         bundle: BundleRef,
         path: &'a str,
-    ) -> BoxFuture<'a, Result<Arc<[u8]>, BundleArtifactError>>;
+    ) -> BoxFuture<'a, Result<Arc<[u8]>, ConfigClosureError>>;
 }
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
-pub enum BundleArtifactError {
+pub enum ConfigClosureError {
     #[error("bundle {bundle} does not contain configuration file {path:?}")]
     Missing { bundle: BundleRef, path: String },
     #[error("bundle {bundle} manifest is invalid: {message}")]

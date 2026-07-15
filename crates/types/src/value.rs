@@ -145,6 +145,7 @@ pub enum ValueSchema {
     Number,
     Boolean,
     Json,
+    Artifact,
     Array {
         element: Box<Self>,
     },
@@ -164,6 +165,13 @@ impl ValueSchema {
             Self::Number => value.is_number(),
             Self::Boolean => value.is_boolean(),
             Self::Json => true,
+            Self::Artifact => value.as_str().is_some_and(|value| {
+                value.len() == 71
+                    && value.starts_with("sha256:")
+                    && value[7..]
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            }),
             Self::Array { element } => value
                 .as_array()
                 .is_some_and(|values| values.iter().all(|value| element.accepts(value))),
@@ -184,6 +192,7 @@ impl std::fmt::Display for ValueSchema {
             Self::Number => formatter.write_str("number"),
             Self::Boolean => formatter.write_str("boolean"),
             Self::Json => formatter.write_str("JSON value"),
+            Self::Artifact => formatter.write_str("artifact digest"),
             Self::Array { element } => write!(formatter, "array of {element}"),
             Self::Object { fields } => {
                 formatter.write_str("object { ")?;
