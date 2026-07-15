@@ -1,0 +1,1089 @@
+//! Hermetic JavaScript evaluation for Henosis component bundles.
+
+use std::cell::Cell;
+use std::collections::{BTreeMap, BTreeSet};
+use std::future::Future;
+use std::num::NonZeroU32;
+use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, mpsc};
+use std::thread;
+use std::time::Duration;
+
+use deno_core::error::{CoreError, JsError};
+use deno_core::v8;
+use deno_core::{
+    JsRuntime, ModuleLoadOptions, ModuleLoadResponse, ModuleLoader, ModuleResolveResponse,
+    ModuleSpecifier, OpState, ResolutionKind, RuntimeOptions, extension, op2, serde_v8,
+};
+use deno_error::JsErrorBox;
+use futures::FutureExt;
+use futures::future::BoxFuture;
+use henosis_types::{
+    BlockedDetail, BundleRef, ComponentName, ControllerName, EvaluationAttempt, EvaluationError,
+    EvaluationRequest, EvaluationResource, InputCellState, InputName, KindName, KindVersion,
+    NativeValue, NewBlockedEvaluation, NewCompleteEvaluation, NewEvaluationResource,
+    ObservedOutputBinding, OutputAvailability, OutputDeclaration, OutputName, OutputRef,
+    ResourceAddress, ResourceId, ResourceName, StaticOutput,
+};
+use serde::{Deserialize, Serialize};
+
+const ENTRY_SPECIFIER: &str = "henosis:component";
+const PROTOCOL_VERSION: u32 = 1;
+
+/// Retrieves exact executable bytes for a content-addressed bundle.
+pub trait BundleSource: Send + Sync + 'static {
+    fn load(
+        &self,
+        bundle: BundleRef,
+    ) -> BoxFuture<'_, Result<Arc<[u8]>, EvaluationError>>;
+}
+
+/// Controller-owned contract for one supported resource kind.
+#[derive(Clone, Debug)]
+pub struct ResourceContract {
+    controller: ControllerName,
+    observed_outputs: BTreeSet<OutputName>,
+}
+
+impl ResourceContract {
+    #[must_use]
+    pub fn new(controller: ControllerName, observed_outputs: Vec<OutputName>) -> Self {
+        Self {
+            controller,
+            observed_outputs: observed_outputs.into_iter().collect(),
+        }
+    }
+
+    #[must_use]
+    pub const fn controller(&self) -> &ControllerName {
+        &self.controller
+    }
+
+    #[must_use]
+    pub fn observed_outputs(&self) -> &BTreeSet<OutputName> {
+        &self.observed_outputs
+    }
+}
+
+/// Validates controller-owned resource bodies and supplies their output contract.
+pub trait ResourceRegistry: Send + Sync + 'static {
+    fn validate(
+        &self,
+        kind: &KindVersion,
+        body: &serde_json::Value,
+    ) -> Result<ResourceContract, String>;
+}
+
+/// Hard limits and admission bounds for isolate work.
+#[derive(Clone, Debug)]
+pub struct EngineConfig {
+    pub workers: usize,
+    pub queue_capacity_per_worker: usize,
+    pub max_bundle_bytes: usize,
+    pub max_output_bytes: usize,
+    pub max_heap_bytes: usize,
+    pub timeout: Duration,
+    pub worker_stack_bytes: usize,
+}
+
+impl Default for EngineConfig {
+    fn default() -> Self {
+        Self {
+            workers: thread::available_parallelism().map_or(1, usize::from),
+            queue_capacity_per_worker: 8,
+            max_bundle_bytes: 2 * 1024 * 1024,
+            max_output_bytes: 4 * 1024 * 1024,
+            max_heap_bytes: 64 * 1024 * 1024,
+            timeout: Duration::from_millis(250),
+            worker_stack_bytes: 8 * 1024 * 1024,
+        }
+    }
+}
+
+/// Bounded scheduler whose dedicated threads own all V8 activity.
+#[derive(Clone)]
+pub struct EvaluationEngine {
+    source: Arc<dyn BundleSource>,
+    workers: Arc<Vec<mpsc::SyncSender<Job>>>,
+    next_worker: Arc<AtomicUsize>,
+    config: EngineConfig,
+}
+
+impl EvaluationEngine {
+    pub fn new(
+        source: Arc<dyn BundleSource>,
+        registry: Arc<dyn ResourceRegistry>,
+        config: EngineConfig,
+    ) -> Result<Self, EvaluationError> {
+        if config.workers == 0 {
+            return Err(EvaluationError::new(
+                "evaluation engine requires at least one isolate worker",
+            ));
+        }
+        if config.max_heap_bytes < 8 * 1024 * 1024 {
+            return Err(EvaluationError::new(
+                "evaluation heap limit must be at least 8 MiB",
+            ));
+        }
+
+        let mut workers = Vec::with_capacity(config.workers);
+        for worker_index in 0..config.workers {
+            let (sender, receiver) =
+                mpsc::sync_channel::<Job>(config.queue_capacity_per_worker);
+            let worker_registry = Arc::clone(&registry);
+            let worker_config = config.clone();
+            thread::Builder::new()
+                .name(format!("henosis-isolate-{worker_index}"))
+                .stack_size(config.worker_stack_bytes)
+                .spawn(move || worker_loop(receiver, &worker_registry, &worker_config))
+                .map_err(|error| {
+                    EvaluationError::new(format!(
+                        "failed to start isolate worker {worker_index}: {error}"
+                    ))
+                })?;
+            workers.push(sender);
+        }
+
+        Ok(Self {
+            source,
+            workers: Arc::new(workers),
+            next_worker: Arc::new(AtomicUsize::new(0)),
+            config,
+        })
+    }
+}
+
+impl henosis_types::Evaluator for EvaluationEngine {
+    fn evaluate<'a>(
+        &'a self,
+        request: EvaluationRequest,
+    ) -> BoxFuture<'a, Result<EvaluationAttempt, EvaluationError>> {
+        Box::pin(async move {
+            let bundle = self.source.load(request.bundle()).await?;
+            if bundle.len() > self.config.max_bundle_bytes {
+                return Err(EvaluationError::new(format!(
+                    "bundle is {} bytes, exceeding the {} byte limit",
+                    bundle.len(),
+                    self.config.max_bundle_bytes
+                )));
+            }
+
+            let (response, result) = tokio::sync::oneshot::channel();
+            let worker = self.next_worker.fetch_add(1, Ordering::Relaxed) % self.workers.len();
+            self.workers[worker]
+                .try_send(Job {
+                    request,
+                    bundle,
+                    response,
+                })
+                .map_err(|error| match error {
+                    mpsc::TrySendError::Full(_) => {
+                        EvaluationError::new("evaluation worker queue is full")
+                    }
+                    mpsc::TrySendError::Disconnected(_) => {
+                        EvaluationError::new("evaluation worker stopped")
+                    }
+                })?;
+            result
+                .await
+                .map_err(|_| EvaluationError::new("evaluation worker dropped its response"))?
+        })
+    }
+}
+
+struct Job {
+    request: EvaluationRequest,
+    bundle: Arc<[u8]>,
+    response: tokio::sync::oneshot::Sender<Result<EvaluationAttempt, EvaluationError>>,
+}
+
+fn worker_loop(
+    receiver: mpsc::Receiver<Job>,
+    registry: &Arc<dyn ResourceRegistry>,
+    config: &EngineConfig,
+) {
+    while let Ok(job) = receiver.recv() {
+        let result = evaluate_job(&job.request, &job.bundle, registry.as_ref(), config);
+        let _ = job.response.send(result);
+    }
+}
+
+// === ISOLATE BOUNDARY ===
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StickyBlockedWire {
+    input: String,
+    source: String,
+    operation: String,
+    message: String,
+}
+
+#[derive(Default)]
+struct StickyBlocked(Option<StickyBlockedWire>);
+
+#[op2]
+fn op_henosis_mark_blocked(state: &mut OpState, #[serde] detail: StickyBlockedWire) {
+    let sticky = state.borrow_mut::<StickyBlocked>();
+    if sticky.0.is_none() {
+        sticky.0 = Some(detail);
+    }
+}
+
+extension!(
+    henosis_evaluation_runtime,
+    ops = [op_henosis_mark_blocked],
+    state = |state| state.put(StickyBlocked::default()),
+);
+
+#[derive(Debug)]
+struct DenyModuleLoader {
+    dynamic_import_attempted: Rc<Cell<bool>>,
+}
+
+impl ModuleLoader for DenyModuleLoader {
+    fn resolve(
+        &self,
+        specifier: &str,
+        _referrer: &str,
+        kind: ResolutionKind,
+    ) -> ModuleResolveResponse {
+        if matches!(kind, ResolutionKind::DynamicImport) {
+            self.dynamic_import_attempted.set(true);
+            return Err(JsErrorBox::generic(format!(
+                "error[HENOSIS_DYNAMIC_IMPORT]: dynamic import of {specifier:?} is unavailable in component evaluation"
+            )));
+        }
+        Err(JsErrorBox::generic(format!(
+            "error[HENOSIS_EXTERNAL_IMPORT]: bundle contains unresolved import {specifier:?}; the executable must be one closed ESM file"
+        )))
+    }
+
+    fn load(
+        &self,
+        module_specifier: &ModuleSpecifier,
+        _maybe_referrer: Option<&deno_core::ModuleLoadReferrer>,
+        options: ModuleLoadOptions,
+    ) -> ModuleLoadResponse {
+        if options.is_dynamic_import {
+            self.dynamic_import_attempted.set(true);
+        }
+        ModuleLoadResponse::Sync(Err(JsErrorBox::generic(format!(
+            "error[HENOSIS_EXTERNAL_IMPORT]: module {module_specifier} is not available"
+        ))))
+    }
+}
+
+fn evaluate_job(
+    request: &EvaluationRequest,
+    bundle: &[u8],
+    registry: &dyn ResourceRegistry,
+    config: &EngineConfig,
+) -> Result<EvaluationAttempt, EvaluationError> {
+    let source = std::str::from_utf8(bundle)
+        .map_err(|_| EvaluationError::new("bundle is not UTF-8 JavaScript source"))?;
+    let dynamic_import_attempted = Rc::new(Cell::new(false));
+    let loader = Rc::new(DenyModuleLoader {
+        dynamic_import_attempted: Rc::clone(&dynamic_import_attempted),
+    });
+    let mut runtime = JsRuntime::new(RuntimeOptions {
+        module_loader: Some(loader),
+        extensions: vec![henosis_evaluation_runtime::init()],
+        create_params: Some(v8::Isolate::create_params().heap_limits(0, config.max_heap_bytes)),
+        ..Default::default()
+    });
+
+    let timed_out = Arc::new(AtomicBool::new(false));
+    let out_of_memory = Arc::new(AtomicBool::new(false));
+    let isolate_handle = runtime.v8_isolate().thread_safe_handle();
+    let heap_handle = isolate_handle.clone();
+    let heap_flag = Arc::clone(&out_of_memory);
+    runtime.add_near_heap_limit_callback(move |current, _initial| {
+        heap_flag.store(true, Ordering::Release);
+        heap_handle.terminate_execution();
+        current.saturating_add(1024 * 1024)
+    });
+
+    let (cancel_timeout, timeout_cancelled) = mpsc::channel();
+    let timeout_handle = isolate_handle;
+    let timeout_flag = Arc::clone(&timed_out);
+    let timeout = config.timeout;
+    let watchdog = thread::spawn(move || {
+        if timeout_cancelled.recv_timeout(timeout).is_err() {
+            timeout_flag.store(true, Ordering::Release);
+            timeout_handle.terminate_execution();
+        }
+    });
+
+    let result = evaluate_in_runtime(
+        &mut runtime,
+        request,
+        source,
+        registry,
+        &dynamic_import_attempted,
+        config.max_output_bytes,
+    );
+    let _ = cancel_timeout.send(());
+    let _ = watchdog.join();
+
+    if out_of_memory.load(Ordering::Acquire) {
+        return Err(EvaluationError::new(
+            "component evaluation exceeded the V8 heap limit",
+        ));
+    }
+    if timed_out.load(Ordering::Acquire) {
+        return Err(EvaluationError::new(format!(
+            "component evaluation exceeded the {:?} execution deadline",
+            config.timeout
+        )));
+    }
+    result
+}
+
+fn evaluate_in_runtime(
+    runtime: &mut JsRuntime,
+    request: &EvaluationRequest,
+    source: &str,
+    registry: &dyn ResourceRegistry,
+    dynamic_import_attempted: &Cell<bool>,
+    max_output_bytes: usize,
+) -> Result<EvaluationAttempt, EvaluationError> {
+    install_host_boundary(runtime)?;
+
+    let specifier = ModuleSpecifier::parse(ENTRY_SPECIFIER)
+        .map_err(|error| EvaluationError::new(format!("invalid entry specifier: {error}")))?;
+    let module_id = block_on(runtime.load_main_es_module_from_code(&specifier, source.to_owned()))
+        .map_err(core_failure("loading component bundle"))?;
+    let module_evaluation = runtime.mod_evaluate(module_id);
+    match module_evaluation.now_or_never() {
+        Some(Ok(())) => {}
+        Some(Err(error)) => return Err(core_failure("evaluating component module")(error)),
+        None => {
+            return Err(EvaluationError::new(
+                "error[HENOSIS_TOP_LEVEL_AWAIT]: top-level await is unavailable in component bundles",
+            ));
+        }
+    }
+
+    let namespace = runtime
+        .get_module_namespace(module_id)
+        .map_err(core_failure("reading component exports"))?;
+    let (metadata, wire_result) = invoke_bundle(runtime, namespace, request)?;
+    validate_metadata(&metadata, request)?;
+
+    if dynamic_import_attempted.get() {
+        return Err(EvaluationError::new(
+            "error[HENOSIS_DYNAMIC_IMPORT]: dynamic import is unavailable in component evaluation",
+        ));
+    }
+
+    let sticky = runtime
+        .op_state()
+        .borrow()
+        .borrow::<StickyBlocked>()
+        .0
+        .clone();
+    let wire_result = apply_sticky_blocked(wire_result, sticky)?;
+    let encoded_size = serde_json::to_vec(&wire_result)
+        .map_err(|error| EvaluationError::new(format!("failed to measure result: {error}")))?
+        .len();
+    if encoded_size > max_output_bytes {
+        return Err(EvaluationError::new(format!(
+            "evaluation result is {encoded_size} bytes, exceeding the {max_output_bytes} byte limit"
+        )));
+    }
+
+    convert_result(request, &metadata, wire_result, registry)
+}
+
+fn block_on<F: Future>(future: F) -> F::Output {
+    futures::executor::block_on(future)
+}
+
+fn install_host_boundary(runtime: &mut JsRuntime) -> Result<(), EvaluationError> {
+    {
+        deno_core::scope!(scope, runtime);
+        scope
+            .get_current_context()
+            .set_allow_generation_from_strings(false);
+    }
+    runtime
+        .execute_script("henosis:bootstrap", BOOTSTRAP)
+        .map_err(js_failure("installing deterministic runtime policy"))?;
+    Ok(())
+}
+
+const BOOTSTRAP: &str = r#"
+(() => {
+  "use strict";
+  const markBlocked = globalThis.Deno.core.ops.op_henosis_mark_blocked;
+  Object.defineProperty(globalThis, "__henosis_mark_blocked", {
+    value(detail) { markBlocked(detail); },
+    writable: false,
+    configurable: false,
+    enumerable: false,
+  });
+  const forbidden = (name) => function () {
+    throw new Error(`error[HENOSIS_NONDETERMINISTIC_API]: ${name} is unavailable in component evaluation`);
+  };
+  Object.defineProperty(globalThis, "Date", { value: forbidden("Date"), configurable: false });
+  Object.defineProperty(Math, "random", { value: forbidden("Math.random"), configurable: false });
+  for (const name of [
+    "performance", "setTimeout", "setInterval", "clearTimeout", "clearInterval",
+    "queueMicrotask", "fetch", "crypto", "WeakRef", "FinalizationRegistry",
+    "SharedArrayBuffer", "Atomics", "WebAssembly", "Intl", "eval", "Function",
+    "ArrayBuffer", "DataView", "Deno", "process"
+  ]) {
+    try { delete globalThis[name]; } catch (_) {}
+  }
+  for (const [prototype, methods] of [
+    [String.prototype, ["localeCompare", "toLocaleLowerCase", "toLocaleUpperCase"]],
+    [Number.prototype, ["toLocaleString"]],
+    [BigInt.prototype, ["toLocaleString"]],
+  ]) {
+    for (const method of methods) {
+      Object.defineProperty(prototype, method, { value: forbidden(method), configurable: false });
+    }
+  }
+  Object.freeze(Math);
+  Object.freeze(JSON);
+})();
+"#;
+
+fn invoke_bundle(
+    runtime: &mut JsRuntime,
+    namespace: v8::Global<v8::Object>,
+    request: &EvaluationRequest,
+) -> Result<(ComponentMetadataWire, EvaluationResultWire), EvaluationError> {
+    let snapshot = snapshot_wire(request)?;
+    deno_core::scope!(scope, runtime);
+    let namespace = v8::Local::new(scope, namespace);
+
+    let protocol = export(scope, namespace, "protocolVersion")?;
+    let protocol: u32 = serde_v8::from_v8(scope, protocol).map_err(|error| {
+        EvaluationError::new(format!(
+            "bundle export `protocolVersion` is not an integer: {error}"
+        ))
+    })?;
+    if protocol != PROTOCOL_VERSION {
+        return Err(EvaluationError::new(format!(
+            "unsupported bundle protocol version {protocol}; expected {PROTOCOL_VERSION}"
+        )));
+    }
+
+    let component = export(scope, namespace, "component")?;
+    let metadata = serde_v8::from_v8(scope, component).map_err(|error| {
+        EvaluationError::new(format!(
+            "bundle export `component` is not plain JSON-compatible metadata: {error}"
+        ))
+    })?;
+
+    let evaluate = export(scope, namespace, "evaluate")?;
+    let evaluate = v8::Local::<v8::Function>::try_from(evaluate)
+        .map_err(|_| EvaluationError::new("bundle export `evaluate` is not a function"))?;
+    let argument = serde_v8::to_v8(scope, snapshot)
+        .map_err(|error| EvaluationError::new(format!("failed to inject snapshot: {error}")))?;
+    v8::tc_scope!(let try_catch, scope);
+    let receiver = v8::undefined(try_catch).into();
+    let result = evaluate.call(try_catch, receiver, &[argument]);
+    let Some(result) = result else {
+        let message = try_catch
+            .exception()
+            .and_then(|exception| exception.to_string(try_catch))
+            .map_or_else(
+                || "component threw an exception".to_owned(),
+                |message| message.to_rust_string_lossy(try_catch),
+            );
+        return Err(EvaluationError::new(message));
+    };
+    if result.is_promise() {
+        return Err(EvaluationError::new(
+            "error[HENOSIS_ASYNC_EVALUATION]: evaluate returned a Promise; components must be synchronous",
+        ));
+    }
+    let wire = serde_v8::from_v8(try_catch, result).map_err(|error| {
+        EvaluationError::new(format!(
+            "evaluation result is not protocol JSON data: {error}"
+        ))
+    })?;
+    Ok((metadata, wire))
+}
+
+fn export<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    namespace: v8::Local<'s, v8::Object>,
+    name: &str,
+) -> Result<v8::Local<'s, v8::Value>, EvaluationError> {
+    let key = v8::String::new(scope, name)
+        .ok_or_else(|| EvaluationError::new("V8 could not allocate an export name"))?;
+    let value = namespace
+        .get(scope, key.into())
+        .ok_or_else(|| EvaluationError::new(format!("failed to read bundle export `{name}`")))?;
+    if value.is_undefined() {
+        return Err(EvaluationError::new(format!(
+            "bundle is missing required export `{name}`"
+        )));
+    }
+    Ok(value)
+}
+
+// === PROTOCOL VALIDATION ===
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ComponentMetadataWire {
+    name: String,
+    inputs: BTreeMap<String, InputMetadataWire>,
+    outputs: BTreeMap<String, OutputMetadataWire>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct InputMetadataWire {
+    component: String,
+    output: String,
+    optional: bool,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct OutputMetadataWire {
+    availability: AvailabilityWire,
+    optional: bool,
+    schema: SchemaWire,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "lowercase")]
+enum AvailabilityWire {
+    Static,
+    Observed,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+enum SchemaWire {
+    String,
+    Url,
+    Number,
+    Boolean,
+    Json,
+    Array { element: Box<SchemaWire> },
+    Object { fields: BTreeMap<String, SchemaWire> },
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(tag = "status", rename_all = "lowercase", rename_all_fields = "camelCase")]
+enum EvaluationResultWire {
+    Complete {
+        protocol_version: u32,
+        resources: Vec<ResourceWire>,
+        outputs: BTreeMap<String, serde_json::Value>,
+        observed_outputs: BTreeMap<String, BindingWire>,
+        reads: Vec<String>,
+    },
+    Blocked {
+        protocol_version: u32,
+        resources: Vec<ResourceWire>,
+        blocked: BlockedWire,
+        reads: Vec<String>,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct ResourceWire {
+    address: String,
+    kind: String,
+    name: String,
+    body: serde_json::Value,
+    canonical: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct BindingWire {
+    resource: String,
+    output: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct BlockedWire {
+    code: String,
+    input: String,
+    source: String,
+    operation: String,
+    message: String,
+}
+
+fn snapshot_wire(request: &EvaluationRequest) -> Result<serde_json::Value, EvaluationError> {
+    let mut inputs = serde_json::Map::new();
+    for cell in request.snapshot().iter() {
+        let value = match cell.state() {
+            InputCellState::Available(value) => {
+                serde_json::json!({"state": "available", "value": value.as_json()})
+            }
+            InputCellState::Blocked => serde_json::json!({"state": "blocked"}),
+            InputCellState::Absent => serde_json::json!({"state": "absent"}),
+        };
+        inputs.insert(cell.name().as_str().to_owned(), value);
+    }
+    Ok(serde_json::json!({
+        "protocolVersion": PROTOCOL_VERSION,
+        "inputs": inputs,
+    }))
+}
+
+fn validate_metadata(
+    metadata: &ComponentMetadataWire,
+    request: &EvaluationRequest,
+) -> Result<(), EvaluationError> {
+    let component = ComponentName::new(metadata.name.clone())
+        .map_err(|error| EvaluationError::new(format!("invalid component name: {error}")))?;
+    if &component != request.component() {
+        return Err(EvaluationError::new(format!(
+            "bundle declares component {component}, but request is for {}",
+            request.component()
+        )));
+    }
+    if metadata.inputs.len() != request.snapshot().iter().len() {
+        return Err(EvaluationError::new(
+            "bundle input declarations do not match snapshot cells",
+        ));
+    }
+    for (name, declaration) in &metadata.inputs {
+        let input = InputName::new(name.clone())
+            .map_err(|error| EvaluationError::new(format!("invalid input name: {error}")))?;
+        let source = output_ref(&declaration.component, &declaration.output)?;
+        let cell = request.snapshot().get(&input).ok_or_else(|| {
+            EvaluationError::new(format!("snapshot omitted declared input {name:?}"))
+        })?;
+        if cell.source() != &source || cell.is_optional() != declaration.optional {
+            return Err(EvaluationError::new(format!(
+                "snapshot cell {name:?} does not agree with bundle metadata"
+            )));
+        }
+        if matches!(cell.state(), InputCellState::Absent) && !declaration.optional {
+            return Err(EvaluationError::new(format!(
+                "required input {name:?} cannot be absent"
+            )));
+        }
+    }
+    for (name, declaration) in &metadata.outputs {
+        OutputName::new(name.clone())
+            .map_err(|error| EvaluationError::new(format!("invalid output name: {error}")))?;
+        validate_schema_shape(&declaration.schema)?;
+    }
+    Ok(())
+}
+
+fn validate_schema_shape(schema: &SchemaWire) -> Result<(), EvaluationError> {
+    match schema {
+        SchemaWire::Array { element } => validate_schema_shape(element),
+        SchemaWire::Object { fields } => {
+            for (name, child) in fields {
+                OutputName::new(name.clone()).map_err(|error| {
+                    EvaluationError::new(format!("invalid schema field name: {error}"))
+                })?;
+                validate_schema_shape(child)?;
+            }
+            Ok(())
+        }
+        SchemaWire::String
+        | SchemaWire::Url
+        | SchemaWire::Number
+        | SchemaWire::Boolean
+        | SchemaWire::Json => Ok(()),
+    }
+}
+
+fn apply_sticky_blocked(
+    result: EvaluationResultWire,
+    sticky: Option<StickyBlockedWire>,
+) -> Result<EvaluationResultWire, EvaluationError> {
+    let Some(sticky) = sticky else {
+        return Ok(result);
+    };
+    let sticky_wire = BlockedWire {
+        code: "HENOSIS_BLOCKED".to_owned(),
+        input: sticky.input,
+        source: sticky.source,
+        operation: sticky.operation,
+        message: sticky.message,
+    };
+    match result {
+        EvaluationResultWire::Blocked {
+            protocol_version,
+            resources,
+            blocked,
+            reads,
+        } => {
+            if blocked.input != sticky_wire.input
+                || blocked.source != sticky_wire.source
+                || blocked.operation != sticky_wire.operation
+            {
+                return Err(EvaluationError::new(
+                    "SDK blocked result disagrees with the sticky host blocked signal",
+                ));
+            }
+            Ok(EvaluationResultWire::Blocked {
+                protocol_version,
+                resources,
+                blocked,
+                reads,
+            })
+        }
+        EvaluationResultWire::Complete { mut reads, .. } => {
+            if !reads.contains(&sticky_wire.input) {
+                reads.push(sticky_wire.input.clone());
+                reads.sort();
+                reads.dedup();
+            }
+            Ok(EvaluationResultWire::Blocked {
+                protocol_version: PROTOCOL_VERSION,
+                resources: Vec::new(),
+                blocked: sticky_wire,
+                reads,
+            })
+        }
+    }
+}
+
+fn convert_result(
+    request: &EvaluationRequest,
+    metadata: &ComponentMetadataWire,
+    wire: EvaluationResultWire,
+    registry: &dyn ResourceRegistry,
+) -> Result<EvaluationAttempt, EvaluationError> {
+    match wire {
+        EvaluationResultWire::Complete {
+            protocol_version,
+            resources,
+            outputs,
+            observed_outputs,
+            reads,
+        } => {
+            require_protocol(protocol_version)?;
+            let (resources, contracts) = convert_resources(request, resources, registry)?;
+            let outputs = convert_static_outputs(metadata, outputs)?;
+            let observed_outputs =
+                convert_observed_outputs(metadata, observed_outputs, &contracts)?;
+            ensure_output_completeness(metadata, &outputs, &observed_outputs)?;
+            EvaluationAttempt::complete(
+                request.snapshot(),
+                NewCompleteEvaluation {
+                    resources,
+                    outputs,
+                    observed_outputs,
+                    reads: convert_reads(reads)?,
+                },
+            )
+            .map_err(protocol_failure)
+        }
+        EvaluationResultWire::Blocked {
+            protocol_version,
+            resources,
+            blocked,
+            reads,
+        } => {
+            require_protocol(protocol_version)?;
+            if blocked.code != "HENOSIS_BLOCKED" {
+                return Err(EvaluationError::new(format!(
+                    "blocked result has unknown code {:?}",
+                    blocked.code
+                )));
+            }
+            let (resources, _) = convert_resources(request, resources, registry)?;
+            let input = InputName::new(blocked.input)
+                .map_err(|error| EvaluationError::new(format!("invalid blocked input: {error}")))?;
+            let cell = request.snapshot().get(&input).ok_or_else(|| {
+                EvaluationError::new("blocked result refers to an undeclared input")
+            })?;
+            let expected_source = metadata
+                .inputs
+                .get(input.as_str())
+                .map(|input| format!("{}.{}", input.component, input.output))
+                .ok_or_else(|| EvaluationError::new("blocked input missing from metadata"))?;
+            if blocked.source != expected_source {
+                return Err(EvaluationError::new(format!(
+                    "blocked source {:?} does not match declared source {:?}",
+                    blocked.source, expected_source
+                )));
+            }
+            let detail = BlockedDetail::new(
+                input,
+                cell.source().clone(),
+                blocked.operation,
+                blocked.message,
+            );
+            EvaluationAttempt::blocked(
+                request.snapshot(),
+                NewBlockedEvaluation {
+                    resources,
+                    blocked: detail,
+                    reads: convert_reads(reads)?,
+                },
+            )
+            .map_err(protocol_failure)
+        }
+    }
+}
+
+fn require_protocol(version: u32) -> Result<(), EvaluationError> {
+    if version == PROTOCOL_VERSION {
+        Ok(())
+    } else {
+        Err(EvaluationError::new(format!(
+            "result protocol version {version} does not match {PROTOCOL_VERSION}"
+        )))
+    }
+}
+
+fn convert_resources(
+    request: &EvaluationRequest,
+    resources: Vec<ResourceWire>,
+    registry: &dyn ResourceRegistry,
+) -> Result<
+    (
+        Vec<EvaluationResource>,
+        BTreeMap<ResourceAddress, ResourceContract>,
+    ),
+    EvaluationError,
+> {
+    let mut converted = Vec::with_capacity(resources.len());
+    let mut contracts = BTreeMap::new();
+    for resource in resources {
+        let kind = parse_kind(&resource.kind)?;
+        let name = ResourceName::new(resource.name.clone())
+            .map_err(|error| EvaluationError::new(format!("invalid resource name: {error}")))?;
+        let address = ResourceAddress::new(kind.clone(), name.clone());
+        if resource.address != address.to_string() {
+            return Err(EvaluationError::new(format!(
+                "resource address {:?} does not match kind/name {address}",
+                resource.address
+            )));
+        }
+        let native = NativeValue::from_canonical(resource.body.clone(), &resource.canonical)
+            .map_err(|error| EvaluationError::new(error.to_string()))?;
+        let contract = registry
+            .validate(&kind, native.as_json())
+            .map_err(|error| EvaluationError::new(format!("resource {address} is invalid: {error}")))?;
+        if contracts.insert(address.clone(), contract.clone()).is_some() {
+            return Err(EvaluationError::new(format!(
+                "resource address {address} was emitted more than once"
+            )));
+        }
+        let outputs = contract
+            .observed_outputs()
+            .iter()
+            .cloned()
+            .map(|name| OutputDeclaration::new(name, OutputAvailability::Observed))
+            .collect();
+        converted.push(
+            EvaluationResource::new(NewEvaluationResource {
+                id: stable_resource_id(request, &address),
+                component: request.component().clone(),
+                kind,
+                name,
+                controller: contract.controller().clone(),
+                body: resource.body,
+                canonical: resource.canonical,
+                outputs,
+            })
+            .map_err(protocol_failure)?,
+        );
+    }
+    Ok((converted, contracts))
+}
+
+fn convert_static_outputs(
+    metadata: &ComponentMetadataWire,
+    outputs: BTreeMap<String, serde_json::Value>,
+) -> Result<Vec<StaticOutput>, EvaluationError> {
+    let mut converted = Vec::with_capacity(outputs.len());
+    for (name, value) in outputs {
+        let declaration = metadata.outputs.get(&name).ok_or_else(|| {
+            EvaluationError::new(format!("result contains undeclared static output {name:?}"))
+        })?;
+        if declaration.availability != AvailabilityWire::Static {
+            return Err(EvaluationError::new(format!(
+                "observed output {name:?} was returned as a static value"
+            )));
+        }
+        validate_schema_value(&declaration.schema, &value, &format!("output {name}"))?;
+        let name = OutputName::new(name)
+            .map_err(|error| EvaluationError::new(format!("invalid output name: {error}")))?;
+        let value = NativeValue::new(value)
+            .map_err(|error| EvaluationError::new(format!("invalid output value: {error}")))?;
+        converted.push(StaticOutput::new(name, value));
+    }
+    Ok(converted)
+}
+
+fn convert_observed_outputs(
+    metadata: &ComponentMetadataWire,
+    outputs: BTreeMap<String, BindingWire>,
+    contracts: &BTreeMap<ResourceAddress, ResourceContract>,
+) -> Result<Vec<ObservedOutputBinding>, EvaluationError> {
+    let mut converted = Vec::with_capacity(outputs.len());
+    for (name, binding) in outputs {
+        let declaration = metadata.outputs.get(&name).ok_or_else(|| {
+            EvaluationError::new(format!("result contains undeclared observed output {name:?}"))
+        })?;
+        if declaration.availability != AvailabilityWire::Observed {
+            return Err(EvaluationError::new(format!(
+                "static output {name:?} was returned as an observed binding"
+            )));
+        }
+        let address = parse_address(&binding.resource)?;
+        let output = OutputName::new(binding.output)
+            .map_err(|error| EvaluationError::new(format!("invalid resource output: {error}")))?;
+        let contract = contracts.get(&address).ok_or_else(|| {
+            EvaluationError::new(format!(
+                "observed output {name:?} points at un-emitted resource {address}"
+            ))
+        })?;
+        if !contract.observed_outputs().contains(&output) {
+            return Err(EvaluationError::new(format!(
+                "resource {address} does not declare observed output {output}"
+            )));
+        }
+        converted.push(ObservedOutputBinding::new(
+            OutputName::new(name)
+                .map_err(|error| EvaluationError::new(format!("invalid output name: {error}")))?,
+            address,
+            output,
+        ));
+    }
+    Ok(converted)
+}
+
+fn ensure_output_completeness(
+    metadata: &ComponentMetadataWire,
+    static_outputs: &[StaticOutput],
+    observed_outputs: &[ObservedOutputBinding],
+) -> Result<(), EvaluationError> {
+    let static_names = static_outputs
+        .iter()
+        .map(|output| output.name().as_str())
+        .collect::<BTreeSet<_>>();
+    let observed_names = observed_outputs
+        .iter()
+        .map(|output| output.name().as_str())
+        .collect::<BTreeSet<_>>();
+    for (name, declaration) in &metadata.outputs {
+        let present = match declaration.availability {
+            AvailabilityWire::Static => static_names.contains(name.as_str()),
+            AvailabilityWire::Observed => observed_names.contains(name.as_str()),
+        };
+        if !present && !declaration.optional {
+            return Err(EvaluationError::new(format!(
+                "required {:?} output {name:?} is missing",
+                declaration.availability
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn convert_reads(reads: Vec<String>) -> Result<Vec<InputName>, EvaluationError> {
+    reads
+        .into_iter()
+        .map(|read| {
+            InputName::new(read)
+                .map_err(|error| EvaluationError::new(format!("invalid read name: {error}")))
+        })
+        .collect()
+}
+
+fn validate_schema_value(
+    schema: &SchemaWire,
+    value: &serde_json::Value,
+    path: &str,
+) -> Result<(), EvaluationError> {
+    let valid = match schema {
+        SchemaWire::String => value.is_string(),
+        SchemaWire::Url => value.as_str().is_some_and(|value| {
+            value.starts_with("https://") || value.starts_with("http://")
+        }),
+        SchemaWire::Number => value.is_number(),
+        SchemaWire::Boolean => value.is_boolean(),
+        SchemaWire::Json => true,
+        SchemaWire::Array { element } => value
+            .as_array()
+            .is_some_and(|values| values.iter().all(|value| validate_schema_value(element, value, path).is_ok())),
+        SchemaWire::Object { fields } => value.as_object().is_some_and(|object| {
+            fields.iter().all(|(name, schema)| {
+                object
+                    .get(name)
+                    .is_some_and(|value| validate_schema_value(schema, value, path).is_ok())
+            })
+        }),
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(EvaluationError::new(format!(
+            "{path} does not satisfy its declared schema"
+        )))
+    }
+}
+
+fn output_ref(component: &str, output: &str) -> Result<OutputRef, EvaluationError> {
+    Ok(OutputRef::new(
+        ComponentName::new(component.to_owned()).map_err(|error| {
+            EvaluationError::new(format!("invalid source component name: {error}"))
+        })?,
+        OutputName::new(output.to_owned()).map_err(|error| {
+            EvaluationError::new(format!("invalid source output name: {error}"))
+        })?,
+    ))
+}
+
+fn parse_kind(value: &str) -> Result<KindVersion, EvaluationError> {
+    let (name, version) = value.rsplit_once('@').ok_or_else(|| {
+        EvaluationError::new(format!("resource kind {value:?} has no version suffix"))
+    })?;
+    let version = version
+        .parse::<u32>()
+        .ok()
+        .and_then(NonZeroU32::new)
+        .ok_or_else(|| EvaluationError::new(format!("invalid resource kind version {value:?}")))?;
+    let name = KindName::new(name.to_owned())
+        .map_err(|error| EvaluationError::new(format!("invalid resource kind: {error}")))?;
+    Ok(KindVersion::new(name, version))
+}
+
+fn parse_address(value: &str) -> Result<ResourceAddress, EvaluationError> {
+    let (kind, name) = value.rsplit_once('/').ok_or_else(|| {
+        EvaluationError::new(format!("invalid resource address {value:?}"))
+    })?;
+    Ok(ResourceAddress::new(
+        parse_kind(kind)?,
+        ResourceName::new(name.to_owned())
+            .map_err(|error| EvaluationError::new(format!("invalid resource name: {error}")))?,
+    ))
+}
+
+fn stable_resource_id(request: &EvaluationRequest, address: &ResourceAddress) -> ResourceId {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"henosis-resource-id-v1\0");
+    hasher.update(&request.graph_id().into_bytes());
+    hasher.update(request.component().as_str().as_bytes());
+    hasher.update(b"\0");
+    hasher.update(address.to_string().as_bytes());
+    let mut bytes = [0_u8; 16];
+    bytes.copy_from_slice(&hasher.finalize().as_bytes()[..16]);
+    ResourceId::from_bytes(bytes)
+}
+
+fn protocol_failure(error: impl std::fmt::Display) -> EvaluationError {
+    EvaluationError::new(format!("bundle/host protocol failure: {error}"))
+}
+
+fn js_failure(
+    context: &'static str,
+) -> impl FnOnce(Box<JsError>) -> EvaluationError {
+    move |error| EvaluationError::new(format!("{context}: {error}"))
+}
+
+fn core_failure(context: &'static str) -> impl FnOnce(CoreError) -> EvaluationError {
+    move |error| EvaluationError::new(format!("{context}: {error}"))
+}
