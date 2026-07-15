@@ -54,6 +54,12 @@ impl BundleRef {
     }
 }
 
+impl std::fmt::Display for BundleRef {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum ComponentInputSource {
     Output {
