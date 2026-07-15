@@ -1,10 +1,9 @@
 //! Cloudflare resource controller with a replaceable API transport.
 //!
 //! The transport seam is deliberately provider-shaped and is exercised with a
-//! recorded/in-memory implementation. Worker source bytes are resolved inside
-//! the transport boundary because the D26 `cloudflare/worker@1` body currently
-//! carries a repository-relative source entry rather than the bundled bytes
-//! themselves.
+//! recorded/in-memory implementation. Worker source and asset archives are
+//! content-addressed workload artifacts. The transport fetches them by digest
+//! and never reads workload bytes from component configuration bundles.
 
 use std::collections::BTreeMap;
 use std::sync::Mutex;
@@ -16,6 +15,7 @@ use henosis_controller_runtime::failed_report;
 use henosis_controller_runtime::output;
 use henosis_controller_runtime::publication_id;
 use henosis_controller_runtime::ready_report;
+use henosis_types::ArtifactDigest;
 use henosis_types::Controller;
 use henosis_types::ControllerCommand;
 use henosis_types::ControllerError;
@@ -31,7 +31,6 @@ use thiserror::Error;
 
 mod live;
 
-pub use live::ComponentBundleResolver;
 pub use live::LiveCloudflareConfig;
 pub use live::LiveCloudflareTransport;
 
@@ -48,8 +47,21 @@ pub struct WorkerBody {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SourceRef {
-    pub entry: String,
-    pub assets: Option<String>,
+    pub entry: ArtifactReference,
+    pub assets: Option<ArtifactReference>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ArtifactReference {
+    pub kind: ArtifactKind,
+    pub digest: ArtifactDigest,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ArtifactKind {
+    CloudflareWorker,
+    StaticAssets,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -177,10 +189,10 @@ where
             ) {
                 ("cloudflare/worker", 1) => {
                     let body: WorkerBody = decode(resource)?;
-                    let observed =
-                        self.transport
-                            .apply_worker(slice.graph_id(), resource, &body)
-                            .await?;
+                    let observed = self
+                        .transport
+                        .apply_worker(slice.graph_id(), resource, &body)
+                        .await?;
                     push_if_declared(
                         resource,
                         "url",
@@ -209,10 +221,10 @@ where
                 }
                 ("cloudflare/tunnel", 1) => {
                     let body: TunnelBody = decode(resource)?;
-                    let observed =
-                        self.transport
-                            .apply_tunnel(slice.graph_id(), resource, &body)
-                            .await?;
+                    let observed = self
+                        .transport
+                        .apply_tunnel(slice.graph_id(), resource, &body)
+                        .await?;
                     push_if_declared(
                         resource,
                         "tunnelId",
@@ -517,9 +529,18 @@ mod tests {
                 ),
             ),
             controller: controller_name(CONTROLLER_NAME),
-            body: serde_json::json!({"source":{"entry":"workers/api.ts"},"vars":{}})
-                .try_into()
-                .unwrap(),
+            body: serde_json::json!({
+                "source": {
+                    "entry": {
+                        "kind": "cloudflare-worker",
+                        "digest": format!("sha256:{}", "11".repeat(32))
+                    },
+                    "assets": null
+                },
+                "vars": {}
+            })
+            .try_into()
+            .unwrap(),
             outputs,
         })
         .unwrap();

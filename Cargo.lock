@@ -1225,6 +1225,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "thiserror",
  "tokio",
  "toml",
@@ -1252,8 +1253,12 @@ name = "henosis-controller-runtime"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "futures",
  "henosis-types",
+ "hex",
+ "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "thiserror",
  "uuid",

@@ -38,6 +38,10 @@ doc *flags:
 demo-d26:
     ./demo/d26.sh
 
+# Builds benchmark workload artifacts and reconciles them against live Cloudflare.
+demo-d26-live:
+    ./demo/d26.sh --live
+
 [private]
 _assert-clean:
     {{ if `test -z "$(git status --porcelain --untracked-files=no)" && echo clean || echo dirty` == "dirty" {

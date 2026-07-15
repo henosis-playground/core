@@ -10,9 +10,8 @@ use std::sync::Mutex;
 use base64::Engine as _;
 use futures::FutureExt as _;
 use futures::future::BoxFuture;
-use henosis_types::BundleArtifactReader;
-use henosis_types::BundleRef;
-use henosis_types::ComponentName;
+use henosis_types::ArtifactDigest;
+use henosis_types::ArtifactStore;
 use henosis_types::GraphId;
 use henosis_types::Resource;
 use henosis_types::ResourceId;
@@ -22,8 +21,11 @@ use reqwest::multipart::Form;
 use reqwest::multipart::Part;
 use serde::Deserialize;
 use serde::Serialize;
+use sha2::Digest as _;
+use sha2::Sha256;
 use uuid::Uuid;
 
+use crate::ArtifactKind;
 use crate::CloudflareError;
 use crate::CloudflareTransport;
 use crate::RouteBody;
@@ -38,6 +40,7 @@ const LOGIN_HELP: &str = "run `wrangler login` and retry";
 
 #[derive(Clone, Debug)]
 pub struct LiveCloudflareConfig {
+    pub enabled: bool,
     pub account_id: Option<String>,
     pub api_base: String,
     pub wrangler: PathBuf,
@@ -46,8 +49,11 @@ pub struct LiveCloudflareConfig {
 
 impl Default for LiveCloudflareConfig {
     fn default() -> Self {
-        let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("."), PathBuf::from);
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("."));
         Self {
+            enabled: std::env::var("HENOSIS_CLOUDFLARE_LIVE").as_deref() == Ok("1"),
             account_id: std::env::var("CLOUDFLARE_ACCOUNT_ID").ok(),
             api_base: DEFAULT_API_BASE.into(),
             wrangler: PathBuf::from("wrangler"),
@@ -56,19 +62,9 @@ impl Default for LiveCloudflareConfig {
     }
 }
 
-/// Resolves the closure that emitted a resource.
-///
-/// The current plan resource carries component identity but not its closure
-/// digest. The server supplies this read-only index from the accepted bundle
-/// manifest; bytes still flow exclusively through `BundleArtifactReader`.
-pub trait ComponentBundleResolver: Send + Sync {
-    fn resolve(&self, component: &ComponentName) -> Result<BundleRef, CloudflareError>;
-}
-
 pub struct LiveCloudflareTransport {
     session: CloudflareSession,
-    artifacts: Arc<dyn BundleArtifactReader>,
-    bundles: Arc<dyn ComponentBundleResolver>,
+    artifacts: Arc<dyn ArtifactStore>,
     managed: Mutex<BTreeMap<ResourceId, ManagedResource>>,
 }
 
@@ -97,7 +93,7 @@ struct ApiEnvelope<T> {
     success: bool,
     result: Option<T>,
     #[serde(default)]
-    errors: Vec<ApiError>,
+    errors: Option<Vec<ApiError>>,
 }
 
 #[derive(Deserialize)]
@@ -123,11 +119,14 @@ struct Subdomain {
 }
 
 #[derive(Deserialize)]
-struct WorkerUpload {
+struct ScriptSubdomain {
+    enabled: bool,
+}
+
+#[derive(Deserialize)]
+struct DeploymentList {
     #[serde(default)]
-    id: String,
-    #[serde(default)]
-    etag: String,
+    deployments: Vec<Deployment>,
 }
 
 #[derive(Deserialize)]
@@ -162,10 +161,37 @@ struct WorkerRoute {
     script: String,
 }
 
+/// Static-assets blob written by the shared frontend artifact builder.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AssetsArtifact {
+    format: String,
+    files: BTreeMap<String, Vec<u8>>,
+}
+
+#[derive(Deserialize)]
+struct AssetsUploadSession {
+    jwt: String,
+    #[serde(default)]
+    buckets: Vec<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+struct AssetsUploadResult {
+    jwt: String,
+}
+
+#[derive(Serialize)]
+struct AssetManifestEntry {
+    hash: String,
+    size: usize,
+}
+
 #[derive(Serialize)]
 struct TunnelCreate<'a> {
     name: &'a str,
     tunnel_secret: String,
+    config_src: &'static str,
 }
 
 #[derive(Serialize)]
@@ -177,14 +203,18 @@ struct RouteWrite<'a> {
 impl LiveCloudflareTransport {
     pub fn connect(
         config: &LiveCloudflareConfig,
-        artifacts: Arc<dyn BundleArtifactReader>,
-        bundles: Arc<dyn ComponentBundleResolver>,
+        artifacts: Arc<dyn ArtifactStore>,
     ) -> Result<Self, CloudflareError> {
+        if !config.enabled {
+            return Err(CloudflareError::Config(
+                "live Cloudflare mutations are disabled; set HENOSIS_CLOUDFLARE_LIVE=1 to opt in"
+                    .into(),
+            ));
+        }
         let session = CloudflareSession::connect(config)?;
         Ok(Self {
             session,
             artifacts,
-            bundles,
             managed: Mutex::new(BTreeMap::new()),
         })
     }
@@ -196,13 +226,33 @@ impl LiveCloudflareTransport {
     ) -> Result<WorkerObservation, CloudflareError> {
         let name = managed_name(resource.path().address().name().as_str(), resource.id());
         require_owned_name(&name)?;
-        let bundle = self.bundles.resolve(resource.path().instance())?;
+        if body.source.entry.kind != ArtifactKind::CloudflareWorker {
+            return Err(CloudflareError::Contract(
+                "Worker source entry must reference a cloudflare-worker artifact".into(),
+            ));
+        }
         let bytes = self
             .artifacts
-            .read(bundle, &body.source.entry)
+            .fetch(body.source.entry.digest)
             .await
             .map_err(|error| CloudflareError::Contract(error.to_string()))?;
-        let bindings = body
+        let assets_jwt = match &body.source.assets {
+            Some(reference) if reference.kind == ArtifactKind::StaticAssets => {
+                Some(self.upload_assets(&name, reference.digest).await?)
+            }
+            Some(_) => {
+                return Err(CloudflareError::Contract(
+                    "Worker assets must reference a static-assets artifact".into(),
+                ));
+            }
+            None => None,
+        };
+        if assets_jwt.is_some() && body.vars.contains_key("ASSETS") {
+            return Err(CloudflareError::Contract(
+                "Worker variable ASSETS conflicts with the static-assets binding".into(),
+            ));
+        }
+        let mut bindings = body
             .vars
             .iter()
             .map(|(name, value)| {
@@ -213,12 +263,18 @@ impl LiveCloudflareTransport {
                 })
             })
             .collect::<Vec<_>>();
+        if assets_jwt.is_some() {
+            bindings.push(serde_json::json!({"type": "assets", "name": "ASSETS"}));
+        }
         let mut metadata = serde_json::json!({
             "main_module": "worker.mjs",
             "bindings": bindings,
         });
         if let Some(date) = &body.compatibility_date {
             metadata["compatibility_date"] = serde_json::Value::String(date.clone());
+        }
+        if let Some(jwt) = assets_jwt {
+            metadata["assets"] = serde_json::json!({"jwt": jwt});
         }
         let metadata = serde_json::to_string(&metadata)
             .map_err(|error| CloudflareError::Contract(error.to_string()))?;
@@ -229,8 +285,10 @@ impl LiveCloudflareTransport {
             .file_name("worker.mjs")
             .mime_str("application/javascript+module")
             .map_err(|error| CloudflareError::Contract(error.to_string()))?;
-        let form = Form::new().part("metadata", metadata).part("worker.mjs", module);
-        let upload: WorkerUpload = self
+        let form = Form::new()
+            .part("metadata", metadata)
+            .part("worker.mjs", module);
+        let _: serde_json::Value = self
             .session
             .request(
                 self.session
@@ -240,8 +298,9 @@ impl LiveCloudflareTransport {
                 "Worker module upload",
             )
             .await?;
-        let subdomain = self.session.ensure_workers_subdomain().await?;
-        let deployments: Vec<Deployment> = self
+        let subdomain = self.session.workers_subdomain().await?;
+        self.session.enable_worker_subdomain(&name).await?;
+        let deployments: DeploymentList = self
             .session
             .request(
                 self.session.client.get(
@@ -251,32 +310,125 @@ impl LiveCloudflareTransport {
                 "Worker deployment observation",
             )
             .await?;
-        let deployment = deployments.first();
-        let deployment_id = deployment
-            .map(|value| value.id.clone())
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| upload.id.clone());
-        let version_id = deployment
-            .and_then(|value| value.versions.first())
-            .map(|value| value.version_id.clone())
-            .filter(|value| !value.is_empty())
-            .unwrap_or(upload.etag);
-        if deployment_id.is_empty() || version_id.is_empty() {
+        let deployment = deployments.deployments.first().ok_or_else(|| {
+            CloudflareError::Provider(
+                "Worker upload succeeded but Cloudflare reported no active deployment".into(),
+            )
+        })?;
+        let version = deployment.versions.first().ok_or_else(|| {
+            CloudflareError::Provider(
+                "Worker upload succeeded but its active deployment has no version".into(),
+            )
+        })?;
+        if deployment.id.is_empty() || version.version_id.is_empty() {
             return Err(CloudflareError::Provider(
-                "Worker upload succeeded but Cloudflare did not confirm deployment and version identities"
+                "Worker upload succeeded but Cloudflare returned empty deployment identities"
                     .into(),
             ));
         }
         self.managed
             .lock()
             .expect("live Cloudflare resource lock is not poisoned")
-            .insert(resource.id(), ManagedResource::Worker { name: name.clone() });
+            .insert(
+                resource.id(),
+                ManagedResource::Worker { name: name.clone() },
+            );
         Ok(WorkerObservation {
             url: format!("https://{name}.{subdomain}.workers.dev"),
             worker_name: name,
-            deployment_id,
-            version_id,
+            deployment_id: deployment.id.clone(),
+            version_id: version.version_id.clone(),
         })
+    }
+
+    async fn upload_assets(
+        &self,
+        worker_name: &str,
+        digest: ArtifactDigest,
+    ) -> Result<String, CloudflareError> {
+        let bytes = self
+            .artifacts
+            .fetch(digest)
+            .await
+            .map_err(|error| CloudflareError::Contract(error.to_string()))?;
+        let archive: AssetsArtifact = serde_json::from_slice(&bytes).map_err(|error| {
+            CloudflareError::Contract(format!(
+                "Worker assets artifact {digest} is not valid JSON: {error}"
+            ))
+        })?;
+        if archive.format != "henosis-static-assets-v1" || archive.files.is_empty() {
+            return Err(CloudflareError::Contract(format!(
+                "Worker assets artifact {digest} must use henosis-static-assets-v1 and contain at \
+                 least one file"
+            )));
+        }
+        let mut manifest = BTreeMap::new();
+        let mut files = BTreeMap::new();
+        for (relative_path, raw) in archive.files {
+            validate_asset_path(&relative_path)?;
+            let path = format!("/{relative_path}");
+            let encoded = base64::engine::general_purpose::STANDARD.encode(&raw);
+            let hash = asset_hash(&path, &encoded);
+            manifest.insert(
+                path.clone(),
+                AssetManifestEntry {
+                    hash: hash.clone(),
+                    size: raw.len(),
+                },
+            );
+            let candidate = (encoded, asset_content_type(&path).to_owned());
+            if let Some(existing) = files.get(&hash) {
+                if existing != &candidate {
+                    return Err(CloudflareError::Contract(format!(
+                        "Worker assets artifact {digest} contains a truncated-hash collision at \
+                         {hash}"
+                    )));
+                }
+            } else {
+                files.insert(hash, candidate);
+            }
+        }
+        let session: AssetsUploadSession = self
+            .session
+            .request(
+                self.session
+                    .client
+                    .post(self.session.account_url(&format!(
+                        "workers/scripts/{worker_name}/assets-upload-session"
+                    )))
+                    .json(&serde_json::json!({"manifest": manifest})),
+                "Worker assets upload session",
+            )
+            .await?;
+        let mut completion_jwt = session.jwt.clone();
+        for bucket in session.buckets {
+            let mut form = Form::new();
+            for hash in bucket {
+                let (encoded, content_type) = files.get(&hash).ok_or_else(|| {
+                    CloudflareError::Provider(format!(
+                        "Worker assets upload requested unknown content hash {hash}"
+                    ))
+                })?;
+                let part = Part::text(encoded.clone())
+                    .mime_str(content_type)
+                    .map_err(|error| CloudflareError::Contract(error.to_string()))?;
+                form = form.part(hash, part);
+            }
+            let result: AssetsUploadResult = self
+                .session
+                .request_with_bearer(
+                    self.session
+                        .client
+                        .post(self.session.account_url("workers/assets/upload"))
+                        .query(&[("base64", "true")])
+                        .multipart(form),
+                    &session.jwt,
+                    "Worker assets bucket upload",
+                )
+                .await?;
+            completion_jwt = result.jwt;
+        }
+        Ok(completion_jwt)
     }
 
     async fn create_tunnel(
@@ -308,6 +460,7 @@ impl LiveCloudflareTransport {
                         .json(&TunnelCreate {
                             name: &name,
                             tunnel_secret: secret,
+                            config_src: "cloudflare",
                         }),
                     "Cloudflare Tunnel create",
                 )
@@ -324,11 +477,13 @@ impl LiveCloudflareTransport {
         let _: serde_json::Value = self
             .session
             .request(
-                self.session.client.put(self.session.account_url(&format!(
-                    "cfd_tunnel/{}/configurations",
-                    tunnel.id
-                )))
-                .json(&config),
+                self.session
+                    .client
+                    .put(
+                        self.session
+                            .account_url(&format!("cfd_tunnel/{}/configurations", tunnel.id)),
+                    )
+                    .json(&config),
                 "Cloudflare Tunnel configuration",
             )
             .await?;
@@ -360,20 +515,23 @@ impl LiveCloudflareTransport {
         let routes: Vec<WorkerRoute> = self
             .session
             .request(
-                self.session
-                    .client
-                    .get(self.session.url(&format!("zones/{}/workers/routes", zone.id))),
+                self.session.client.get(
+                    self.session
+                        .url(&format!("zones/{}/workers/routes", zone.id)),
+                ),
                 "Worker route observation",
             )
             .await?;
-        let existing = routes.into_iter().find(|route| route.pattern == body.pattern);
-        if let Some(route) = &existing {
-            if !route.script.is_empty() && !route.script.starts_with("henosis-") {
-                return Err(CloudflareError::Provider(format!(
-                    "refusing to replace route {:?} owned by script {:?}",
-                    body.pattern, route.script
-                )));
-            }
+        let existing = routes
+            .into_iter()
+            .find(|route| route.pattern == body.pattern);
+        if let Some(route) = &existing
+            && route.script != body.worker_name
+        {
+            return Err(CloudflareError::Provider(format!(
+                "refusing to replace route {:?} owned by script {:?}",
+                body.pattern, route.script
+            )));
         }
         let request = RouteWrite {
             pattern: &body.pattern,
@@ -383,11 +541,13 @@ impl LiveCloudflareTransport {
             Some(route) => {
                 self.session
                     .request(
-                        self.session.client.put(self.session.url(&format!(
-                            "zones/{}/workers/routes/{}",
-                            zone.id, route.id
-                        )))
-                        .json(&request),
+                        self.session
+                            .client
+                            .put(
+                                self.session
+                                    .url(&format!("zones/{}/workers/routes/{}", zone.id, route.id)),
+                            )
+                            .json(&request),
                         "Worker route update",
                     )
                     .await?
@@ -395,11 +555,13 @@ impl LiveCloudflareTransport {
             None => {
                 self.session
                     .request(
-                        self.session.client.post(self.session.url(&format!(
-                            "zones/{}/workers/routes",
-                            zone.id
-                        )))
-                        .json(&request),
+                        self.session
+                            .client
+                            .post(
+                                self.session
+                                    .url(&format!("zones/{}/workers/routes", zone.id)),
+                            )
+                            .json(&request),
                         "Worker route create",
                     )
                     .await?
@@ -449,7 +611,9 @@ impl LiveCloudflareTransport {
                     .url(&format!("zones/{zone_id}/workers/routes/{route_id}")),
             ),
         };
-        self.session.request_empty(request, "resource retirement").await?;
+        self.session
+            .request_empty(request, "resource retirement")
+            .await?;
         self.managed
             .lock()
             .expect("live Cloudflare resource lock is not poisoned")
@@ -509,11 +673,14 @@ impl CloudflareSession {
                 "cannot parse Wrangler OAuth credentials: {error}; {LOGIN_HELP}"
             ))
         })?;
-        let token = credentials.oauth_token.filter(|value| !value.is_empty()).ok_or_else(|| {
-            CloudflareError::Config(format!(
-                "Wrangler OAuth credentials contain no oauth_token; {LOGIN_HELP}"
-            ))
-        })?;
+        let token = credentials
+            .oauth_token
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                CloudflareError::Config(format!(
+                    "Wrangler OAuth credentials contain no oauth_token; {LOGIN_HELP}"
+                ))
+            })?;
         let client = Client::builder()
             .user_agent("henosis-controller-cloudflare/0.1")
             .build()
@@ -554,8 +721,21 @@ impl CloudflareSession {
     where
         T: for<'de> Deserialize<'de>,
     {
+        self.request_with_bearer(request, &self.token, operation)
+            .await
+    }
+
+    async fn request_with_bearer<T>(
+        &self,
+        request: reqwest::RequestBuilder,
+        bearer: &str,
+        operation: &str,
+    ) -> Result<T, CloudflareError>
+    where
+        T: for<'de> Deserialize<'de>,
+    {
         let response = request
-            .bearer_auth(&self.token)
+            .bearer_auth(bearer)
             .send()
             .await
             .map_err(|error| CloudflareError::Unavailable(error.to_string()))?;
@@ -566,12 +746,12 @@ impl CloudflareSession {
         if !status.is_success() || !envelope.success {
             return Err(CloudflareError::Provider(format!(
                 "{operation} returned {status}: {}",
-                api_errors(&envelope.errors)
+                api_errors(envelope.errors.as_deref().unwrap_or_default())
             )));
         }
-        envelope.result.ok_or_else(|| {
-            CloudflareError::Provider(format!("{operation} returned no result"))
-        })
+        envelope
+            .result
+            .ok_or_else(|| CloudflareError::Provider(format!("{operation} returned no result")))
     }
 
     async fn request_empty(
@@ -596,56 +776,76 @@ impl CloudflareSession {
         } else {
             Err(CloudflareError::Provider(format!(
                 "{operation} returned {status}: {}",
-                api_errors(&envelope.errors)
+                api_errors(envelope.errors.as_deref().unwrap_or_default())
             )))
         }
     }
 
-    async fn ensure_workers_subdomain(&self) -> Result<String, CloudflareError> {
-        let request = self
-            .client
-            .get(self.account_url("workers/subdomain"))
-            .bearer_auth(&self.token)
-            .send()
-            .await
-            .map_err(|error| CloudflareError::Unavailable(error.to_string()))?;
-        if request.status().is_success() {
-            let envelope: ApiEnvelope<Subdomain> = request.json().await.map_err(|error| {
-                CloudflareError::Provider(format!("workers.dev observation returned invalid JSON: {error}"))
-            })?;
-            if envelope.success {
-                if let Some(result) = envelope.result {
-                    return Ok(result.subdomain);
-                }
-            }
-        }
+    async fn workers_subdomain(&self) -> Result<String, CloudflareError> {
         let result: Subdomain = self
             .request(
-                self.client
-                    .put(self.account_url("workers/subdomain"))
-                    .json(&serde_json::json!({"enabled": true})),
-                "workers.dev subdomain enablement",
+                self.client.get(self.account_url("workers/subdomain")),
+                "workers.dev subdomain observation",
             )
             .await?;
+        if result.subdomain.is_empty() {
+            return Err(CloudflareError::Config(
+                "Cloudflare returned an empty workers.dev subdomain; configure one in the Workers \
+                 dashboard"
+                    .into(),
+            ));
+        }
         Ok(result.subdomain)
     }
 
-    async fn resolve_zone(&self, name_or_id: &str) -> Result<Zone, CloudflareError> {
-        let zones: Vec<Zone> = self
+    async fn enable_worker_subdomain(&self, worker_name: &str) -> Result<(), CloudflareError> {
+        let result: ScriptSubdomain = self
             .request(
                 self.client
-                    .get(self.url("zones"))
-                    .query(&[("name", name_or_id), ("account.id", self.account_id.as_str())]),
+                    .post(self.account_url(&format!("workers/scripts/{worker_name}/subdomain")))
+                    .json(&serde_json::json!({
+                        "enabled": true,
+                        "previews_enabled": false,
+                    })),
+                "Worker workers.dev enablement",
+            )
+            .await?;
+        if !result.enabled {
+            return Err(CloudflareError::Provider(
+                "Cloudflare did not confirm workers.dev enablement for the uploaded Worker".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    async fn resolve_zone(&self, name_or_id: &str) -> Result<Zone, CloudflareError> {
+        if looks_like_cloudflare_id(name_or_id) {
+            let zone: Zone = self
+                .request(
+                    self.client.get(self.url(&format!("zones/{name_or_id}"))),
+                    "zone observation",
+                )
+                .await?;
+            return Ok(zone);
+        }
+        let zones: Vec<Zone> = self
+            .request(
+                self.client.get(self.url("zones")).query(&[
+                    ("name", name_or_id),
+                    ("account.id", self.account_id.as_str()),
+                ]),
                 "zone discovery",
             )
             .await?;
-        if let Some(zone) = zones.into_iter().find(|zone| zone.name == name_or_id || zone.id == name_or_id) {
-            return Ok(zone);
-        }
-        Err(CloudflareError::Config(format!(
-            "Cloudflare zone {name_or_id:?} is not present in account {}",
-            self.account_id
-        )))
+        zones
+            .into_iter()
+            .find(|zone| zone.name == name_or_id)
+            .ok_or_else(|| {
+                CloudflareError::Config(format!(
+                    "Cloudflare zone {name_or_id:?} is not present in account {}",
+                    self.account_id
+                ))
+            })
     }
 }
 
@@ -667,7 +867,7 @@ async fn discover_account(
     if !status.is_success() || !envelope.success {
         return Err(CloudflareError::Provider(format!(
             "account discovery returned {status}: {}",
-            api_errors(&envelope.errors)
+            api_errors(envelope.errors.as_deref().unwrap_or_default())
         )));
     }
     let memberships = envelope.result.unwrap_or_default();
@@ -677,7 +877,8 @@ async fn discover_account(
         ))),
         [membership] => Ok(membership.account.id.clone()),
         _ => Err(CloudflareError::Config(format!(
-            "Wrangler login has multiple Cloudflare accounts ({}); set CLOUDFLARE_ACCOUNT_ID to one of: {}",
+            "Wrangler login has multiple Cloudflare accounts ({}); set CLOUDFLARE_ACCOUNT_ID to \
+             one of: {}",
             memberships.len(),
             memberships
                 .iter()
@@ -701,11 +902,13 @@ fn refresh_wrangler_login(config: &LiveCloudflareConfig) -> Result<(), Cloudflar
     if output.status.success() {
         return Ok(());
     }
-    let detail = String::from_utf8_lossy(&output.stderr);
     Err(CloudflareError::Config(format!(
-        "Wrangler OAuth credentials are absent or expired: {}; {LOGIN_HELP}",
-        redact_command_detail(&detail)
+        "Wrangler OAuth credentials are absent or expired; {LOGIN_HELP}"
     )))
+}
+
+fn looks_like_cloudflare_id(value: &str) -> bool {
+    value.len() == 32 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn require_owned_name(name: &str) -> Result<(), CloudflareError> {
@@ -713,7 +916,8 @@ fn require_owned_name(name: &str) -> Result<(), CloudflareError> {
         Ok(())
     } else {
         Err(CloudflareError::Config(format!(
-            "refusing to mutate unmanaged Cloudflare resource {name:?}; managed names start with henosis-"
+            "refusing to mutate unmanaged Cloudflare resource {name:?}; managed names start with \
+             henosis-"
         )))
     }
 }
@@ -732,7 +936,8 @@ fn api_errors(errors: &[ApiError]) -> String {
 fn plain_binding(value: &serde_json::Value) -> String {
     value
         .as_str()
-        .map_or_else(|| value.to_string(), str::to_owned)
+        .map(str::to_owned)
+        .unwrap_or_else(|| value.to_string())
 }
 
 fn uuid_pair_base64() -> String {
@@ -753,14 +958,50 @@ fn hostname_from_pattern(pattern: &str) -> String {
         .to_owned()
 }
 
-fn redact_command_detail(detail: &str) -> String {
-    detail
-        .lines()
-        .find(|line| !line.trim().is_empty())
-        .unwrap_or("verification failed")
-        .trim()
-        .chars()
-        .take(240)
+fn validate_asset_path(path: &str) -> Result<(), CloudflareError> {
+    if path.is_empty()
+        || path.starts_with('/')
+        || path.contains('\\')
+        || path
+            .split('/')
+            .any(|segment| matches!(segment, "" | "." | ".."))
+    {
+        return Err(CloudflareError::Contract(format!(
+            "Worker asset path {path:?} must be a relative file path without dot segments"
+        )));
+    }
+    Ok(())
+}
+
+fn asset_content_type(path: &str) -> &'static str {
+    match path.rsplit('.').next().unwrap_or_default() {
+        "css" => "text/css",
+        "gif" => "image/gif",
+        "html" | "htm" => "text/html",
+        "ico" => "image/x-icon",
+        "jpeg" | "jpg" => "image/jpeg",
+        "js" | "mjs" => "application/javascript",
+        "json" | "map" => "application/json",
+        "png" => "image/png",
+        "svg" => "image/svg+xml",
+        "txt" => "text/plain",
+        "webp" => "image/webp",
+        "woff" => "font/woff",
+        "woff2" => "font/woff2",
+        _ => "application/octet-stream",
+    }
+}
+
+fn asset_hash(path: &str, encoded: &str) -> String {
+    let file_name = path.rsplit('/').next().unwrap_or(path);
+    let extension = file_name
+        .rfind('.')
+        .map(|offset| &file_name[offset..])
+        .unwrap_or("");
+    let digest = Sha256::digest(format!("{encoded}{extension}").as_bytes());
+    digest[..16]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
         .collect()
 }
 
@@ -785,20 +1026,310 @@ fn managed_name(resource_name: &str, resource_id: ResourceId) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU32;
+
+    use henosis_controller_runtime::DirectoryArtifactStore;
+    use henosis_types::ComponentName;
+    use henosis_types::ContentDigest;
+    use henosis_types::Controller;
+    use henosis_types::ControllerCommand;
+    use henosis_types::ControllerSlice;
+    use henosis_types::Generation;
+    use henosis_types::KindName;
+    use henosis_types::KindVersion;
+    use henosis_types::NativeValue;
+    use henosis_types::NewResource;
+    use henosis_types::OutputAvailability;
+    use henosis_types::OutputDeclaration;
+    use henosis_types::OutputName;
+    use henosis_types::ResourceAddress;
+    use henosis_types::ResourceName;
+    use henosis_types::ResourcePath;
+    use henosis_types::Retirement;
+
     use super::*;
+
+    #[test]
+    fn live_transport_requires_explicit_opt_in() {
+        let config = LiveCloudflareConfig {
+            enabled: false,
+            ..LiveCloudflareConfig::default()
+        };
+        let error = LiveCloudflareTransport::connect(
+            &config,
+            Arc::new(DirectoryArtifactStore::new("unused")),
+        )
+        .err()
+        .expect("disabled live transport must fail closed");
+        assert!(error.to_string().contains("HENOSIS_CLOUDFLARE_LIVE=1"));
+    }
 
     #[test]
     fn managed_names_are_provider_safe_and_owned() {
         let name = managed_name("Front_end/Production", ResourceId::from_bytes([7; 16]));
         assert!(name.starts_with("henosis-"));
         assert!(name.len() <= 63);
-        assert!(name
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'));
+        assert!(
+            name.bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        );
     }
 
     #[test]
     fn route_hostname_discards_scheme_wildcard_and_path() {
-        assert_eq!(hostname_from_pattern("https://*.example.com/api/*"), "example.com");
+        assert_eq!(
+            hostname_from_pattern("https://*.example.com/api/*"),
+            "example.com"
+        );
+    }
+
+    #[test]
+    fn asset_hash_matches_cloudflare_direct_upload_recipe() {
+        assert_eq!(
+            asset_hash("/index.html", "SGVub3Npcw=="),
+            "9a8b3c02561c79304ac328088cf69a18"
+        );
+    }
+
+    /// Live benchmark Worker smoke test.
+    ///
+    /// The `demo-d26-live` recipe compiles the benchmark TypeScript in the
+    /// frontend lane, writes a directory-backed content-addressed artifact
+    /// store, and sets the three digest variables consumed here. The test is
+    /// both ignored and gated by `HENOSIS_CLOUDFLARE_LIVE=1` so ordinary
+    /// test runs stay offline.
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "mutates the logged-in Cloudflare account; run `just demo-d26-live`"]
+    async fn live_benchmark_workers_upload_serve_publish_and_retire() {
+        assert_eq!(
+            std::env::var("HENOSIS_CLOUDFLARE_LIVE").as_deref(),
+            Ok("1"),
+            "live Cloudflare mutation requires HENOSIS_CLOUDFLARE_LIVE=1"
+        );
+        let artifact_root = std::env::var("HENOSIS_CLOUDFLARE_ARTIFACT_ROOT")
+            .expect("HENOSIS_CLOUDFLARE_ARTIFACT_ROOT must name the prepared artifact store");
+        let artifacts = Arc::new(DirectoryArtifactStore::new(artifact_root));
+        let backend_digest = read_artifact_digest("HENOSIS_CLOUDFLARE_BACKEND_DIGEST");
+        let frontend_digest = read_artifact_digest("HENOSIS_CLOUDFLARE_FRONTEND_DIGEST");
+        let assets_digest = read_artifact_digest("HENOSIS_CLOUDFLARE_FRONTEND_ASSETS_DIGEST");
+        let graph = GraphId::from_bytes(*Uuid::now_v7().as_bytes());
+        let backend = worker_resource(
+            "backend",
+            crate::SourceRef {
+                entry: crate::ArtifactReference {
+                    kind: ArtifactKind::CloudflareWorker,
+                    digest: backend_digest,
+                },
+                assets: None,
+            },
+            BTreeMap::from([
+                (
+                    "SUPABASE_REST_URL".into(),
+                    serde_json::json!("https://example.com"),
+                ),
+                (
+                    "SUPABASE_TUNNEL_HOST".into(),
+                    serde_json::json!("benchmark.invalid"),
+                ),
+            ]),
+        );
+        let frontend = worker_resource(
+            "frontend",
+            crate::SourceRef {
+                entry: crate::ArtifactReference {
+                    kind: ArtifactKind::CloudflareWorker,
+                    digest: frontend_digest,
+                },
+                assets: Some(crate::ArtifactReference {
+                    kind: ArtifactKind::StaticAssets,
+                    digest: assets_digest,
+                }),
+            },
+            BTreeMap::from([(
+                "BACKEND_URL".into(),
+                serde_json::json!("https://example.com"),
+            )]),
+        );
+        let resource_ids = [backend.id(), frontend.id()];
+        let slice = ControllerSlice::new(
+            graph,
+            Generation::new(1).unwrap(),
+            ContentDigest::digest(b"cloudflare-live-benchmark"),
+            crate::controller_name(crate::CONTROLLER_NAME),
+            vec![backend, frontend],
+            Vec::new(),
+        );
+        let controller = crate::CloudflareController::new(
+            LiveCloudflareTransport::connect(&LiveCloudflareConfig::default(), artifacts)
+                .expect("Wrangler login must be valid; run `wrangler login`"),
+        );
+        let report = controller
+            .execute(&ControllerCommand::Reconcile(slice.clone()))
+            .await
+            .unwrap()
+            .expect("reconcile publishes a report");
+        if report.outputs().len() == 0 {
+            let failure = format!("{:?}", report.dispositions().collect::<Vec<_>>());
+            controller
+                .execute(&ControllerCommand::Retire(Retirement {
+                    graph_id: graph,
+                    last_generation: slice.generation(),
+                    controller: controller.name().clone(),
+                    resources: resource_ids.to_vec(),
+                }))
+                .await
+                .expect("partial live reconciliation must clean up");
+            panic!("live Cloudflare reconciliation failed: {failure}");
+        }
+        let frontend_url = report
+            .outputs()
+            .find(|output| {
+                output.key_value().resource_id() == resource_ids[1]
+                    && output.key_value().output().as_str() == "url"
+            })
+            .and_then(|output| output.value().as_json().as_str())
+            .expect("frontend URL is published")
+            .to_owned();
+        for resource_id in resource_ids {
+            let worker_name = report
+                .outputs()
+                .find(|output| {
+                    output.key_value().resource_id() == resource_id
+                        && output.key_value().output().as_str() == "workerName"
+                })
+                .and_then(|output| output.value().as_json().as_str())
+                .unwrap();
+            let deployment_id = report
+                .outputs()
+                .find(|output| {
+                    output.key_value().resource_id() == resource_id
+                        && output.key_value().output().as_str() == "deploymentId"
+                })
+                .and_then(|output| output.value().as_json().as_str())
+                .unwrap();
+            let version_id = report
+                .outputs()
+                .find(|output| {
+                    output.key_value().resource_id() == resource_id
+                        && output.key_value().output().as_str() == "versionId"
+                })
+                .and_then(|output| output.value().as_json().as_str())
+                .unwrap();
+            println!(
+                "LIVE publish worker={worker_name} deployment={deployment_id} version={version_id}"
+            );
+        }
+        let served = async {
+            let mut last = String::new();
+            for attempt in 1..=60 {
+                match controller
+                    .transport
+                    .session
+                    .client
+                    .get(&frontend_url)
+                    .send()
+                    .await
+                {
+                    Ok(response) => {
+                        let status = response.status();
+                        let body = response.text().await.unwrap_or_default();
+                        if status.is_success() {
+                            return Ok(body);
+                        }
+                        last = format!("attempt {attempt}: {status} {body:?}");
+                    }
+                    Err(error) => last = format!("attempt {attempt}: {error}"),
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            }
+            Err(last)
+        }
+        .await;
+        controller
+            .execute(&ControllerCommand::Retire(Retirement {
+                graph_id: graph,
+                last_generation: slice.generation(),
+                controller: controller.name().clone(),
+                resources: resource_ids.to_vec(),
+            }))
+            .await
+            .unwrap();
+        let served = served.expect("deployed benchmark frontend must answer successfully");
+        println!("LIVE curl url={frontend_url} response={served:?}");
+        assert!(served.contains("Henosis benchmark frontend"));
+        for resource_id in resource_ids {
+            let managed = managed_name(
+                if resource_id == resource_ids[0] {
+                    "backend"
+                } else {
+                    "frontend"
+                },
+                resource_id,
+            );
+            let status = controller
+                .transport
+                .session
+                .client
+                .get(
+                    controller
+                        .transport
+                        .session
+                        .account_url(&format!("workers/scripts/{managed}")),
+                )
+                .bearer_auth(&controller.transport.session.token)
+                .send()
+                .await
+                .unwrap()
+                .status();
+            println!("LIVE retire worker={managed} verification_status={status}");
+            assert_eq!(status, StatusCode::NOT_FOUND);
+        }
+    }
+
+    fn read_artifact_digest(variable: &str) -> ArtifactDigest {
+        std::env::var(variable)
+            .unwrap_or_else(|_| panic!("{variable} must name a prepared workload artifact"))
+            .parse()
+            .unwrap_or_else(|error| {
+                panic!("{variable} is not a canonical artifact digest: {error}")
+            })
+    }
+
+    fn worker_resource(
+        name: &str,
+        source: crate::SourceRef,
+        vars: BTreeMap<String, serde_json::Value>,
+    ) -> Resource {
+        let outputs = ["url", "workerName", "deploymentId", "versionId"]
+            .into_iter()
+            .map(|name| {
+                OutputDeclaration::new(OutputName::new(name).unwrap(), OutputAvailability::Observed)
+            })
+            .collect();
+        Resource::new(NewResource {
+            id: ResourceId::from_bytes(*Uuid::now_v7().as_bytes()),
+            path: ResourcePath::new(
+                ComponentName::new("cloudflare_live_benchmark").unwrap(),
+                ResourceAddress::new(
+                    KindVersion::new(
+                        KindName::new("cloudflare/worker").unwrap(),
+                        NonZeroU32::new(1).unwrap(),
+                    ),
+                    ResourceName::new(name).unwrap(),
+                ),
+            ),
+            controller: crate::controller_name(crate::CONTROLLER_NAME),
+            body: NativeValue::try_from(
+                serde_json::to_value(WorkerBody {
+                    source,
+                    compatibility_date: Some("2026-07-15".into()),
+                    vars,
+                })
+                .unwrap(),
+            )
+            .unwrap(),
+            outputs,
+        })
+        .unwrap()
     }
 }

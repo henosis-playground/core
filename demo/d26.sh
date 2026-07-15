@@ -6,7 +6,12 @@ HENOSIS_ROOT=$(cd "$CORE_ROOT/../.." && pwd)
 BOT_ROOT="$HENOSIS_ROOT/repos/bot"
 PLATFORM_ROOT="$HENOSIS_ROOT/repos/platform"
 COMPOSE_FILE="$HENOSIS_ROOT/infra/docker-compose.yml"
-DEMO_ROOT=${HENOSIS_D26_DEMO_ROOT:-/tmp/henosis-d26-demo}
+MODE=${1:-offline}
+if [[ "$MODE" == --live ]]; then
+  DEMO_ROOT=${HENOSIS_D26_LIVE_DEMO_ROOT:-/tmp/henosis-d26-live-demo}
+else
+  DEMO_ROOT=${HENOSIS_D26_DEMO_ROOT:-/tmp/henosis-d26-demo}
+fi
 CORE_PORT=${HENOSIS_D26_CORE_PORT:-4581}
 S2_PORT=${HENOSIS_D26_S2_PORT:-4580}
 CORE_URL="http://127.0.0.1:$CORE_PORT"
@@ -35,6 +40,55 @@ run() {
   printf '\n'
   "$@"
 }
+
+if [[ "$MODE" == --live ]]; then
+  BENCHMARK="$PLATFORM_ROOT/examples/benchmark"
+  BUILD_ROOT="$DEMO_ROOT/workers"
+  mkdir -p "$BUILD_ROOT/backend" "$BUILD_ROOT/frontend"
+  printf 'Henosis D26 live Cloudflare demo\n'
+  printf 'Safety: explicit --live opt-in; only henosis-* Workers are mutated and retired.\n'
+  printf 'Artifact lane: Wrangler compiles benchmark TypeScript before the controller; the controller receives only content digests and fetches verified bytes.\n'
+  run wrangler deploy "$BENCHMARK/workers/backend.ts" --dry-run --outdir "$BUILD_ROOT/backend" --name henosis-artifact-build-backend --compatibility-date 2026-07-15
+  run wrangler deploy "$BENCHMARK/workers/frontend.ts" --dry-run --outdir "$BUILD_ROOT/frontend" --name henosis-artifact-build-frontend --compatibility-date 2026-07-15
+  ARTIFACT_ROOT="$DEMO_ROOT/artifacts"
+  mapfile -t DIGESTS < <(python - \
+    "$BUILD_ROOT/backend/backend.js" \
+    "$BUILD_ROOT/frontend/frontend.js" \
+    "$ARTIFACT_ROOT" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+backend, frontend, root = map(pathlib.Path, sys.argv[1:])
+index = b'''<!doctype html>
+<html lang="en"><meta charset="utf-8"><title>Henosis benchmark</title>
+<body>Henosis benchmark frontend</body></html>
+'''
+assets = json.dumps({
+    "format": "henosis-static-assets-v1",
+    "files": {"index.html": list(index)},
+}, sort_keys=True, separators=(",", ":")).encode()
+for content in (backend.read_bytes(), frontend.read_bytes(), assets):
+    digest = hashlib.sha256(content).hexdigest()
+    destination = root / "sha256" / digest
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_bytes(content)
+    print(f"sha256:{digest}")
+PY
+  )
+  run env \
+    HENOSIS_CLOUDFLARE_LIVE=1 \
+    HENOSIS_CLOUDFLARE_ARTIFACT_ROOT="$ARTIFACT_ROOT" \
+    HENOSIS_CLOUDFLARE_BACKEND_DIGEST="${DIGESTS[0]}" \
+    HENOSIS_CLOUDFLARE_FRONTEND_DIGEST="${DIGESTS[1]}" \
+    HENOSIS_CLOUDFLARE_FRONTEND_ASSETS_DIGEST="${DIGESTS[2]}" \
+    cargo +nightly-2026-06-09 test --manifest-path "$CORE_ROOT/Cargo.toml" \
+      -p henosis-controller-cloudflare live_benchmark_workers_upload_serve_publish_and_retire \
+      -- --ignored --nocapture
+  printf '\nLive demo complete. Transcript: %s\n' "$TRANSCRIPT"
+  exit 0
+fi
 
 printf 'Henosis D26 end-to-end demo\n'
 printf 'Honest targets: k8s=file:// bare Git; supabase=fake output transport; cloudflare=recorded/fake transport (no live credentials).\n'
@@ -111,6 +165,7 @@ run "$CORE_ROOT/target/debug/henosis-frontend-git-sync" "$INTENT_REMOTE" "$CORE_
 
 printf '\nGit-sync acknowledgement written through the public GraphService\n'
 run git --git-dir="$INTENT_REMOTE" show "main:henosis/graphs/$GIT_SYNC_GRAPH.toml"
-run "$BOT_ROOT/target/debug/henosis" status --graph "$GIT_SYNC_GRAPH" --core "$CORE_URL" --demo-targets
+run env --chdir="$PLATFORM_ROOT/examples/benchmark" \
+  "$BOT_ROOT/target/debug/henosis" status --graph "$GIT_SYNC_GRAPH" --core "$CORE_URL" --demo-targets
 
 printf '\nDemo complete. Transcript: %s\n' "$TRANSCRIPT"
