@@ -700,6 +700,67 @@ mod tests {
         assert_eq!(MaterializedCore::fold(&events), core.state().clone());
     }
 
+    #[tokio::test]
+    async fn replayed_publication_still_refreshes_level_controller_status() {
+        let producer = component(
+            "database",
+            1,
+            Vec::new(),
+            vec![observed_component_output("url")],
+        );
+        let mut live = Core::new(Arc::new(FakeEvaluator));
+        let initial = live
+            .handle(Command::CreateGraph(graph(vec![producer])))
+            .await
+            .expect("graph creation succeeds");
+        let report = controller_report(&initial.effects()[0], 21, "postgres.test");
+        let published = live
+            .handle(Command::ReportController(report))
+            .await
+            .expect("first publication is accepted");
+        let durable = initial
+            .events()
+            .iter()
+            .chain(published.events())
+            .filter(|event| !matches!(event, henosis_types::CoreEvent::ControllerReported(_)))
+            .cloned()
+            .collect::<Vec<_>>();
+
+        let mut restarted =
+            Core::from_materialized(Arc::new(FakeEvaluator), MaterializedCore::fold(&durable));
+        let resume = restarted
+            .resume_graph(graph_id())
+            .await
+            .expect("replayed graph resumes");
+        let duplicate = controller_report(&resume.effects()[0], 21, "postgres.test");
+        let refreshed = restarted
+            .handle(Command::ReportController(duplicate))
+            .await
+            .expect("duplicate publication refreshes level status");
+
+        assert!(
+            refreshed
+                .events()
+                .iter()
+                .any(|event| matches!(event, henosis_types::CoreEvent::ControllerReported(_)))
+        );
+        assert!(
+            !refreshed
+                .events()
+                .iter()
+                .any(|event| matches!(event, henosis_types::CoreEvent::OutputsPublished(_)))
+        );
+        assert_eq!(
+            restarted
+                .state()
+                .graph(graph_id())
+                .expect("graph exists")
+                .reports()
+                .count(),
+            1
+        );
+    }
+
     async fn converge(order: [usize; 2]) -> Plan {
         let first = component(
             "first",
@@ -835,7 +896,10 @@ mod tests {
 
     proptest! {
         #[test]
-        fn fold_replay_is_deterministic(update_count in 0_u8..16) {
+        fn fold_replay_is_deterministic_at_any_crash_boundary(
+            update_count in 0_u8..16,
+            split_seed in any::<usize>(),
+        ) {
             let only = component("only", 1, Vec::new(), vec![observed_component_output("url")]);
             let initial = henosis_types::GraphIntent::new(graph(vec![only.clone()]))
                 .expect("fixture graph is valid");
@@ -855,7 +919,7 @@ mod tests {
                 });
             }
             let full = MaterializedCore::fold(&events);
-            let split = events.len() / 2;
+            let split = split_seed % events.len().saturating_add(1);
             let mut resumed = MaterializedCore::fold(&events[..split]);
             for event in &events[split..] {
                 resumed.apply(event);

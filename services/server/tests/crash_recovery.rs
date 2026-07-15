@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::Read as _;
 use std::net::TcpListener;
 use std::path::Path;
 use std::path::PathBuf;
@@ -81,7 +82,10 @@ fn server_replays_midflight_graph_after_sigkill() {
             ],
         }),
     );
-    assert_eq!(created.pointer("/status/generation"), Some(&Value::from(1)));
+    assert_eq!(
+        created.pointer("/status/generation"),
+        Some(&Value::String("1".to_owned()))
+    );
 
     let before = wait_for_status(&first_url, graph_id, |status| {
         !status
@@ -125,6 +129,13 @@ fn server_replays_midflight_graph_after_sigkill() {
             .iter()
             .any(|graph| graph["graphId"] == graph_id.to_string())
     }));
+    let resumed_watch = watch_first(&second_url, graph_id, 41);
+    assert_eq!(resumed_watch["sequence"], "42");
+    assert_eq!(
+        durable_status(&resumed_watch["status"]),
+        durable_status(&after["status"]),
+        "a reconnecting watcher receives the current replayed snapshot"
+    );
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -269,6 +280,37 @@ fn rpc(base: &str, method: &str, body: Value) -> Value {
         String::from_utf8_lossy(&bytes)
     );
     serde_json::from_slice(&bytes).expect("decode ConnectRPC JSON response")
+}
+
+fn watch_first(base: &str, graph_id: GraphId, after_sequence: u64) -> Value {
+    let request = serde_json::to_vec(&serde_json::json!({
+        "graphId": graph_id.to_string(),
+        "afterSequence": after_sequence.to_string(),
+    }))
+    .expect("encode watch request");
+    let mut envelope = Vec::with_capacity(request.len() + 5);
+    envelope.push(0);
+    envelope.extend_from_slice(&(request.len() as u32).to_be_bytes());
+    envelope.extend_from_slice(&request);
+    let mut response = reqwest::blocking::Client::new()
+        .post(format!("{base}/henosis.v1.GraphService/WatchGraph"))
+        .header("content-type", "application/connect+json")
+        .header("connect-protocol-version", "1")
+        .body(envelope)
+        .send()
+        .expect("open ConnectRPC watch");
+    assert!(response.status().is_success());
+    let mut header = [0_u8; 5];
+    response
+        .read_exact(&mut header)
+        .expect("read first watch envelope header");
+    assert_eq!(header[0], 0, "first watch envelope is a data message");
+    let length = u32::from_be_bytes(header[1..].try_into().expect("four-byte length")) as usize;
+    let mut body = vec![0_u8; length];
+    response
+        .read_exact(&mut body)
+        .expect("read first watch envelope body");
+    serde_json::from_slice(&body).expect("decode first watch response")
 }
 
 fn wait_for_status(base: &str, graph_id: GraphId, predicate: impl Fn(&Value) -> bool) -> Value {

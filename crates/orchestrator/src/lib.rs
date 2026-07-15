@@ -339,13 +339,11 @@ impl Core {
                 CommandError::IncompleteControllerReport,
             ));
         }
-        if let Some(publication_id) = report.publication_id()
-            && graph
+        let publication_already_accepted = report.publication_id().is_some_and(|publication_id| {
+            graph
                 .publications
                 .contains(&(report.generation(), publication_id))
-        {
-            return Ok(Transition::default());
-        }
+        });
 
         let bindings = self
             .runtime
@@ -390,15 +388,18 @@ impl Core {
             ));
         }
 
-        let publication = report.publication_id().map(|publication_id| {
-            OutputPublication::new(
-                graph_id,
-                report.generation(),
-                report.controller().clone(),
-                publication_id,
-                published.clone(),
-            )
-        });
+        let publication = (!publication_already_accepted)
+            .then(|| report.publication_id())
+            .flatten()
+            .map(|publication_id| {
+                OutputPublication::new(
+                    graph_id,
+                    report.generation(),
+                    report.controller().clone(),
+                    publication_id,
+                    published.clone(),
+                )
+            });
         {
             let mut graph = self.graph_mut(graph_id)?;
             graph

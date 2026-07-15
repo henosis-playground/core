@@ -6,9 +6,9 @@
 //! publications, stalls, and retirement. The root registry stream carries graph
 //! registration and retirement so graph streams can be discovered after a cold
 //! start. Controller dispositions are level reports, not log-shaped facts: a
-//! controller re-observes and re-reports them on every pass, so they deliberately
-//! remain memory-only. When a report includes an output publication, only the
-//! generation-fenced `OutputsPublished` fact is durable.
+//! controller re-observes and re-reports them on every pass, so they
+//! deliberately remain memory-only. When a report includes an output
+//! publication, only the generation-fenced `OutputsPublished` fact is durable.
 
 use std::sync::Arc;
 
@@ -85,8 +85,12 @@ impl Journal {
         expected: StreamPosition,
         events: &[CoreEvent],
     ) -> Result<AppendAck, Error<StorageDomainError, anyhow::Error, anyhow::Error>> {
-        self.append_records(&graph_stream(graph_id), expected, events.iter().map(EventRecord::Core))
-            .await
+        self.append_records(
+            &graph_stream(graph_id),
+            expected,
+            events.iter().map(EventRecord::Core),
+        )
+        .await
     }
 
     pub async fn append_registry(
@@ -94,21 +98,30 @@ impl Journal {
         expected: StreamPosition,
         event: &RegistryEvent,
     ) -> Result<AppendAck, Error<StorageDomainError, anyhow::Error, anyhow::Error>> {
-        self.append_records(&registry_stream(), expected, std::iter::once(EventRecord::Registry(event)))
-            .await
+        self.append_records(
+            &registry_stream(),
+            expected,
+            std::iter::once(EventRecord::Registry(event)),
+        )
+        .await
     }
 
     pub async fn load(
         &self,
         graph_id: GraphId,
     ) -> Result<Vec<CoreEvent>, Error<StorageDomainError, anyhow::Error, anyhow::Error>> {
-        self.load_with_tail(graph_id).await.map(|(events, _)| events)
+        self.load_with_tail(graph_id)
+            .await
+            .map(|(events, _)| events)
     }
 
     pub async fn load_with_tail(
         &self,
         graph_id: GraphId,
-    ) -> Result<(Vec<CoreEvent>, StreamPosition), Error<StorageDomainError, anyhow::Error, anyhow::Error>> {
+    ) -> Result<
+        (Vec<CoreEvent>, StreamPosition),
+        Error<StorageDomainError, anyhow::Error, anyhow::Error>,
+    > {
         let stream = graph_stream(graph_id);
         let (records, tail) = self.load_records(&stream).await?;
         let events = records
@@ -120,7 +133,10 @@ impl Journal {
 
     pub async fn load_registry(
         &self,
-    ) -> Result<(Vec<RegistryEvent>, StreamPosition), Error<StorageDomainError, anyhow::Error, anyhow::Error>> {
+    ) -> Result<
+        (Vec<RegistryEvent>, StreamPosition),
+        Error<StorageDomainError, anyhow::Error, anyhow::Error>,
+    > {
         let (records, tail) = self.load_records(&registry_stream()).await?;
         let events = records
             .into_iter()
@@ -150,9 +166,7 @@ impl Journal {
         expected: StreamPosition,
         records: impl Iterator<Item = EventRecord<'a>>,
     ) -> Result<AppendAck, Error<StorageDomainError, anyhow::Error, anyhow::Error>> {
-        let records = records
-            .map(encode_record)
-            .collect::<Result<Vec<_>, _>>()?;
+        let records = records.map(encode_record).collect::<Result<Vec<_>, _>>()?;
         if records.is_empty() {
             return Ok(AppendAck::new(expected, expected));
         }
@@ -162,7 +176,10 @@ impl Journal {
     async fn load_records(
         &self,
         stream: &StreamName,
-    ) -> Result<(Vec<StoredRecord>, StreamPosition), Error<StorageDomainError, anyhow::Error, anyhow::Error>> {
+    ) -> Result<
+        (Vec<StoredRecord>, StreamPosition),
+        Error<StorageDomainError, anyhow::Error, anyhow::Error>,
+    > {
         let tail = self.storage.tail(stream).await?;
         if tail.sequence() == 0 {
             return Ok((Vec::new(), tail));
@@ -194,7 +211,9 @@ fn encode_record(
         EventRecord::Registry(event) => serde_json::to_vec(&JournalRecord { schema: 1, event }),
     }
     .map_err(|error| {
-        Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Invariant(anyhow::Error::new(error))
+        Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Invariant(anyhow::Error::new(
+            error,
+        ))
     })?;
     Ok(AppendRecord::new(body))
 }
@@ -222,14 +241,14 @@ fn decode_record<T: for<'de> Deserialize<'de>>(
         ))
     })?;
     if decoded.schema != 1 {
-        return Err(Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Invariant(
-            anyhow::anyhow!(
+        return Err(
+            Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Invariant(anyhow::anyhow!(
                 "unsupported journal schema {} on {} at sequence {}",
                 decoded.schema,
                 record.stream(),
                 record.sequence()
-            ),
-        ));
+            )),
+        );
     }
     Ok(decoded.event)
 }
@@ -310,16 +329,20 @@ impl StorageEngine for S2Storage {
                 StreamPosition::new(ack.tail.seq_num),
             )),
             Err(S2Error::AppendConditionFailed(AppendConditionFailed::SeqNumMismatch(actual))) => {
-                Err(Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Domain(
-                    StorageDomainError::CasConflict {
-                        expected: expected.sequence(),
-                        actual,
-                    },
-                ))
+                Err(
+                    Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Domain(
+                        StorageDomainError::CasConflict {
+                            expected: expected.sequence(),
+                            actual,
+                        },
+                    ),
+                )
             }
-            Err(error) => Err(Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Transient(
-                anyhow::Error::new(error),
-            )),
+            Err(error) => Err(
+                Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Transient(
+                    anyhow::Error::new(error),
+                ),
+            ),
         }
     }
 
