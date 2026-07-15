@@ -1196,20 +1196,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "henosis-controller-git-sync"
-version = "0.1.0"
-dependencies = [
- "henosis-controller-runtime",
- "henosis-types",
- "serde",
- "tempfile",
- "thiserror",
- "toml",
- "uuid",
- "workspace-hack",
-]
-
-[[package]]
 name = "henosis-controller-k8s"
 version = "0.1.0"
 dependencies = [
@@ -1313,6 +1299,24 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
+ "workspace-hack",
+]
+
+[[package]]
+name = "henosis-frontend-git-sync"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "futures",
+ "henosis-controller-runtime",
+ "henosis-proto",
+ "henosis-types",
+ "serde",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "toml",
+ "uuid",
  "workspace-hack",
 ]
 
