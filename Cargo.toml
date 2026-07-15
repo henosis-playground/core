@@ -26,6 +26,7 @@ deno_core = "=0.407.0"
 deno_error = "=0.7.1"
 faultline = "0.1.0"
 futures = "0.3"
+hex = "0.4"
 iddqd = { version = "0.4.5", features = ["serde"] }
 insta = { version = "1.48", features = ["yaml"] }
 newtype-uuid = { git = "https://github.com/henosis-playground/newtype-uuid.git", rev = "f20e0aff365e59de7eadd29e769cf0c93990c587", features = [
@@ -38,6 +39,7 @@ oxc_ast_visit = "=0.140.0"
 oxc_parser = "=0.140.0"
 oxc_span = "=0.140.0"
 oxc_syntax = "=0.140.0"
+postgres = "0.19"
 proptest = "1"
 proptest-state-machine = "0.8"
 rand = "0.9"
@@ -46,6 +48,8 @@ ryu-js = "1.0.3"
 s2-sdk = "=0.31.9"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+serde_yaml = "0.9"
+sha2 = "0.10"
 thiserror = "2"
 tokio = { version = "1", features = [
   "macros",
@@ -57,16 +61,18 @@ tokio = { version = "1", features = [
 ] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+toml = "0.9"
 uuid = { version = "1", features = ["serde", "v7"] }
 
+henosis-controller-runtime = { path = "crates/controller-runtime" }
 henosis-evaluation-engine = { path = "crates/evaluation-engine" }
 henosis-journal = { path = "crates/journal" }
 henosis-multi-stream-merge = { path = "crates/multi-stream-merge" }
-henosis-testkit = { path = "crates/henosis-testkit" }
-henosis-sim = { path = "crates/henosis-sim" }
 henosis-orchestrator = { path = "crates/orchestrator" }
 henosis-proto = { path = "crates/proto" }
+henosis-sim = { path = "crates/henosis-sim" }
 henosis-storage = { path = "crates/storage" }
+henosis-testkit = { path = "crates/henosis-testkit" }
 henosis-types = { path = "crates/types" }
 
 [workspace.lints.rust]
