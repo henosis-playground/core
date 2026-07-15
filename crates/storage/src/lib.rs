@@ -21,9 +21,10 @@ impl StreamName {
         if value.is_empty() || value.len() > 512 {
             return Err(StreamNameError);
         }
-        if !value.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'/')
-        }) {
+        if !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'/'))
+        {
             return Err(StreamNameError);
         }
         Ok(Self(value))
@@ -95,12 +96,7 @@ pub struct StoredRecord {
 
 impl StoredRecord {
     #[must_use]
-    pub const fn new(
-        stream: StreamName,
-        sequence: u64,
-        timestamp: u64,
-        body: Vec<u8>,
-    ) -> Self {
+    pub const fn new(stream: StreamName, sequence: u64, timestamp: u64, body: Vec<u8>) -> Self {
         Self {
             stream,
             sequence,

@@ -1,4 +1,5 @@
-//! Durable core-event journal plus the S2 implementation of the storage boundary.
+//! Durable core-event journal plus the S2 implementation of the storage
+//! boundary.
 
 use std::sync::Arc;
 
@@ -56,9 +57,17 @@ impl Journal {
             schema: 1,
             event: event.clone(),
         })
-        .map_err(|error| Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Invariant(anyhow::Error::new(error)))?;
+        .map_err(|error| {
+            Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Invariant(
+                anyhow::Error::new(error),
+            )
+        })?;
         self.storage
-            .append(&graph_stream(graph_id), expected, vec![AppendRecord::new(body)])
+            .append(
+                &graph_stream(graph_id),
+                expected,
+                vec![AppendRecord::new(body)],
+            )
             .await
     }
 
@@ -108,12 +117,14 @@ fn decode_record(
         ))
     })?;
     if decoded.schema != 1 {
-        return Err(Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Invariant(anyhow::anyhow!(
-            "unsupported journal schema {} on {} at sequence {}",
-            decoded.schema,
-            record.stream(),
-            record.sequence()
-        )));
+        return Err(
+            Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Invariant(anyhow::anyhow!(
+                "unsupported journal schema {} on {} at sequence {}",
+                decoded.schema,
+                record.stream(),
+                record.sequence()
+            )),
+        );
     }
     Ok(decoded.event)
 }
@@ -160,15 +171,22 @@ impl StorageEngine for S2Storage {
         records: Vec<AppendRecord>,
     ) -> Result<AppendAck, Error<StorageDomainError, anyhow::Error, anyhow::Error>> {
         let stream = self.stream(stream).map_err(|error| {
-                Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Invariant(error)
-            })?;
+            Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Invariant(error)
+        })?;
         let records = records
             .into_iter()
             .map(|record| S2AppendRecord::new(record.body().to_vec()))
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Invariant(anyhow::Error::new(error)))?;
-        let batch = AppendRecordBatch::try_from_iter(records)
-            .map_err(|error| Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Invariant(anyhow::Error::new(error)))?;
+            .map_err(|error| {
+                Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Invariant(
+                    anyhow::Error::new(error),
+                )
+            })?;
+        let batch = AppendRecordBatch::try_from_iter(records).map_err(|error| {
+            Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Invariant(
+                anyhow::Error::new(error),
+            )
+        })?;
         match stream
             .append(AppendInput::new(batch).with_match_seq_num(expected.sequence()))
             .await
@@ -178,12 +196,20 @@ impl StorageEngine for S2Storage {
                 StreamPosition::new(ack.tail.seq_num),
             )),
             Err(S2Error::AppendConditionFailed(AppendConditionFailed::SeqNumMismatch(actual))) => {
-                Err(Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Domain(StorageDomainError::CasConflict {
-                    expected: expected.sequence(),
-                    actual,
-                }))
+                Err(
+                    Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Domain(
+                        StorageDomainError::CasConflict {
+                            expected: expected.sequence(),
+                            actual,
+                        },
+                    ),
+                )
             }
-            Err(error) => Err(Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Transient(anyhow::Error::new(error))),
+            Err(error) => Err(
+                Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Transient(
+                    anyhow::Error::new(error),
+                ),
+            ),
         }
     }
 
@@ -194,8 +220,8 @@ impl StorageEngine for S2Storage {
         limit: usize,
     ) -> Result<Vec<StoredRecord>, Error<StorageDomainError, anyhow::Error, anyhow::Error>> {
         let s2_stream = self.stream(stream).map_err(|error| {
-                Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Invariant(error)
-            })?;
+            Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Invariant(error)
+        })?;
         let batch = s2_stream
             .read(
                 ReadInput::new()
@@ -204,7 +230,11 @@ impl StorageEngine for S2Storage {
                     .with_ignore_command_records(true),
             )
             .await
-            .map_err(|error| Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Transient(anyhow::Error::new(error)))?;
+            .map_err(|error| {
+                Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Transient(
+                    anyhow::Error::new(error),
+                )
+            })?;
         Ok(batch
             .records
             .into_iter()
@@ -230,7 +260,11 @@ impl StorageEngine for S2Storage {
             .check_tail()
             .await
             .map(|tail| StreamPosition::new(tail.seq_num))
-            .map_err(|error| Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Transient(anyhow::Error::new(error)))
+            .map_err(|error| {
+                Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Transient(
+                    anyhow::Error::new(error),
+                )
+            })
     }
 
     fn follow(

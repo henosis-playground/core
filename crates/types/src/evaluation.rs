@@ -419,8 +419,7 @@ impl EvaluationAttempt {
         let cell = snapshot
             .get(new.blocked.input())
             .ok_or(EvaluationProtocolError::UnknownRead)?;
-        if cell.source() != new.blocked.source()
-            || !matches!(cell.state(), InputCellState::Blocked)
+        if cell.source() != new.blocked.source() || !matches!(cell.state(), InputCellState::Blocked)
         {
             return Err(EvaluationProtocolError::BlockedSourceMismatch);
         }
@@ -558,7 +557,8 @@ impl EvaluationError {
     }
 }
 
-/// Hermetic TypeScript-host boundary. A real `deno_core` implementation is deliberately external.
+/// Hermetic TypeScript-host boundary. A real `deno_core` implementation is
+/// deliberately external.
 pub trait Evaluator: Send + Sync {
     fn evaluate<'a>(
         &'a self,

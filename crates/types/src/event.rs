@@ -73,11 +73,7 @@ pub struct Stall {
 
 impl Stall {
     #[must_use]
-    pub const fn new(
-        graph_id: GraphId,
-        generation: Generation,
-        cycle: Vec<ComponentName>,
-    ) -> Self {
+    pub const fn new(graph_id: GraphId, generation: Generation, cycle: Vec<ComponentName>) -> Self {
         Self {
             graph_id,
             generation,
@@ -105,7 +101,10 @@ impl Stall {
 pub enum CoreEvent {
     GraphCreated(GraphIntent),
     GraphUpdated(GraphIntent),
-    PlanAccepted { graph_id: GraphId, plan: Plan },
+    PlanAccepted {
+        graph_id: GraphId,
+        plan: Plan,
+    },
     ControllerReported(ControllerReport),
     OutputsPublished(OutputPublication),
     StallDetected(Stall),

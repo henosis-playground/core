@@ -21,7 +21,9 @@ macro_rules! domain_id {
             }
         }
 
-        #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+        #[derive(
+            Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize,
+        )]
         #[serde(transparent)]
         pub struct $name(TypedUuid<$kind>);
 

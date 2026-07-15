@@ -204,10 +204,14 @@ impl Core {
         new: NewGraphIntent,
     ) -> Result<Transition, Error<CommandError, Never, anyhow::Error>> {
         if self.state.graphs.contains_key(&new.id) {
-            return Err(Error::<CommandError, Never, anyhow::Error>::Domain(CommandError::GraphAlreadyExists));
+            return Err(Error::<CommandError, Never, anyhow::Error>::Domain(
+                CommandError::GraphAlreadyExists,
+            ));
         }
         let graph = GraphIntent::new(new).map_err(|error| {
-            Error::<CommandError, Never, anyhow::Error>::Domain(CommandError::InvalidIntent(error.to_string()))
+            Error::<CommandError, Never, anyhow::Error>::Domain(CommandError::InvalidIntent(
+                error.to_string(),
+            ))
         })?;
         let graph_id = graph.id();
         self.state
@@ -231,18 +235,26 @@ impl Core {
     ) -> Result<Transition, Error<CommandError, Never, anyhow::Error>> {
         let graph = self.graph(graph_id)?;
         if graph.retired {
-            return Err(Error::<CommandError, Never, anyhow::Error>::Domain(CommandError::GraphRetired));
+            return Err(Error::<CommandError, Never, anyhow::Error>::Domain(
+                CommandError::GraphRetired,
+            ));
         }
         if graph.intent.generation() != expected_generation {
-            return Err(Error::<CommandError, Never, anyhow::Error>::Domain(CommandError::GenerationConflict {
-                expected: expected_generation,
-                actual: graph.intent.generation(),
-            }));
+            return Err(Error::<CommandError, Never, anyhow::Error>::Domain(
+                CommandError::GenerationConflict {
+                    expected: expected_generation,
+                    actual: graph.intent.generation(),
+                },
+            ));
         }
         let updated = graph
             .intent
             .replace_components(components)
-            .map_err(|error| Error::<CommandError, Never, anyhow::Error>::Domain(CommandError::InvalidIntent(error.to_string())))?;
+            .map_err(|error| {
+                Error::<CommandError, Never, anyhow::Error>::Domain(CommandError::InvalidIntent(
+                    error.to_string(),
+                ))
+            })?;
         self.graph_mut(graph_id)?.intent = updated.clone();
         self.runtime.insert(graph_id, GraphRuntime::default());
         let mut transition = Transition {
@@ -260,12 +272,15 @@ impl Core {
         let graph_id = report.graph_id();
         let graph = self.graph(graph_id)?;
         let plan = graph.plan.as_ref().ok_or_else(|| {
-            Error::<CommandError, Never, anyhow::Error>::Invariant(anyhow::anyhow!("controller report arrived before a plan"))
+            Error::<CommandError, Never, anyhow::Error>::Invariant(anyhow::anyhow!(
+                "controller report arrived before a plan"
+            ))
         })?;
-        if report.generation() != graph.intent.generation()
-            || report.plan_digest() != plan.digest()
+        if report.generation() != graph.intent.generation() || report.plan_digest() != plan.digest()
         {
-            return Err(Error::<CommandError, Never, anyhow::Error>::Domain(CommandError::StaleControllerReport));
+            return Err(Error::<CommandError, Never, anyhow::Error>::Domain(
+                CommandError::StaleControllerReport,
+            ));
         }
         let expected = plan
             .resources()
@@ -277,7 +292,9 @@ impl Core {
             .map(ResourceDisposition::resource_id)
             .collect::<BTreeSet<_>>();
         if expected != actual {
-            return Err(Error::<CommandError, Never, anyhow::Error>::Domain(CommandError::IncompleteControllerReport));
+            return Err(Error::<CommandError, Never, anyhow::Error>::Domain(
+                CommandError::IncompleteControllerReport,
+            ));
         }
         if let Some(publication_id) = report.publication_id()
             && graph.publications.contains(&publication_id)
@@ -295,19 +312,31 @@ impl Core {
         for output in report.outputs() {
             let resource = plan
                 .resource(output.key_value().resource_id())
-                .ok_or(Error::<CommandError, Never, anyhow::Error>::Domain(CommandError::InvalidObservedOutput))?;
+                .ok_or(Error::<CommandError, Never, anyhow::Error>::Domain(
+                    CommandError::InvalidObservedOutput,
+                ))?;
             if resource.controller() != report.controller() {
-                return Err(Error::<CommandError, Never, anyhow::Error>::Domain(CommandError::InvalidObservedOutput));
+                return Err(Error::<CommandError, Never, anyhow::Error>::Domain(
+                    CommandError::InvalidObservedOutput,
+                ));
             }
-            let declaration = resource
-                .output(output.key_value().output())
-                .ok_or(Error::<CommandError, Never, anyhow::Error>::Domain(CommandError::InvalidObservedOutput))?;
+            let declaration = resource.output(output.key_value().output()).ok_or(Error::<
+                CommandError,
+                Never,
+                anyhow::Error,
+            >::Domain(
+                CommandError::InvalidObservedOutput,
+            ))?;
             if declaration.availability() != OutputAvailability::Observed {
-                return Err(Error::<CommandError, Never, anyhow::Error>::Domain(CommandError::InvalidObservedOutput));
+                return Err(Error::<CommandError, Never, anyhow::Error>::Domain(
+                    CommandError::InvalidObservedOutput,
+                ));
             }
             let component_output = bindings
                 .get(output.key_value())
-                .ok_or(Error::<CommandError, Never, anyhow::Error>::Domain(CommandError::InvalidObservedOutput))?
+                .ok_or(Error::<CommandError, Never, anyhow::Error>::Domain(
+                    CommandError::InvalidObservedOutput,
+                ))?
                 .clone();
             published.push(OutputRecord::new(
                 OutputKey::new(report.generation(), component_output),
@@ -391,10 +420,12 @@ impl Core {
     ) -> Result<Transition, Error<CommandError, Never, anyhow::Error>> {
         let graph = self.graph(graph_id)?;
         if graph.intent.generation() != expected_generation {
-            return Err(Error::<CommandError, Never, anyhow::Error>::Domain(CommandError::GenerationConflict {
-                expected: expected_generation,
-                actual: graph.intent.generation(),
-            }));
+            return Err(Error::<CommandError, Never, anyhow::Error>::Domain(
+                CommandError::GenerationConflict {
+                    expected: expected_generation,
+                    actual: graph.intent.generation(),
+                },
+            ));
         }
         if graph.retired {
             return Ok(Transition::default());
@@ -404,13 +435,16 @@ impl Core {
             .as_ref()
             .into_iter()
             .flat_map(Plan::resources)
-            .fold(BTreeMap::<ControllerName, Vec<ResourceId>>::new(), |mut grouped, resource| {
-                grouped
-                    .entry(resource.controller().clone())
-                    .or_default()
-                    .push(resource.id());
-                grouped
-            });
+            .fold(
+                BTreeMap::<ControllerName, Vec<ResourceId>>::new(),
+                |mut grouped, resource| {
+                    grouped
+                        .entry(resource.controller().clone())
+                        .or_default()
+                        .push(resource.id());
+                    grouped
+                },
+            );
         let effects = resources
             .into_iter()
             .map(|(controller, resources)| {
@@ -463,7 +497,11 @@ impl Core {
                         snapshot,
                     ))
                     .await
-                    .map_err(|error| Error::<CommandError, Never, anyhow::Error>::Domain(CommandError::Evaluation(error.to_string())))?;
+                    .map_err(|error| {
+                        Error::<CommandError, Never, anyhow::Error>::Domain(
+                            CommandError::Evaluation(error.to_string()),
+                        )
+                    })?;
                 self.accept_interpretation(graph_id, component, attempt)?;
             }
             let plan = self.plan_from_interpretations(graph_id, generation)?;
@@ -538,7 +576,9 @@ impl Core {
                 match runtime.interpretations.get(input.source().component()) {
                     Some(interpretation) if interpretation.complete => {
                         if declaration.is_optional()
-                            && !interpretation.declared_outputs.contains(input.source().output())
+                            && !interpretation
+                                .declared_outputs
+                                .contains(input.source().output())
                         {
                             InputCellState::Absent
                         } else {
@@ -555,11 +595,16 @@ impl Core {
                     input.is_optional(),
                     state,
                 )
-                .map_err(|error| Error::<CommandError, Never, anyhow::Error>::Invariant(anyhow::Error::new(error)))?,
+                .map_err(|error| {
+                    Error::<CommandError, Never, anyhow::Error>::Invariant(anyhow::Error::new(
+                        error,
+                    ))
+                })?,
             );
         }
-        EvaluationSnapshot::new(cells)
-            .map_err(|error| Error::<CommandError, Never, anyhow::Error>::Invariant(anyhow::Error::new(error)))
+        EvaluationSnapshot::new(cells).map_err(|error| {
+            Error::<CommandError, Never, anyhow::Error>::Invariant(anyhow::Error::new(error))
+        })
     }
 
     fn accept_interpretation(
@@ -568,12 +613,16 @@ impl Core {
         component: &ComponentIntent,
         attempt: EvaluationAttempt,
     ) -> Result<(), Error<CommandError, Never, anyhow::Error>> {
-        if attempt.resources().iter().any(|resource| {
-            resource.resource().path().instance() != component.name()
-        }) {
-            return Err(Error::<CommandError, Never, anyhow::Error>::Domain(CommandError::EvaluationProtocol(
-                "resource belongs to another component".to_owned(),
-            )));
+        if attempt
+            .resources()
+            .iter()
+            .any(|resource| resource.resource().path().instance() != component.name())
+        {
+            return Err(Error::<CommandError, Never, anyhow::Error>::Domain(
+                CommandError::EvaluationProtocol(
+                    "resource belongs to another component".to_owned(),
+                ),
+            ));
         }
 
         let mut interpretation = ComponentInterpretation {
@@ -594,22 +643,30 @@ impl Core {
         if let Some(complete) = attempt.complete_result() {
             for output in complete.outputs() {
                 let declaration = component.output(output.name()).ok_or_else(|| {
-                    Error::<CommandError, Never, anyhow::Error>::Domain(CommandError::EvaluationProtocol(format!(
-                        "undeclared static output {}",
-                        output.name()
-                    )))
+                    Error::<CommandError, Never, anyhow::Error>::Domain(
+                        CommandError::EvaluationProtocol(format!(
+                            "undeclared static output {}",
+                            output.name()
+                        )),
+                    )
                 })?;
                 if declaration.availability() != OutputAvailability::Static {
-                    return Err(Error::<CommandError, Never, anyhow::Error>::Domain(CommandError::EvaluationProtocol(format!(
-                        "observed output {} returned as static",
-                        output.name()
-                    ))));
+                    return Err(Error::<CommandError, Never, anyhow::Error>::Domain(
+                        CommandError::EvaluationProtocol(format!(
+                            "observed output {} returned as static",
+                            output.name()
+                        )),
+                    ));
                 }
-                interpretation.declared_outputs.insert(output.name().clone());
+                interpretation
+                    .declared_outputs
+                    .insert(output.name().clone());
             }
             for binding in complete.observed_outputs() {
                 self.validate_binding(component, &interpretation.resources, binding)?;
-                interpretation.declared_outputs.insert(binding.name().clone());
+                interpretation
+                    .declared_outputs
+                    .insert(binding.name().clone());
                 let resource = interpretation
                     .resources
                     .iter()
@@ -624,10 +681,12 @@ impl Core {
                 if !declaration.is_optional()
                     && !interpretation.declared_outputs.contains(declaration.name())
                 {
-                    return Err(Error::<CommandError, Never, anyhow::Error>::Domain(CommandError::EvaluationProtocol(format!(
-                        "required output {} was omitted",
-                        declaration.name()
-                    ))));
+                    return Err(Error::<CommandError, Never, anyhow::Error>::Domain(
+                        CommandError::EvaluationProtocol(format!(
+                            "required output {} was omitted",
+                            declaration.name()
+                        )),
+                    ));
                 }
             }
 
@@ -680,36 +739,43 @@ impl Core {
         binding: &ObservedOutputBinding,
     ) -> Result<(), Error<CommandError, Never, anyhow::Error>> {
         let declaration = component.output(binding.name()).ok_or_else(|| {
-            Error::<CommandError, Never, anyhow::Error>::Domain(CommandError::EvaluationProtocol(format!(
-                "undeclared observed output {}",
-                binding.name()
-            )))
+            Error::<CommandError, Never, anyhow::Error>::Domain(CommandError::EvaluationProtocol(
+                format!("undeclared observed output {}", binding.name()),
+            ))
         })?;
         if declaration.availability() != OutputAvailability::Observed {
-            return Err(Error::<CommandError, Never, anyhow::Error>::Domain(CommandError::EvaluationProtocol(format!(
-                "static output {} returned as observed",
-                binding.name()
-            ))));
+            return Err(Error::<CommandError, Never, anyhow::Error>::Domain(
+                CommandError::EvaluationProtocol(format!(
+                    "static output {} returned as observed",
+                    binding.name()
+                )),
+            ));
         }
         let resource = resources
             .iter()
             .find(|resource| resource.path().address() == binding.resource())
             .ok_or_else(|| {
-                Error::<CommandError, Never, anyhow::Error>::Domain(CommandError::EvaluationProtocol(
-                    "observed binding points outside the component result".to_owned(),
-                ))
+                Error::<CommandError, Never, anyhow::Error>::Domain(
+                    CommandError::EvaluationProtocol(
+                        "observed binding points outside the component result".to_owned(),
+                    ),
+                )
             })?;
         let output = resource.output(binding.output()).ok_or_else(|| {
-            Error::<CommandError, Never, anyhow::Error>::Domain(CommandError::EvaluationProtocol(format!(
-                "resource does not declare observed output {}",
-                binding.output()
-            )))
+            Error::<CommandError, Never, anyhow::Error>::Domain(CommandError::EvaluationProtocol(
+                format!(
+                    "resource does not declare observed output {}",
+                    binding.output()
+                ),
+            ))
         })?;
         if output.availability() != OutputAvailability::Observed {
-            return Err(Error::<CommandError, Never, anyhow::Error>::Domain(CommandError::EvaluationProtocol(format!(
-                "resource output {} is not observed",
-                binding.output()
-            ))));
+            return Err(Error::<CommandError, Never, anyhow::Error>::Domain(
+                CommandError::EvaluationProtocol(format!(
+                    "resource output {} is not observed",
+                    binding.output()
+                )),
+            ));
         }
         Ok(())
     }
@@ -743,7 +809,9 @@ impl Core {
             resources,
             blocked,
         })
-        .map_err(|error| Error::<CommandError, Never, anyhow::Error>::Invariant(anyhow::Error::new(error)))
+        .map_err(|error| {
+            Error::<CommandError, Never, anyhow::Error>::Invariant(anyhow::Error::new(error))
+        })
     }
 
     fn graph(
@@ -753,7 +821,9 @@ impl Core {
         self.state
             .graphs
             .get(&graph_id)
-            .ok_or(Error::<CommandError, Never, anyhow::Error>::Domain(CommandError::GraphNotFound))
+            .ok_or(Error::<CommandError, Never, anyhow::Error>::Domain(
+                CommandError::GraphNotFound,
+            ))
     }
 
     fn graph_mut(
@@ -761,10 +831,9 @@ impl Core {
         graph_id: GraphId,
     ) -> Result<iddqd::id_ord_map::RefMut<'_, GraphState>, Error<CommandError, Never, anyhow::Error>>
     {
-        self.state
-            .graphs
-            .get_mut(&graph_id)
-            .ok_or(Error::<CommandError, Never, anyhow::Error>::Domain(CommandError::GraphNotFound))
+        self.state.graphs.get_mut(&graph_id).ok_or(
+            Error::<CommandError, Never, anyhow::Error>::Domain(CommandError::GraphNotFound),
+        )
     }
 }
 

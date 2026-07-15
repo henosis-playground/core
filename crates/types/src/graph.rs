@@ -83,11 +83,7 @@ pub struct ComponentOutput {
 
 impl ComponentOutput {
     #[must_use]
-    pub const fn new(
-        name: OutputName,
-        availability: OutputAvailability,
-        optional: bool,
-    ) -> Self {
+    pub const fn new(name: OutputName, availability: OutputAvailability, optional: bool) -> Self {
         Self {
             name,
             availability,

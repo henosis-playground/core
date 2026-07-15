@@ -24,12 +24,19 @@ pub mod __buffa {
     }
     /// Register this package's `Any` type entries and extension entries.
     pub fn register_types(reg: &mut ::buffa::type_registry::TypeRegistry) {
+        reg.register_json_any(super::__COMPONENT_INPUT_JSON_ANY);
+        reg.register_json_any(super::__COMPONENT_OUTPUT_JSON_ANY);
         reg.register_json_any(super::__COMPONENT_INTENT_JSON_ANY);
+        reg.register_json_any(super::__RESOURCE_OUTPUT_JSON_ANY);
         reg.register_json_any(super::__RESOURCE_JSON_ANY);
         reg.register_json_any(super::__BLOCKED_ON_JSON_ANY);
         reg.register_json_any(super::__OUTPUT_RECORD_JSON_ANY);
         reg.register_json_any(super::__PLAN_JSON_ANY);
         reg.register_json_any(super::__GRAPH_STATUS_JSON_ANY);
+        reg.register_json_any(super::__CONTROLLER_SLICE_JSON_ANY);
+        reg.register_json_any(super::__RESOURCE_DISPOSITION_JSON_ANY);
+        reg.register_json_any(super::__OBSERVED_OUTPUT_JSON_ANY);
+        reg.register_json_any(super::__CONTROLLER_REPORT_JSON_ANY);
         reg.register_json_any(super::__CREATE_GRAPH_REQUEST_JSON_ANY);
         reg.register_json_any(super::__CREATE_GRAPH_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__UPDATE_GRAPH_REQUEST_JSON_ANY);
@@ -40,12 +47,28 @@ pub mod __buffa {
         reg.register_json_any(super::__GET_GRAPH_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__WATCH_GRAPH_REQUEST_JSON_ANY);
         reg.register_json_any(super::__WATCH_GRAPH_RESPONSE_JSON_ANY);
+        reg.register_json_any(super::__PULL_SLICES_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__PULL_SLICES_RESPONSE_JSON_ANY);
+        reg.register_json_any(super::__REPORT_SLICE_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__REPORT_SLICE_RESPONSE_JSON_ANY);
     }
 }
+#[doc(inline)]
+pub use self::__buffa::view::ComponentInputView;
+#[doc(inline)]
+pub use self::__buffa::view::ComponentInputOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ComponentOutputView;
+#[doc(inline)]
+pub use self::__buffa::view::ComponentOutputOwnedView;
 #[doc(inline)]
 pub use self::__buffa::view::ComponentIntentView;
 #[doc(inline)]
 pub use self::__buffa::view::ComponentIntentOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ResourceOutputView;
+#[doc(inline)]
+pub use self::__buffa::view::ResourceOutputOwnedView;
 #[doc(inline)]
 pub use self::__buffa::view::ResourceView;
 #[doc(inline)]
@@ -66,6 +89,22 @@ pub use self::__buffa::view::PlanOwnedView;
 pub use self::__buffa::view::GraphStatusView;
 #[doc(inline)]
 pub use self::__buffa::view::GraphStatusOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ControllerSliceView;
+#[doc(inline)]
+pub use self::__buffa::view::ControllerSliceOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ResourceDispositionView;
+#[doc(inline)]
+pub use self::__buffa::view::ResourceDispositionOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ObservedOutputView;
+#[doc(inline)]
+pub use self::__buffa::view::ObservedOutputOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ControllerReportView;
+#[doc(inline)]
+pub use self::__buffa::view::ControllerReportOwnedView;
 #[doc(inline)]
 pub use self::__buffa::view::CreateGraphRequestView;
 #[doc(inline)]
@@ -106,5 +145,21 @@ pub use self::__buffa::view::WatchGraphRequestOwnedView;
 pub use self::__buffa::view::WatchGraphResponseView;
 #[doc(inline)]
 pub use self::__buffa::view::WatchGraphResponseOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::PullSlicesRequestView;
+#[doc(inline)]
+pub use self::__buffa::view::PullSlicesRequestOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::PullSlicesResponseView;
+#[doc(inline)]
+pub use self::__buffa::view::PullSlicesResponseOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ReportSliceRequestView;
+#[doc(inline)]
+pub use self::__buffa::view::ReportSliceRequestOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ReportSliceResponseView;
+#[doc(inline)]
+pub use self::__buffa::view::ReportSliceResponseOwnedView;
 #[doc(inline)]
 pub use self::__buffa::register_types;

@@ -1,4 +1,5 @@
-//! Validated domain types plus the evaluator and controller boundaries used by core.
+//! Validated domain types plus the evaluator and controller boundaries used by
+//! core.
 
 mod controller;
 mod evaluation;

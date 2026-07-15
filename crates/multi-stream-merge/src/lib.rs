@@ -1,7 +1,9 @@
-//! Merge many independently ordered streams into one observation-ordered virtual stream.
+//! Merge many independently ordered streams into one observation-ordered
+//! virtual stream.
 //!
-//! The virtual offset is assigned by this subscriber as records become observable. It does not
-//! claim a source-wide timestamp order that the underlying independent streams cannot provide.
+//! The virtual offset is assigned by this subscriber as records become
+//! observable. It does not claim a source-wide timestamp order that the
+//! underlying independent streams cannot provide.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -20,9 +22,7 @@ use henosis_storage::StreamPosition;
 
 #[async_trait]
 pub trait StreamCatalog: Send + Sync {
-    async fn streams(
-        &self,
-    ) -> Result<Vec<StreamName>, Error<Never, anyhow::Error, anyhow::Error>>;
+    async fn streams(&self) -> Result<Vec<StreamName>, Error<Never, anyhow::Error, anyhow::Error>>;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

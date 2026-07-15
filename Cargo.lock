@@ -828,6 +828,7 @@ version = "0.0.0"
 dependencies = [
  "buffa",
  "connectrpc",
+ "serde",
  "workspace-hack",
 ]
 

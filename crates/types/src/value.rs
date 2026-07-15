@@ -72,17 +72,13 @@ impl<'de> Deserialize<'de> for NativeValue {
     }
 }
 
-fn write_canonical(
-    value: &serde_json::Value,
-    target: &mut String,
-) -> Result<(), NativeValueError> {
+fn write_canonical(value: &serde_json::Value, target: &mut String) -> Result<(), NativeValueError> {
     match value {
         serde_json::Value::Null => target.push_str("null"),
         serde_json::Value::Bool(value) => target.push_str(if *value { "true" } else { "false" }),
         serde_json::Value::Number(value) => target.push_str(&value.to_string()),
-        serde_json::Value::String(value) => target.push_str(
-            &serde_json::to_string(value).map_err(|_| NativeValueError::Serialization)?,
-        ),
+        serde_json::Value::String(value) => target
+            .push_str(&serde_json::to_string(value).map_err(|_| NativeValueError::Serialization)?),
         serde_json::Value::Array(values) => {
             target.push('[');
             for (index, value) in values.iter().enumerate() {

@@ -13,4 +13,5 @@ workspace = true
 [dependencies]
 buffa.workspace = true
 connectrpc.workspace = true
+serde.workspace = true
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }

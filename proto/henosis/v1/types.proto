@@ -2,9 +2,35 @@ edition = "2023";
 
 package henosis.v1;
 
+enum OutputAvailability {
+  OUTPUT_AVAILABILITY_UNSPECIFIED = 0;
+  OUTPUT_AVAILABILITY_STATIC = 1;
+  OUTPUT_AVAILABILITY_OBSERVED = 2;
+}
+
+message ComponentInput {
+  string name = 1;
+  string source_component = 2;
+  string source_output = 3;
+  bool optional = 4;
+}
+
+message ComponentOutput {
+  string name = 1;
+  OutputAvailability availability = 2;
+  bool optional = 3;
+}
+
 message ComponentIntent {
   string name = 1;
   bytes bundle_digest = 2;
+  repeated ComponentInput inputs = 3;
+  repeated ComponentOutput outputs = 4;
+}
+
+message ResourceOutput {
+  string name = 1;
+  OutputAvailability availability = 2;
 }
 
 message Resource {
@@ -12,7 +38,8 @@ message Resource {
   string path = 2;
   string controller = 3;
   string kind = 4;
-  bytes body_json = 5;
+  bytes canonical_body_json = 5;
+  repeated ResourceOutput outputs = 6;
 }
 
 message BlockedOn {
@@ -23,7 +50,7 @@ message BlockedOn {
 message OutputRecord {
   uint64 generation = 1;
   string reference = 2;
-  bytes value_json = 3;
+  bytes canonical_value_json = 3;
   string source = 4;
 }
 
@@ -42,4 +69,35 @@ message GraphStatus {
   repeated OutputRecord outputs = 5;
   repeated string stall_cycle = 6;
   bool retired = 7;
+}
+
+message ControllerSlice {
+  string graph_id = 1;
+  uint64 generation = 2;
+  bytes plan_digest = 3;
+  string controller = 4;
+  repeated Resource resources = 5;
+  repeated string superseded_resource_ids = 6;
+}
+
+message ResourceDisposition {
+  string resource_id = 1;
+  string state = 2;
+  string message = 3;
+}
+
+message ObservedOutput {
+  string resource_id = 1;
+  string output = 2;
+  bytes canonical_value_json = 3;
+}
+
+message ControllerReport {
+  string graph_id = 1;
+  uint64 generation = 2;
+  bytes plan_digest = 3;
+  string controller = 4;
+  string publication_id = 5;
+  repeated ResourceDisposition dispositions = 6;
+  repeated ObservedOutput outputs = 7;
 }
