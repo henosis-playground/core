@@ -55,6 +55,12 @@ pub struct ResourceConvergence {
     pub evidence: Vec<u8>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ResourcePass {
+    Acted,
+    Converged(ResourceConvergence),
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SliceConvergence {
     pub outputs: Vec<ObservedOutput>,
@@ -93,6 +99,26 @@ pub trait PerResourceReconciler: Send + Sync {
         resource: &'a Resource,
         action: Self::Action,
     ) -> BoxFuture<'a, Result<(), Self::Error>>;
+}
+
+pub async fn reconcile_resource_once<R>(
+    reconciler: &R,
+    graph_id: GraphId,
+    desired: &[Resource],
+    resource: &Resource,
+    goal: ResourceGoal,
+) -> Result<ResourcePass, R::Error>
+where
+    R: PerResourceReconciler,
+{
+    let observed = reconciler.observe(graph_id, resource).await?;
+    match reconciler.diff(graph_id, desired, resource, goal, &observed)? {
+        ReconcileDecision::Converged(convergence) => Ok(ResourcePass::Converged(convergence)),
+        ReconcileDecision::Act(action) => {
+            reconciler.act(graph_id, resource, action).await?;
+            Ok(ResourcePass::Acted)
+        }
+    }
 }
 
 pub async fn reconcile_slice<R>(
@@ -195,25 +221,17 @@ where
     let mut resource_actions = 0;
     loop {
         totals.passes += 1;
-        let observed = reconciler
-            .observe(graph_id, resource)
+        match reconcile_resource_once(reconciler, graph_id, desired, resource, goal)
             .await
-            .map_err(ReconcileLoopError::Target)?;
-        match reconciler
-            .diff(graph_id, desired, resource, goal, &observed)
             .map_err(ReconcileLoopError::Target)?
         {
-            ReconcileDecision::Converged(convergence) => return Ok(convergence),
-            ReconcileDecision::Act(action) => {
+            ResourcePass::Converged(convergence) => return Ok(convergence),
+            ResourcePass::Acted => {
                 if resource_actions == MAX_ACTIONS_PER_RESOURCE {
                     return Err(ReconcileLoopError::DidNotConverge {
                         resource: resource.id().to_string(),
                     });
                 }
-                reconciler
-                    .act(graph_id, resource, action)
-                    .await
-                    .map_err(ReconcileLoopError::Target)?;
                 resource_actions += 1;
                 totals.actions += 1;
             }

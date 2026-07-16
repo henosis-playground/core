@@ -66,7 +66,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 toml = "0.9"
 uuid = { version = "1", features = ["serde", "v7"] }
 
+henosis-controller-cloudflare = { path = "crates/controller-cloudflare" }
+henosis-controller-k8s = { path = "crates/controller-k8s" }
 henosis-controller-runtime = { path = "crates/controller-runtime" }
+henosis-controller-supabase = { path = "crates/controller-supabase" }
 henosis-evaluation-engine = { path = "crates/evaluation-engine" }
 henosis-journal = { path = "crates/journal" }
 henosis-multi-stream-merge = { path = "crates/multi-stream-merge" }

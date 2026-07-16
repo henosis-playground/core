@@ -37,9 +37,26 @@ const KIND: &str = "k8s/object";
 const GRAPH_LABEL: &str = "henosis.dev/graph-id";
 const RESOURCE_LABEL: &str = "henosis.dev/resource-id";
 
-pub struct K8sController {
+pub trait K8sTarget: Send + Sync {
+    fn read_resource(
+        &self,
+        graph_id: GraphId,
+        resource: &Resource,
+    ) -> Result<BTreeMap<String, Vec<u8>>, String>;
+
+    fn write_resource(
+        &self,
+        graph_id: GraphId,
+        resource: &Resource,
+        files: &BTreeMap<String, Vec<u8>>,
+    ) -> Result<(), String>;
+
+    fn remove_graph_if_empty(&self, graph_id: GraphId) -> Result<(), String>;
+}
+
+pub struct K8sController<T = GitRepository> {
     name: ControllerName,
-    repository: GitRepository,
+    target: T,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -54,12 +71,15 @@ pub struct K8sPublishAction {
     files: BTreeMap<String, Vec<u8>>,
 }
 
-impl K8sController {
+impl<T> K8sController<T>
+where
+    T: K8sTarget,
+{
     #[must_use]
-    pub fn new(repository: GitRepository) -> Self {
+    pub fn new(target: T) -> Self {
         Self {
             name: controller_name(CONTROLLER_NAME),
-            repository,
+            target,
         }
     }
 
@@ -90,21 +110,16 @@ impl K8sController {
         reconcile_absent(self, graph_id, resources)
             .await
             .map_err(|error| ControllerError::new(error.to_string()))?;
-        if self
-            .repository
-            .read_directory(&branch(graph_id), "resources")
-            .map_err(|error| ControllerError::new(error.to_string()))?
-            .is_empty()
-        {
-            self.repository
-                .delete_branch(&branch(graph_id))
-                .map_err(|error| ControllerError::new(error.to_string()))?;
-        }
-        Ok(())
+        self.target
+            .remove_graph_if_empty(graph_id)
+            .map_err(ControllerError::new)
     }
 }
 
-impl PerResourceReconciler for K8sController {
+impl<T> PerResourceReconciler for K8sController<T>
+where
+    T: K8sTarget,
+{
     type Action = K8sPublishAction;
     type Error = String;
     type Observation = K8sObservation;
@@ -115,10 +130,7 @@ impl PerResourceReconciler for K8sController {
         resource: &'a Resource,
     ) -> BoxFuture<'a, Result<Self::Observation, Self::Error>> {
         async move {
-            let files = self
-                .repository
-                .read_directory(&branch(graph_id), &resource_directory(resource))
-                .map_err(|error| error.to_string())?;
+            let files = self.target.read_resource(graph_id, resource)?;
             if files.is_empty() {
                 return Ok(K8sObservation::Missing);
             }
@@ -179,27 +191,17 @@ impl PerResourceReconciler for K8sController {
         action: Self::Action,
     ) -> BoxFuture<'a, Result<(), Self::Error>> {
         async move {
-            let directory = resource_directory(resource);
-            let files = action
-                .files
-                .into_iter()
-                .map(|(path, bytes)| (format!("{directory}/{path}"), bytes))
-                .collect();
-            self.repository
-                .publish(
-                    &branch(graph_id),
-                    PublicationMode::ReplaceDirectory(&directory),
-                    &files,
-                    &format!("Reconcile Kubernetes resource {}", resource.id()),
-                )
-                .map_err(|error| error.to_string())?;
-            Ok(())
+            self.target
+                .write_resource(graph_id, resource, &action.files)
         }
         .boxed()
     }
 }
 
-impl Controller for K8sController {
+impl<T> Controller for K8sController<T>
+where
+    T: K8sTarget,
+{
     fn name(&self) -> &ControllerName {
         &self.name
     }
@@ -224,6 +226,50 @@ impl Controller for K8sController {
             }
         }
         .boxed()
+    }
+}
+
+impl K8sTarget for GitRepository {
+    fn read_resource(
+        &self,
+        graph_id: GraphId,
+        resource: &Resource,
+    ) -> Result<BTreeMap<String, Vec<u8>>, String> {
+        self.read_directory(&branch(graph_id), &resource_directory(resource))
+            .map_err(|error| error.to_string())
+    }
+
+    fn write_resource(
+        &self,
+        graph_id: GraphId,
+        resource: &Resource,
+        files: &BTreeMap<String, Vec<u8>>,
+    ) -> Result<(), String> {
+        let directory = resource_directory(resource);
+        let files = files
+            .iter()
+            .map(|(path, bytes)| (format!("{directory}/{path}"), bytes.clone()))
+            .collect();
+        self.publish(
+            &branch(graph_id),
+            PublicationMode::ReplaceDirectory(&directory),
+            &files,
+            &format!("Reconcile Kubernetes resource {}", resource.id()),
+        )
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+    }
+
+    fn remove_graph_if_empty(&self, graph_id: GraphId) -> Result<(), String> {
+        if self
+            .read_directory(&branch(graph_id), "resources")
+            .map_err(|error| error.to_string())?
+            .is_empty()
+        {
+            self.delete_branch(&branch(graph_id))
+                .map_err(|error| error.to_string())?;
+        }
+        Ok(())
     }
 }
 
