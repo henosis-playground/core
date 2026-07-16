@@ -234,16 +234,11 @@ impl CoreService {
     }
 
     async fn apply(&self, command: Command) -> Result<proto::GraphStatus, ConnectError> {
-        let applied = self.materialized.apply(command).await.map_err(|error| {
-            if let Some(FaultlineError::Domain(CommandError::InvalidIntent(diagnostic))) =
-                error
-                    .downcast_ref::<FaultlineError<CommandError, faultline::Never, anyhow::Error>>()
-            {
-                invalid(diagnostic.clone())
-            } else {
-                invalid(error.to_string())
-            }
-        })?;
+        let applied = self
+            .materialized
+            .apply(command)
+            .await
+            .map_err(apply_error)?;
         let graph_id = applied.graph_id;
         let transition = applied.transition;
         let status = graph_status(&applied.state, graph_id)?;
@@ -781,6 +776,16 @@ fn invalid(message: impl Into<String>) -> ConnectError {
     ConnectError::new(ErrorCode::InvalidArgument, message)
 }
 
+fn apply_error(error: anyhow::Error) -> ConnectError {
+    if let Some(FaultlineError::Domain(CommandError::InvalidIntent(diagnostic))) =
+        error.downcast_ref::<FaultlineError<CommandError, faultline::Never, anyhow::Error>>()
+    {
+        invalid(diagnostic.clone())
+    } else {
+        invalid(error.to_string())
+    }
+}
+
 fn required_env(name: &str) -> anyhow::Result<String> {
     std::env::var(name).map_err(|_| anyhow::anyhow!("{name} is required"))
 }
@@ -1056,6 +1061,22 @@ mod tests {
     use henosis_types::ComponentName;
     use henosis_types::CoreEvent;
     use henosis_types::NewComponentIntent;
+
+    #[test]
+    fn graph_intent_rejection_preserves_diagnostic_verbatim() {
+        let diagnostic = "error[HENOSIS_CONTRACT_SKEW]: consumer -> producer.api";
+        let error = anyhow::Error::new(FaultlineError::<
+            CommandError,
+            faultline::Never,
+            anyhow::Error,
+        >::Domain(CommandError::InvalidIntent(
+            diagnostic.to_owned(),
+        )));
+
+        let rendered = apply_error(error);
+
+        assert_eq!(rendered.message.as_deref(), Some(diagnostic));
+    }
 
     #[test]
     fn list_graphs_filters_retired_graphs() {
