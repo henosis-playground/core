@@ -126,9 +126,7 @@ fn applies(fault: &TargetFault) -> bool {
 fn reports_failure(fault: &TargetFault) -> bool {
     matches!(
         fault,
-        TargetFault::FailBeforeApply
-            | TargetFault::ApplyThenTimeout
-            | TargetFault::PartialApply(_)
+        TargetFault::FailBeforeApply | TargetFault::ApplyThenTimeout | TargetFault::PartialApply(_)
     )
 }
 
@@ -358,8 +356,7 @@ fn apply_cloudflare_action(
             );
         }
         CloudflareAction::ConfigureTunnel(_) => {
-            if let Some(CloudflareObservation::Tunnel { configured, .. }) =
-                resources.get_mut(&key)
+            if let Some(CloudflareObservation::Tunnel { configured, .. }) = resources.get_mut(&key)
             {
                 *configured = true;
             }
@@ -440,7 +437,7 @@ impl SupabaseTarget for FakeSupabaseTarget {
             .cloned()
             .unwrap_or_else(|| SupabaseObservation {
                 exposed: BTreeSet::from(["public".to_owned()]),
-                .. SupabaseObservation::default()
+                ..SupabaseObservation::default()
             }))
     }
 

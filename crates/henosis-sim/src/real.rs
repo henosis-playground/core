@@ -264,7 +264,11 @@ impl RealControllerWorld {
         let graph_id = GraphId::from_bytes(GRAPH_BYTES);
         let graph = NewGraphIntent {
             id: graph_id,
-            components: vec![component_intent(component.clone(), bundle, resources_per_controller)],
+            components: vec![component_intent(
+                component.clone(),
+                bundle,
+                resources_per_controller,
+            )],
             source_policy: GraphSourcePolicy::AcceptLocal,
         };
         let mut core = Core::new(evaluator.clone());
@@ -347,10 +351,12 @@ impl RealControllerWorld {
             self.delivered
                 .keys()
                 .cloned()
-                .map(|(controller, generation)| RealControllerAction::DeliverDuplicate {
-                    controller,
-                    generation,
-                }),
+                .map(
+                    |(controller, generation)| RealControllerAction::DeliverDuplicate {
+                        controller,
+                        generation,
+                    },
+                ),
         );
         actions.sort();
         actions
@@ -384,9 +390,7 @@ impl RealControllerWorld {
     }
 
     pub async fn start_next_generation(&mut self, resources_per_controller: u8) {
-        let bundle = self
-            .evaluator
-            .register(2, resources_per_controller.max(1));
+        let bundle = self.evaluator.register(2, resources_per_controller.max(1));
         let transition = self
             .core
             .handle(Command::UpdateGraph {
@@ -503,9 +507,9 @@ impl RealControllerWorld {
                 plan.resources()
                     .all(|resource| match resource.controller().as_str() {
                         "k8s" => self.k8s_target.contains(self.graph_id, resource.id()),
-                        "cloudflare" => {
-                            self.cloudflare_target.contains(self.graph_id, resource.id())
-                        }
+                        "cloudflare" => self
+                            .cloudflare_target
+                            .contains(self.graph_id, resource.id()),
                         "supabase" => self.supabase_target.contains(self.graph_id, resource.id()),
                         _ => false,
                     })
@@ -523,7 +527,9 @@ impl RealControllerWorld {
             .flat_map(|plan| plan.resources())
             .all(|resource| match resource.controller().as_str() {
                 "k8s" => !self.k8s_target.contains(self.graph_id, resource.id()),
-                "cloudflare" => !self.cloudflare_target.contains(self.graph_id, resource.id()),
+                "cloudflare" => !self
+                    .cloudflare_target
+                    .contains(self.graph_id, resource.id()),
                 "supabase" => !self.supabase_target.contains(self.graph_id, resource.id()),
                 _ => true,
             })
@@ -610,10 +616,8 @@ impl RealControllerWorld {
             return;
         }
         if let Some(report) = work.report() {
-            self.ready.insert(
-                (controller.clone(), report.generation()),
-                report,
-            );
+            self.ready
+                .insert((controller.clone(), report.generation()), report);
         }
         self.work.remove(controller);
     }
@@ -796,7 +800,10 @@ fn real_resources(
         )?);
         bindings.push(ObservedOutputBinding::new(
             cloudflare_output,
-            ResourceAddress::new(kind("cloudflare/worker"), resource_name(&format!("worker-{index}"))),
+            ResourceAddress::new(
+                kind("cloudflare/worker"),
+                resource_name(&format!("worker-{index}")),
+            ),
             OutputName::new("url").expect("output name is valid"),
         ));
 
@@ -823,7 +830,10 @@ fn real_resources(
         )?);
         bindings.push(ObservedOutputBinding::new(
             supabase_output,
-            ResourceAddress::new(kind("supabase/schema"), resource_name(&format!("schema-{index}"))),
+            ResourceAddress::new(
+                kind("supabase/schema"),
+                resource_name(&format!("schema-{index}")),
+            ),
             OutputName::new("schema").expect("output name is valid"),
         ));
     }
@@ -839,7 +849,8 @@ fn evaluation_resource(
     body: serde_json::Value,
     outputs: Vec<OutputDeclaration>,
 ) -> Result<EvaluationResource, EvaluationError> {
-    let native = NativeValue::new(body.clone()).map_err(|error| EvaluationError::new(error.to_string()))?;
+    let native =
+        NativeValue::new(body.clone()).map_err(|error| EvaluationError::new(error.to_string()))?;
     EvaluationResource::new(NewEvaluationResource {
         id,
         component: component.clone(),
