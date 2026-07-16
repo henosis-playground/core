@@ -511,6 +511,38 @@ fn real_controller_restart_and_apply_then_timeout_still_converge() {
 }
 
 #[test]
+fn controller_restart_preserves_publication_deduplication() {
+    runtime().block_on(async {
+        let mut world = RealControllerWorld::new(Seed::from_u64(0x5eed_2604), 2).await;
+        drive_real_controller_passes(&mut world, 128).await;
+        let publication = world
+            .enabled_actions()
+            .into_iter()
+            .find(|action| matches!(action, RealControllerAction::DeliverReport { .. }))
+            .expect("converged controller has a report ready");
+        let (controller, generation) = match &publication {
+            RealControllerAction::DeliverReport {
+                controller,
+                generation,
+            } => (controller.clone(), *generation),
+            _ => unreachable!(),
+        };
+        world.apply(publication).await;
+        world.restart_controller(controller.as_str());
+        let before = world.canonical_state();
+        let actions_before = world.target_action_count();
+        world
+            .apply(RealControllerAction::DeliverDuplicate {
+                controller,
+                generation,
+            })
+            .await;
+        assert_eq!(world.canonical_state(), before);
+        assert_eq!(world.target_action_count(), actions_before);
+    });
+}
+
+#[test]
 fn output_publication_racing_retirement_is_fenced_and_cleanup_converges() {
     runtime().block_on(async {
         let mut world = RealControllerWorld::new(Seed::from_u64(0x5eed_2603), 2).await;
