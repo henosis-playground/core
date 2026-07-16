@@ -31,11 +31,14 @@ mod tests {
     use henosis_storage::StreamPosition;
     use henosis_types::BlockedDetail;
     use henosis_types::BundleRef;
+    use henosis_types::CompiledDependency;
+    use henosis_types::CompiledOutputContract;
     use henosis_types::ComponentInput;
     use henosis_types::ComponentInputBinding;
     use henosis_types::ComponentIntent;
     use henosis_types::ComponentName;
     use henosis_types::ComponentOutput;
+    use henosis_types::ComponentRevision;
     use henosis_types::ContentDigest;
     use henosis_types::ControllerCommand;
     use henosis_types::ControllerName;
@@ -76,6 +79,7 @@ mod tests {
     use henosis_types::StaticOutput;
     use henosis_types::ValueSchema;
     use proptest::prelude::*;
+    use proptest::test_runner::Config;
 
     #[derive(Debug)]
     struct FixedCatalog(Vec<StreamName>);
@@ -187,6 +191,7 @@ mod tests {
                     2 => producer(&request, 12, "b", "host"),
                     3 => consumer(&request),
                     4 => block_on_first_input(&request),
+                    5 => static_contract_producer(&request),
                     _ => Err(EvaluationError::new("unknown fake bundle")),
                 }
             })
@@ -220,6 +225,25 @@ mod tests {
                     address(resource_name),
                     output_name("target"),
                 )],
+                reads: Vec::new(),
+            },
+        )
+        .map_err(|error| EvaluationError::new(error.to_string()))
+    }
+
+    fn static_contract_producer(
+        request: &EvaluationRequest,
+    ) -> Result<EvaluationAttempt, EvaluationError> {
+        EvaluationAttempt::complete(
+            request.snapshot(),
+            NewCompleteEvaluation {
+                resources: Vec::new(),
+                outputs: vec![StaticOutput::new(
+                    output_name("api"),
+                    NativeValue::new(serde_json::json!("https://api.example"))
+                        .expect("fixture output is JSON"),
+                )],
+                observed_outputs: Vec::new(),
                 reads: Vec::new(),
             },
         )
@@ -348,14 +372,12 @@ mod tests {
         inputs: Vec<ComponentInput>,
         outputs: Vec<ComponentOutput>,
     ) -> ComponentIntent {
-        ComponentIntent::new(NewComponentIntent {
-            name: component_name(name),
-            bundle: BundleRef::new(ContentDigest::from_bytes([behavior; 32])),
+        component_bundle(
+            name,
+            BundleRef::new(ContentDigest::from_bytes([behavior; 32])),
             inputs,
             outputs,
-            source: None,
-        })
-        .expect("fixture component is valid")
+        )
     }
 
     fn component_bundle(
@@ -364,22 +386,97 @@ mod tests {
         inputs: Vec<ComponentInput>,
         outputs: Vec<ComponentOutput>,
     ) -> ComponentIntent {
+        let compiled_dependencies = compiled_dependencies(&inputs);
         ComponentIntent::new(NewComponentIntent {
             name: component_name(name),
+            revision: ComponentRevision::new(bundle.digest().to_string())
+                .expect("bundle digest is a valid revision"),
             bundle,
             inputs,
             outputs,
+            compiled_dependencies,
+            source: None,
+        })
+        .expect("fixture component is valid")
+    }
+
+    fn compiled_dependencies(inputs: &[ComponentInput]) -> Vec<CompiledDependency> {
+        inputs
+            .iter()
+            .filter_map(|input| input.output_source().map(|source| (input, source)))
+            .fold(
+                BTreeMap::<ComponentName, BTreeMap<OutputName, bool>>::new(),
+                |mut grouped, (input, source)| {
+                    grouped
+                        .entry(source.component().clone())
+                        .or_default()
+                        .insert(source.output().clone(), input.is_optional());
+                    grouped
+                },
+            )
+            .into_iter()
+            .map(|(component, outputs)| {
+                let consumed_outputs = outputs.keys().cloned().collect();
+                let outputs = outputs
+                    .into_iter()
+                    .map(|(name, optional)| {
+                        (
+                            name,
+                            CompiledOutputContract::new(
+                                OutputAvailability::Observed,
+                                optional,
+                                ValueSchema::Json,
+                            ),
+                        )
+                    })
+                    .collect();
+                CompiledDependency::new(
+                    component,
+                    ComponentRevision::new("0".repeat(64)).expect("fixture revision is valid"),
+                    outputs,
+                    consumed_outputs,
+                )
+            })
+            .collect()
+    }
+
+    fn component_with_contracts(
+        name: &str,
+        behavior: u8,
+        inputs: Vec<ComponentInput>,
+        outputs: Vec<ComponentOutput>,
+        compiled_dependencies: Vec<CompiledDependency>,
+    ) -> ComponentIntent {
+        let bundle = BundleRef::new(ContentDigest::from_bytes([behavior; 32]));
+        ComponentIntent::new(NewComponentIntent {
+            name: component_name(name),
+            revision: ComponentRevision::new(bundle.digest().to_string())
+                .expect("bundle digest is a valid revision"),
+            bundle,
+            inputs,
+            outputs,
+            compiled_dependencies,
             source: None,
         })
         .expect("fixture component is valid")
     }
 
     fn observed_component_output(name: &str) -> ComponentOutput {
-        ComponentOutput::new(output_name(name), OutputAvailability::Observed, false)
+        ComponentOutput::new(
+            output_name(name),
+            OutputAvailability::Observed,
+            false,
+            ValueSchema::Json,
+        )
     }
 
     fn static_component_output(name: &str) -> ComponentOutput {
-        ComponentOutput::new(output_name(name), OutputAvailability::Static, false)
+        ComponentOutput::new(
+            output_name(name),
+            OutputAvailability::Static,
+            false,
+            ValueSchema::Json,
+        )
     }
 
     fn input(name: &str, producer: &str, output: &str) -> ComponentInput {
@@ -521,6 +618,141 @@ mod tests {
             "test/item@1/main"
         );
         assert_eq!(transition.effects().len(), 1);
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum ContractMutation {
+        Compatible,
+        Rename,
+        Remove,
+        Retype,
+        Optionalize,
+    }
+
+    fn contract_mutation_strategy() -> impl Strategy<Value = ContractMutation> {
+        (0_u8..5).prop_map(|value| match value {
+            0 => ContractMutation::Compatible,
+            1 => ContractMutation::Rename,
+            2 => ContractMutation::Remove,
+            3 => ContractMutation::Retype,
+            _ => ContractMutation::Optionalize,
+        })
+    }
+
+    fn contract_graph(mutation: ContractMutation) -> NewGraphIntent {
+        let producer_outputs = match mutation {
+            ContractMutation::Compatible => vec![ComponentOutput::new(
+                output_name("api"),
+                OutputAvailability::Static,
+                false,
+                ValueSchema::Url,
+            )],
+            ContractMutation::Rename => vec![ComponentOutput::new(
+                output_name("endpoint"),
+                OutputAvailability::Static,
+                false,
+                ValueSchema::Url,
+            )],
+            ContractMutation::Remove => Vec::new(),
+            ContractMutation::Retype => vec![ComponentOutput::new(
+                output_name("api"),
+                OutputAvailability::Static,
+                false,
+                ValueSchema::String,
+            )],
+            ContractMutation::Optionalize => vec![ComponentOutput::new(
+                output_name("api"),
+                OutputAvailability::Static,
+                true,
+                ValueSchema::Url,
+            )],
+        };
+        let producer =
+            component_with_contracts("producer", 5, Vec::new(), producer_outputs, Vec::new());
+        let dependency = CompiledDependency::new(
+            component_name("producer"),
+            ComponentRevision::new("a".repeat(64)).expect("fixture revision is valid"),
+            BTreeMap::from([(
+                output_name("api"),
+                CompiledOutputContract::new(OutputAvailability::Static, false, ValueSchema::Url),
+            )]),
+            BTreeSet::from([output_name("api")]),
+        );
+        let consumer = component_with_contracts(
+            "consumer",
+            3,
+            vec![input("producerApi", "producer", "api")],
+            vec![static_component_output("summary")],
+            vec![dependency],
+        );
+        graph(vec![producer, consumer])
+    }
+
+    fn naive_contract_unifier(mutation: ContractMutation) -> bool {
+        matches!(mutation, ContractMutation::Compatible)
+    }
+
+    fn contract_property_cases() -> u32 {
+        std::env::var("HENOSIS_PROPTEST_CASES")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(32)
+    }
+
+    proptest! {
+        #![proptest_config(Config {
+            cases: contract_property_cases(),
+            .. Config::default()
+        })]
+        #[test]
+        fn contract_skew_oracle_is_total_and_matches_real_acceptance(
+            mutation in contract_mutation_strategy(),
+        ) {
+            let expected_acceptance = naive_contract_unifier(mutation);
+            let intent = contract_graph(mutation);
+            let accepted = henosis_types::GraphIntent::new(intent.clone());
+            prop_assert_eq!(accepted.is_ok(), expected_acceptance);
+            match accepted {
+                Err(error) => {
+                    let diagnostic = error.to_string();
+                    prop_assert!(diagnostic.contains("consumer -> producer"));
+                    prop_assert!(diagnostic.contains("api"));
+                }
+                Ok(_) => {
+                    let runtime = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .expect("test runtime builds");
+                    let mut core = Core::new(Arc::new(FakeEvaluator));
+                    runtime.block_on(core.handle(Command::CreateGraph(intent)))
+                        .expect("accepted contract graph evaluates");
+                    let plan = core.state()
+                        .graph(graph_id())
+                        .and_then(|state| state.plan())
+                        .expect("accepted graph has a plan");
+                    prop_assert!(plan.is_complete(), "accepted graph must converge, never block forever");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn contract_break_diagnostic_names_edge_output_and_schema_diff() {
+        let error = henosis_types::GraphIntent::new(contract_graph(ContractMutation::Remove))
+            .expect_err("removed consumed output must fail at acceptance");
+        insta::assert_snapshot!(error.to_string(), @r#"
+        graph intent has incompatible component contracts:
+        error[HENOSIS_CONTRACT_SKEW]: consumer compiled against producer@aaaaaaaaaaaa where api: url; this graph pins producer@050505050505 which does not declare api
+          --> consumer -> producer: api (removed)
+           |
+           | compiled-against outputs
+           - api: url
+           | resolved outputs
+           + <no outputs>
+           |
+          = note: consumer was built against producer@aaaaaaaaaaaa; the graph resolves producer@050505050505
+          = help: update consumer to the resolved producer contract, or pin producer to the revision consumer was built against
+        "#);
     }
 
     #[test]

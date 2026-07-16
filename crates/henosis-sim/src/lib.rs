@@ -21,10 +21,13 @@ use henosis_testkit::NormalizedTrace;
 use henosis_testkit::Seed;
 use henosis_testkit::TraceRecorder;
 use henosis_types::BundleRef;
+use henosis_types::CompiledDependency;
+use henosis_types::CompiledOutputContract;
 use henosis_types::ComponentInput;
 use henosis_types::ComponentIntent;
 use henosis_types::ComponentName;
 use henosis_types::ComponentOutput;
+use henosis_types::ComponentRevision;
 use henosis_types::ContentDigest;
 use henosis_types::ControllerCommand;
 use henosis_types::ControllerName;
@@ -45,6 +48,7 @@ use henosis_types::PublicationId;
 use henosis_types::ResourceDisposition;
 use henosis_types::ResourceDispositionKind;
 use henosis_types::ResourceId;
+use henosis_types::ValueSchema;
 
 pub use henosis_testkit::ComponentProgram;
 pub use henosis_testkit::ProgramEvaluator;
@@ -532,6 +536,7 @@ fn build_graph(evaluator: &ProgramEvaluator, scenario: &Scenario) -> NewGraphInt
                 output,
                 OutputAvailability::Observed,
                 false,
+                ValueSchema::Json,
             )],
         ));
     }
@@ -576,11 +581,51 @@ fn component_intent(
     inputs: Vec<ComponentInput>,
     outputs: Vec<ComponentOutput>,
 ) -> ComponentIntent {
+    let compiled_dependencies = inputs
+        .iter()
+        .filter_map(|input| input.output_source())
+        .fold(
+            BTreeMap::<ComponentName, BTreeSet<OutputName>>::new(),
+            |mut grouped, source| {
+                grouped
+                    .entry(source.component().clone())
+                    .or_default()
+                    .insert(source.output().clone());
+                grouped
+            },
+        )
+        .into_iter()
+        .map(|(component, consumed_outputs)| {
+            let contract_outputs = consumed_outputs
+                .iter()
+                .cloned()
+                .map(|output| {
+                    (
+                        output,
+                        CompiledOutputContract::new(
+                            OutputAvailability::Observed,
+                            false,
+                            ValueSchema::Json,
+                        ),
+                    )
+                })
+                .collect();
+            CompiledDependency::new(
+                component,
+                ComponentRevision::new("0".repeat(64)).expect("fixture revision is valid"),
+                contract_outputs,
+                consumed_outputs,
+            )
+        })
+        .collect();
     ComponentIntent::new(NewComponentIntent {
         name,
+        revision: ComponentRevision::new(bundle.digest().to_string())
+            .expect("bundle digest is a valid component revision"),
         bundle,
         inputs,
         outputs,
+        compiled_dependencies,
         source: None,
     })
     .expect("generated component is valid")

@@ -17,6 +17,7 @@ use connectrpc::Router;
 use connectrpc::ServiceRequest;
 use connectrpc::ServiceResult;
 use connectrpc::ServiceStream;
+use faultline::Error as FaultlineError;
 use futures::FutureExt as _;
 use futures::future::BoxFuture;
 use henosis_controller_cloudflare::CloudflareAction;
@@ -44,6 +45,7 @@ use henosis_evaluation_engine::inspect_bundle;
 use henosis_journal::Journal;
 use henosis_journal::S2Storage;
 use henosis_orchestrator::Command;
+use henosis_orchestrator::CommandError;
 use henosis_orchestrator::ControllerEffect;
 use henosis_proto::connect::henosis::v1::GraphService;
 use henosis_proto::connect::henosis::v1::GraphServiceExt;
@@ -232,11 +234,16 @@ impl CoreService {
     }
 
     async fn apply(&self, command: Command) -> Result<proto::GraphStatus, ConnectError> {
-        let applied = self
-            .materialized
-            .apply(command)
-            .await
-            .map_err(|error| invalid(error.to_string()))?;
+        let applied = self.materialized.apply(command).await.map_err(|error| {
+            if let Some(FaultlineError::Domain(CommandError::InvalidIntent(diagnostic))) =
+                error
+                    .downcast_ref::<FaultlineError<CommandError, faultline::Never, anyhow::Error>>()
+            {
+                invalid(diagnostic.clone())
+            } else {
+                invalid(error.to_string())
+            }
+        })?;
         let graph_id = applied.graph_id;
         let transition = applied.transition;
         let status = graph_status(&applied.state, graph_id)?;
@@ -1099,9 +1106,12 @@ mod tests {
     fn graph(last_byte: u8) -> henosis_types::GraphIntent {
         let component = ComponentIntent::new(NewComponentIntent {
             name: ComponentName::new("api").expect("test component name"),
+            revision: henosis_types::ComponentRevision::new(format!("{last_byte:02x}").repeat(32))
+                .expect("test component revision"),
             bundle: BundleRef::new(ContentDigest::from_bytes([last_byte; 32])),
             inputs: Vec::new(),
             outputs: Vec::new(),
+            compiled_dependencies: Vec::new(),
             source: None,
         })
         .expect("test component intent");

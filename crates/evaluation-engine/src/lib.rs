@@ -34,10 +34,13 @@ use futures::FutureExt;
 use futures::future::BoxFuture;
 use henosis_types::BlockedDetail;
 use henosis_types::BundleRef;
+use henosis_types::CompiledDependency;
+use henosis_types::CompiledOutputContract;
 use henosis_types::ComponentInput;
 use henosis_types::ComponentIntent;
 use henosis_types::ComponentName;
 use henosis_types::ComponentOutput;
+use henosis_types::ComponentRevision;
 use henosis_types::ControllerName;
 use henosis_types::EvaluationAttempt;
 use henosis_types::EvaluationError;
@@ -776,8 +779,25 @@ fn export<'s>(
 #[serde(rename_all = "camelCase")]
 struct ComponentMetadataWire {
     name: String,
+    #[serde(default = "fixture_revision")]
+    revision: String,
     inputs: BTreeMap<String, InputMetadataWire>,
     outputs: BTreeMap<String, OutputMetadataWire>,
+    #[serde(default)]
+    compiled_dependencies: Vec<CompiledDependencyWire>,
+}
+
+fn fixture_revision() -> String {
+    "0".repeat(64)
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CompiledDependencyWire {
+    component: String,
+    revision: String,
+    outputs: BTreeMap<String, OutputMetadataWire>,
+    consumed_outputs: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -821,6 +841,8 @@ fn component_intent(
     validate_logical_name(&metadata.name, "component name")?;
     let name = ComponentName::new(metadata.name)
         .map_err(|error| EvaluationError::new(format!("invalid component name: {error}")))?;
+    let revision = ComponentRevision::new(metadata.revision)
+        .map_err(|error| EvaluationError::new(format!("invalid component revision: {error}")))?;
     let mut inputs = Vec::with_capacity(metadata.inputs.len());
     for (input_name, declaration) in metadata.inputs {
         validate_api_name(&input_name, "input name")?;
@@ -878,13 +900,111 @@ fn component_intent(
                 AvailabilityWire::Observed => OutputAvailability::Observed,
             },
             declaration.optional,
+            declaration.schema,
         ));
+    }
+    let mut compiled_dependencies = Vec::with_capacity(metadata.compiled_dependencies.len());
+    for dependency in metadata.compiled_dependencies {
+        validate_logical_name(&dependency.component, "compiled producer component name")?;
+        let component = ComponentName::new(dependency.component).map_err(|error| {
+            EvaluationError::new(format!("invalid compiled producer component name: {error}"))
+        })?;
+        let revision = ComponentRevision::new(dependency.revision).map_err(|error| {
+            EvaluationError::new(format!("invalid compiled producer revision: {error}"))
+        })?;
+        let outputs = dependency
+            .outputs
+            .into_iter()
+            .map(|(name, output)| {
+                validate_api_name(&name, "compiled producer output name")?;
+                Ok((
+                    OutputName::new(name).map_err(|error| {
+                        EvaluationError::new(format!(
+                            "invalid compiled producer output name: {error}"
+                        ))
+                    })?,
+                    CompiledOutputContract::new(
+                        match output.availability {
+                            AvailabilityWire::Static => OutputAvailability::Static,
+                            AvailabilityWire::Observed => OutputAvailability::Observed,
+                        },
+                        output.optional,
+                        output.schema,
+                    ),
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>, EvaluationError>>()?;
+        let consumed_outputs = dependency
+            .consumed_outputs
+            .into_iter()
+            .map(|name| {
+                validate_api_name(&name, "consumed producer output name")?;
+                let name = OutputName::new(name).map_err(|error| {
+                    EvaluationError::new(format!("invalid consumed producer output name: {error}"))
+                })?;
+                if !outputs.contains_key(&name) {
+                    return Err(EvaluationError::new(format!(
+                        "compiled dependency {component} consumes undeclared output {name}"
+                    )));
+                }
+                Ok(name)
+            })
+            .collect::<Result<BTreeSet<_>, EvaluationError>>()?;
+        compiled_dependencies.push(CompiledDependency::new(
+            component,
+            revision,
+            outputs,
+            consumed_outputs,
+        ));
+    }
+    for input in &inputs {
+        let Some(source) = input.output_source() else {
+            continue;
+        };
+        let dependency = compiled_dependencies
+            .iter()
+            .find(|dependency| dependency.component() == source.component())
+            .ok_or_else(|| {
+                EvaluationError::new(format!(
+                    "output input {:?} has no compiled dependency facts for {}",
+                    input.name().as_str(),
+                    source.component()
+                ))
+            })?;
+        let output = dependency.output(source.output()).ok_or_else(|| {
+            EvaluationError::new(format!(
+                "output input {:?} consumes {}, but that output is absent from its compiled \
+                 dependency facts",
+                input.name().as_str(),
+                source
+            ))
+        })?;
+        if !dependency
+            .consumed_outputs()
+            .any(|name| name == source.output())
+        {
+            return Err(EvaluationError::new(format!(
+                "output input {:?} consumes {}, but the bundle did not record it in \
+                 consumedOutputs",
+                input.name().as_str(),
+                source
+            )));
+        }
+        if input.is_optional() != output.is_optional() {
+            return Err(EvaluationError::new(format!(
+                "output input {:?} optionality disagrees with compiled contract for {}",
+                input.name().as_str(),
+                source
+            )));
+        }
     }
     ComponentIntent::new(NewComponentIntent {
         name,
+        revision,
         bundle,
         inputs,
         outputs,
+        compiled_dependencies,
         source: None,
     })
     .map_err(|error| EvaluationError::new(format!("invalid component metadata: {error}")))

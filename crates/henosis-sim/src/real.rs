@@ -36,6 +36,7 @@ use henosis_types::BundleRef;
 use henosis_types::ComponentIntent;
 use henosis_types::ComponentName;
 use henosis_types::ComponentOutput;
+use henosis_types::ComponentRevision;
 use henosis_types::ConfigClosureError;
 use henosis_types::ConfigClosureReader;
 use henosis_types::ContentDigest;
@@ -68,6 +69,7 @@ use henosis_types::ResourceAddress;
 use henosis_types::ResourceId;
 use henosis_types::ResourceName;
 use henosis_types::StaticOutput;
+use henosis_types::ValueSchema;
 
 const GRAPH_BYTES: [u8; 16] = [81; 16];
 
@@ -877,21 +879,26 @@ fn component_intent(
                         .expect("component output name is valid"),
                     OutputAvailability::Observed,
                     false,
+                    ValueSchema::Json,
                 ),
                 ComponentOutput::new(
                     OutputName::new(format!("schema{index}"))
                         .expect("component output name is valid"),
                     OutputAvailability::Observed,
                     false,
+                    ValueSchema::Json,
                 ),
             ]
         })
         .collect();
     ComponentIntent::new(NewComponentIntent {
         name: component,
+        revision: ComponentRevision::new(bundle.digest().to_string())
+            .expect("bundle digest is a valid component revision"),
         bundle,
         inputs: Vec::new(),
         outputs,
+        compiled_dependencies: Vec::new(),
         source: None,
     })
     .expect("real-controller component intent is valid")

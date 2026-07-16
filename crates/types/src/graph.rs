@@ -1,3 +1,6 @@
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
+
 use iddqd::IdOrdItem;
 use iddqd::IdOrdMap;
 use iddqd::id_upcast;
@@ -151,20 +154,160 @@ impl IdOrdItem for ComponentInput {
     }
 }
 
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ComponentRevision(String);
+
+impl ComponentRevision {
+    pub fn new(value: impl Into<String>) -> Result<Self, ComponentRevisionError> {
+        let value = value.into();
+        if value.len() != 64
+            || !value
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(ComponentRevisionError);
+        }
+        Ok(Self(value))
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    #[must_use]
+    pub fn short(&self) -> &str {
+        &self.0[..12]
+    }
+}
+
+impl std::fmt::Display for ComponentRevision {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
+#[error("component revision must be a lowercase 64-character SHA-256 digest")]
+pub struct ComponentRevisionError;
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct CompiledOutputContract {
+    availability: OutputAvailability,
+    optional: bool,
+    schema: ValueSchema,
+}
+
+impl CompiledOutputContract {
+    #[must_use]
+    pub const fn new(
+        availability: OutputAvailability,
+        optional: bool,
+        schema: ValueSchema,
+    ) -> Self {
+        Self {
+            availability,
+            optional,
+            schema,
+        }
+    }
+
+    #[must_use]
+    pub const fn availability(&self) -> OutputAvailability {
+        self.availability
+    }
+
+    #[must_use]
+    pub const fn is_optional(&self) -> bool {
+        self.optional
+    }
+
+    #[must_use]
+    pub const fn schema(&self) -> &ValueSchema {
+        &self.schema
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct CompiledDependency {
+    component: ComponentName,
+    revision: ComponentRevision,
+    outputs: BTreeMap<OutputName, CompiledOutputContract>,
+    consumed_outputs: BTreeSet<OutputName>,
+}
+
+impl CompiledDependency {
+    #[must_use]
+    pub fn new(
+        component: ComponentName,
+        revision: ComponentRevision,
+        outputs: BTreeMap<OutputName, CompiledOutputContract>,
+        consumed_outputs: BTreeSet<OutputName>,
+    ) -> Self {
+        Self {
+            component,
+            revision,
+            outputs,
+            consumed_outputs,
+        }
+    }
+
+    #[must_use]
+    pub const fn component(&self) -> &ComponentName {
+        &self.component
+    }
+
+    #[must_use]
+    pub const fn revision(&self) -> &ComponentRevision {
+        &self.revision
+    }
+
+    pub fn outputs(&self) -> impl ExactSizeIterator<Item = (&OutputName, &CompiledOutputContract)> {
+        self.outputs.iter()
+    }
+
+    #[must_use]
+    pub fn output(&self, name: &OutputName) -> Option<&CompiledOutputContract> {
+        self.outputs.get(name)
+    }
+
+    pub fn consumed_outputs(&self) -> impl ExactSizeIterator<Item = &OutputName> {
+        self.consumed_outputs.iter()
+    }
+}
+
+impl IdOrdItem for CompiledDependency {
+    type Key<'a> = &'a ComponentName;
+
+    id_upcast!();
+
+    fn key(&self) -> Self::Key<'_> {
+        &self.component
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ComponentOutput {
     name: OutputName,
     availability: OutputAvailability,
     optional: bool,
+    schema: ValueSchema,
 }
 
 impl ComponentOutput {
     #[must_use]
-    pub const fn new(name: OutputName, availability: OutputAvailability, optional: bool) -> Self {
+    pub const fn new(
+        name: OutputName,
+        availability: OutputAvailability,
+        optional: bool,
+        schema: ValueSchema,
+    ) -> Self {
         Self {
             name,
             availability,
             optional,
+            schema,
         }
     }
 
@@ -181,6 +324,11 @@ impl ComponentOutput {
     #[must_use]
     pub const fn is_optional(&self) -> bool {
         self.optional
+    }
+
+    #[must_use]
+    pub const fn schema(&self) -> &ValueSchema {
+        &self.schema
     }
 }
 
@@ -230,19 +378,23 @@ impl IdOrdItem for ComponentInputBinding {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct NewComponentIntent {
     pub name: ComponentName,
+    pub revision: ComponentRevision,
     pub bundle: BundleRef,
     pub inputs: Vec<ComponentInput>,
     pub outputs: Vec<ComponentOutput>,
+    pub compiled_dependencies: Vec<CompiledDependency>,
     pub source: Option<SourceProvenance>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ComponentIntent {
     name: ComponentName,
+    revision: ComponentRevision,
     bundle: BundleRef,
     inputs: IdOrdMap<ComponentInput>,
     input_bindings: IdOrdMap<ComponentInputBinding>,
     outputs: IdOrdMap<ComponentOutput>,
+    compiled_dependencies: IdOrdMap<CompiledDependency>,
     source: Option<SourceProvenance>,
 }
 
@@ -260,12 +412,20 @@ impl ComponentIntent {
                 .insert_unique(output)
                 .map_err(|_| ComponentIntentError::DuplicateOutput)?;
         }
+        let mut compiled_dependencies = IdOrdMap::with_capacity(new.compiled_dependencies.len());
+        for dependency in new.compiled_dependencies {
+            compiled_dependencies
+                .insert_unique(dependency)
+                .map_err(|_| ComponentIntentError::DuplicateCompiledDependency)?;
+        }
         Ok(Self {
             name: new.name,
+            revision: new.revision,
             bundle: new.bundle,
             inputs,
             input_bindings: IdOrdMap::new(),
             outputs,
+            compiled_dependencies,
             source: new.source,
         })
     }
@@ -273,6 +433,11 @@ impl ComponentIntent {
     #[must_use]
     pub const fn name(&self) -> &ComponentName {
         &self.name
+    }
+
+    #[must_use]
+    pub const fn revision(&self) -> &ComponentRevision {
+        &self.revision
     }
 
     #[must_use]
@@ -321,6 +486,15 @@ impl ComponentIntent {
         self.outputs.get(name)
     }
 
+    pub fn compiled_dependencies(&self) -> impl ExactSizeIterator<Item = &CompiledDependency> {
+        self.compiled_dependencies.iter()
+    }
+
+    #[must_use]
+    pub fn compiled_dependency(&self, name: &ComponentName) -> Option<&CompiledDependency> {
+        self.compiled_dependencies.get(name)
+    }
+
     #[must_use]
     pub const fn source(&self) -> Option<&SourceProvenance> {
         self.source.as_ref()
@@ -351,6 +525,8 @@ pub enum ComponentIntentError {
     DuplicateOutput,
     #[error("component binds an input name more than once")]
     DuplicateInputBinding,
+    #[error("component carries compiled contract facts for a producer more than once")]
+    DuplicateCompiledDependency,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -417,21 +593,41 @@ impl GraphIntent {
                 return Err(GraphIntentError::VcsRequired(local.join(", ")));
             }
         }
+        let mut contract_diagnostics = Vec::new();
         let mut config_diagnostics = Vec::new();
         for component in &keyed {
+            for dependency in component.compiled_dependencies() {
+                if let Some(diagnostic) =
+                    contract_diagnostic(component, dependency, keyed.get(dependency.component()))
+                {
+                    contract_diagnostics.push(diagnostic);
+                }
+            }
+            for input in component.inputs() {
+                let ComponentInputSource::Output { source, .. } = input.source() else {
+                    continue;
+                };
+                let carried = component
+                    .compiled_dependency(source.component())
+                    .is_some_and(|dependency| {
+                        dependency.consumed_outputs.contains(source.output())
+                    });
+                if !carried {
+                    contract_diagnostics.push(format!(
+                        "error[HENOSIS_CONTRACT_FACTS_MISSING]: component {:?} consumes {} but \
+                         its bundle carries no compiled-against contract for that edge\n  --> {} \
+                         -> {}\n  = help: rebuild the consumer with a Henosis bundler that \
+                         records resolved dependency contracts",
+                        component.name().as_str(),
+                        source,
+                        component.name(),
+                        source,
+                    ));
+                }
+            }
             for input in component.inputs() {
                 match input.source() {
-                    ComponentInputSource::Output { source, optional } => {
-                        let producer = keyed
-                            .get(source.component())
-                            .ok_or(GraphIntentError::UnknownInputComponent)?;
-                        let output = producer
-                            .output(source.output())
-                            .ok_or(GraphIntentError::UnknownInputOutput)?;
-                        if output.is_optional() && !optional {
-                            return Err(GraphIntentError::RequiredInputFromOptionalOutput);
-                        }
-                    }
+                    ComponentInputSource::Output { .. } => {}
                     ComponentInputSource::Config { schema, default } => {
                         let value = component
                             .input_binding(input.name())
@@ -475,6 +671,13 @@ impl GraphIntent {
                     Some(_) => {}
                 }
             }
+        }
+        if !contract_diagnostics.is_empty() {
+            contract_diagnostics.sort();
+            contract_diagnostics.dedup();
+            return Err(GraphIntentError::InvalidContracts(
+                contract_diagnostics.join("\n\n"),
+            ));
         }
         if !config_diagnostics.is_empty() {
             return Err(GraphIntentError::InvalidConfigBindings(
@@ -530,16 +733,192 @@ pub enum GraphIntentError {
     Empty,
     #[error("graph intent contains a component name more than once")]
     DuplicateComponent,
-    #[error("component input refers to an unknown producer component")]
-    UnknownInputComponent,
-    #[error("component input refers to an unknown producer output")]
-    UnknownInputOutput,
-    #[error("a required input cannot consume an optional producer output")]
-    RequiredInputFromOptionalOutput,
     #[error("graph source policy requires VCS provenance for components: {0}")]
     VcsRequired(String),
+    #[error("graph intent has incompatible component contracts:\n{0}")]
+    InvalidContracts(String),
     #[error("graph intent has invalid config input bindings:\n  - {0}")]
     InvalidConfigBindings(String),
+}
+
+fn contract_diagnostic(
+    consumer: &ComponentIntent,
+    dependency: &CompiledDependency,
+    producer: Option<&ComponentIntent>,
+) -> Option<String> {
+    let mut breaks = Vec::new();
+    for output_name in dependency.consumed_outputs() {
+        let expected = dependency
+            .output(output_name)
+            .expect("bundle metadata validates consumed outputs against its full schema");
+        match producer.and_then(|producer| producer.output(output_name)) {
+            None => breaks.push((output_name, expected, None, "removed".to_owned())),
+            Some(actual) if actual.schema() != expected.schema() => breaks.push((
+                output_name,
+                expected,
+                Some(actual),
+                format!(
+                    "{} -> {}",
+                    contract_schema(expected.schema()),
+                    contract_schema(actual.schema())
+                ),
+            )),
+            Some(actual) if actual.is_optional() != expected.is_optional() => breaks.push((
+                output_name,
+                expected,
+                Some(actual),
+                format!(
+                    "{} -> {}",
+                    optionality(expected.is_optional()),
+                    optionality(actual.is_optional())
+                ),
+            )),
+            Some(_) => {}
+        }
+    }
+    if breaks.is_empty() {
+        return None;
+    }
+
+    let resolved_revision = producer
+        .map(ComponentIntent::revision)
+        .map(ComponentRevision::short)
+        .unwrap_or("missing");
+    let paths = breaks
+        .iter()
+        .map(|(name, _, _, fate)| format!("{name} ({fate})"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let summary = if breaks.len() == 1 {
+        let (name, expected, actual, _) = &breaks[0];
+        match actual {
+            None => format!(
+                "{} compiled against {}@{} where {}: {}; this graph pins {}@{} which does not \
+                 declare {}",
+                consumer.name(),
+                dependency.component(),
+                dependency.revision().short(),
+                name,
+                contract_schema(expected.schema()),
+                dependency.component(),
+                resolved_revision,
+                name,
+            ),
+            Some(actual) => format!(
+                "{} compiled against {}@{} where {}: {}; this graph pins {}@{} where {}: {}",
+                consumer.name(),
+                dependency.component(),
+                dependency.revision().short(),
+                name,
+                contract_schema(expected.schema()),
+                dependency.component(),
+                resolved_revision,
+                name,
+                contract_schema(actual.schema()),
+            ),
+        }
+    } else {
+        format!(
+            "{} compiled against {}@{}, but this graph pins incompatible {}@{}",
+            consumer.name(),
+            dependency.component(),
+            dependency.revision().short(),
+            dependency.component(),
+            resolved_revision,
+        )
+    };
+    let expected_schema = render_compiled_schema(dependency.outputs());
+    let actual_schema = producer
+        .map(|producer| {
+            let rendered =
+                render_component_schema(producer.outputs().map(|output| (output.name(), output)));
+            if rendered.is_empty() {
+                "<no outputs>".to_owned()
+            } else {
+                rendered
+            }
+        })
+        .unwrap_or_else(|| "<component missing>".to_owned());
+    Some(format!(
+        "error[HENOSIS_CONTRACT_SKEW]: {summary}\n  --> {} -> {}: {paths}\n   |\n   | \
+         compiled-against outputs\n{}\n   | resolved outputs\n{}\n   |\n  = note: {} was built \
+         against {}@{}; the graph resolves {}@{}\n  = help: update {} to the resolved producer \
+         contract, or pin {} to the revision {} was built against",
+        consumer.name(),
+        dependency.component(),
+        indent_schema(&expected_schema, '-'),
+        indent_schema(&actual_schema, '+'),
+        consumer.name(),
+        dependency.component(),
+        dependency.revision().short(),
+        dependency.component(),
+        resolved_revision,
+        consumer.name(),
+        dependency.component(),
+        consumer.name(),
+    ))
+}
+
+fn render_compiled_schema<'a>(
+    outputs: impl Iterator<Item = (&'a OutputName, &'a CompiledOutputContract)>,
+) -> String {
+    outputs
+        .map(|(name, output)| {
+            format!(
+                "{name}: {}{}",
+                contract_schema(output.schema()),
+                if output.is_optional() { "?" } else { "" }
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn render_component_schema<'a>(
+    outputs: impl Iterator<Item = (&'a OutputName, &'a ComponentOutput)>,
+) -> String {
+    outputs
+        .map(|(name, output)| {
+            format!(
+                "{name}: {}{}",
+                contract_schema(output.schema()),
+                if output.is_optional() { "?" } else { "" }
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn indent_schema(schema: &str, marker: char) -> String {
+    schema
+        .lines()
+        .map(|line| format!("   {marker} {line}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn optionality(optional: bool) -> &'static str {
+    if optional { "optional" } else { "required" }
+}
+
+fn contract_schema(schema: &ValueSchema) -> String {
+    match schema {
+        ValueSchema::String => "string".to_owned(),
+        ValueSchema::Url => "url".to_owned(),
+        ValueSchema::Number => "number".to_owned(),
+        ValueSchema::Boolean => "boolean".to_owned(),
+        ValueSchema::Json => "json".to_owned(),
+        ValueSchema::Artifact => "artifact".to_owned(),
+        ValueSchema::Array { element } => format!("{}[]", contract_schema(element)),
+        ValueSchema::Object { fields } => format!(
+            "{{ {} }}",
+            fields
+                .iter()
+                .map(|(name, schema)| format!("{name}: {}", contract_schema(schema)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
 }
 
 fn json_kind(value: &serde_json::Value) -> &'static str {
