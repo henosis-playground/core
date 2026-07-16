@@ -539,7 +539,29 @@ var backend_default = defineComponent({
 // henosis-component.ts
 var bundle = createBundle(backend_default);
 var protocolVersion = bundle.protocolVersion;
-var component = bundle.component;
+var component = Object.freeze({
+  ...bundle.component,
+  revision: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  compiledDependencies: Object.freeze([
+    Object.freeze({
+      component: "database",
+      revision: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      outputs: Object.freeze({
+        restUrl: Object.freeze({ availability: "observed", optional: false, schema: Object.freeze({ kind: "url" }) }),
+        anonKeyRef: Object.freeze({ availability: "observed", optional: false, schema: Object.freeze({ kind: "string" }) })
+      }),
+      consumedOutputs: Object.freeze(["restUrl"])
+    }),
+    Object.freeze({
+      component: "supabase_tunnel",
+      revision: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      outputs: Object.freeze({
+        hostname: Object.freeze({ availability: "observed", optional: false, schema: Object.freeze({ kind: "string" }) })
+      }),
+      consumedOutputs: Object.freeze(["hostname"])
+    })
+  ])
+});
 var evaluate = bundle.evaluate;
 export {
   component,
