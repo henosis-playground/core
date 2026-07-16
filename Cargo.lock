@@ -1420,6 +1420,11 @@ version = "0.0.0"
 dependencies = [
  "blake3",
  "faultline",
+ "futures",
+ "henosis-controller-cloudflare",
+ "henosis-controller-k8s",
+ "henosis-controller-runtime",
+ "henosis-controller-supabase",
  "henosis-orchestrator",
  "henosis-testkit",
  "henosis-types",

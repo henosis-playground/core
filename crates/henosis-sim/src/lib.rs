@@ -1,5 +1,11 @@
 //! Seeded, explicit-transition simulation around the real Henosis core loop.
 
+mod real;
+
+pub use real::RealControllerAction;
+pub use real::RealControllerRun;
+pub use real::RealControllerWorld;
+
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::sync::Arc;

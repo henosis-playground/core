@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+use henosis_sim::RealControllerAction;
+use henosis_sim::RealControllerWorld;
 use henosis_sim::RunStatus;
 use henosis_sim::Scenario;
 use henosis_sim::SimAction;
@@ -414,6 +416,117 @@ fn named_rng_streams_do_not_shift_when_another_stream_draws() {
     let mut scheduler_b = NamedRng::new(root, "scheduler");
     assert_eq!(before, scheduler_b.next_u64());
     assert_eq!(after, scheduler_b.next_u64());
+}
+
+async fn drive_real_controller_passes(world: &mut RealControllerWorld, budget: usize) {
+    for _ in 0..budget {
+        let Some(action) = world
+            .enabled_actions()
+            .into_iter()
+            .find(|action| matches!(action, RealControllerAction::ControllerPass { .. }))
+        else {
+            break;
+        };
+        world.apply(action).await;
+    }
+}
+
+async fn drive_real_controller_reports(world: &mut RealControllerWorld, budget: usize) {
+    for _ in 0..budget {
+        let Some(action) = world
+            .enabled_actions()
+            .into_iter()
+            .find(|action| matches!(action, RealControllerAction::DeliverReport { .. }))
+        else {
+            break;
+        };
+        world.apply(action).await;
+        drive_real_controller_passes(world, budget).await;
+    }
+}
+
+#[test]
+fn real_controllers_replay_the_same_seed_byte_for_byte() {
+    runtime().block_on(async {
+        let first = RealControllerWorld::new(Seed::from_u64(0x26), 2)
+            .await
+            .run(128)
+            .await;
+        let second = RealControllerWorld::new(Seed::from_u64(0x26), 2)
+            .await
+            .run(128)
+            .await;
+        assert_eq!(first.trace, second.trace);
+        assert!(first.complete);
+        assert_eq!(first.generation.ordinal(), 1);
+    });
+}
+
+#[test]
+fn real_controller_mid_reconcile_supersession_cancels_stale_work() {
+    runtime().block_on(async {
+        let mut world = RealControllerWorld::new(Seed::from_u64(0x5eed_2601), 2).await;
+        for _ in 0..4 {
+            let action = world
+                .enabled_actions()
+                .into_iter()
+                .find(|action| matches!(action, RealControllerAction::ControllerPass { .. }))
+                .expect("first generation has controller work");
+            world.apply(action).await;
+        }
+        world.start_next_generation(2).await;
+        assert_eq!(world.generation().ordinal(), 2);
+        drive_real_controller_passes(&mut world, 128).await;
+        drive_real_controller_reports(&mut world, 128).await;
+        assert!(world.plan_complete());
+        assert!(world.all_current_resources_exist());
+    });
+}
+
+#[test]
+fn real_controller_restart_and_apply_then_timeout_still_converge() {
+    runtime().block_on(async {
+        let mut world = RealControllerWorld::new(Seed::from_u64(0x5eed_2602), 2).await;
+        world.script_k8s([henosis_testkit::TargetFault::ApplyThenTimeout]);
+        world.script_cloudflare([henosis_testkit::TargetFault::ApplyThenTimeout]);
+        world.script_supabase([henosis_testkit::TargetFault::ApplyThenTimeout]);
+        for step in 0..96 {
+            let Some(action) = world
+                .enabled_actions()
+                .into_iter()
+                .find(|action| !matches!(action, RealControllerAction::DeliverDuplicate { .. }))
+            else {
+                break;
+            };
+            world.apply(action).await;
+            match step % 3 {
+                0 => world.restart_controller("k8s"),
+                1 => world.restart_controller("cloudflare"),
+                _ => world.restart_controller("supabase"),
+            }
+        }
+        assert!(world.plan_complete());
+        assert!(world.all_current_resources_exist());
+    });
+}
+
+#[test]
+fn output_publication_racing_retirement_is_fenced_and_cleanup_converges() {
+    runtime().block_on(async {
+        let mut world = RealControllerWorld::new(Seed::from_u64(0x5eed_2603), 2).await;
+        drive_real_controller_passes(&mut world, 128).await;
+        let stale_publication = world
+            .enabled_actions()
+            .into_iter()
+            .find(|action| matches!(action, RealControllerAction::DeliverReport { .. }))
+            .expect("converged controller has a report ready");
+        world.retire().await;
+        drive_real_controller_passes(&mut world, 128).await;
+        let retired = world.canonical_state();
+        world.apply(stale_publication).await;
+        assert_eq!(world.canonical_state(), retired);
+        assert!(world.no_resources_exist());
+    });
 }
 
 #[allow(dead_code)]

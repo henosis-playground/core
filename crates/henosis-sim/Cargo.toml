@@ -13,6 +13,11 @@ workspace = true
 [dependencies]
 blake3.workspace = true
 faultline.workspace = true
+futures.workspace = true
+henosis-controller-cloudflare.workspace = true
+henosis-controller-k8s.workspace = true
+henosis-controller-runtime.workspace = true
+henosis-controller-supabase.workspace = true
 henosis-orchestrator.workspace = true
 henosis-testkit.workspace = true
 henosis-types.workspace = true
