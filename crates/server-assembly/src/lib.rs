@@ -1,6 +1,7 @@
 //! Composition root for the Henosis server process.
 
 use std::collections::BTreeMap;
+use std::collections::btree_map::Entry;
 use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -22,6 +23,7 @@ use henosis_controller_cloudflare::WorkerObservation;
 use henosis_controller_k8s::K8sController;
 use henosis_controller_runtime::ControllerSchedule;
 use henosis_controller_runtime::ControllerScheduleCompletion;
+use henosis_controller_runtime::ControllerWorkKey;
 use henosis_controller_runtime::DirectoryArtifactStore;
 use henosis_controller_runtime::GitRepository;
 use henosis_controller_runtime::ScheduledControllerPass;
@@ -53,6 +55,7 @@ use henosis_types::OutputName;
 use henosis_types::Resource;
 use henosis_types::ResourceId;
 use tokio::sync::mpsc;
+use tokio::sync::watch;
 use tracing::error;
 use tracing::info;
 
@@ -82,6 +85,7 @@ impl ControllerDispatcher {
         tokio::spawn(async move {
             let controllers = Arc::new(controllers);
             let mut schedule = ControllerSchedule::default();
+            let mut report_deliveries = BTreeMap::new();
             loop {
                 tokio::select! {
                     Some(incoming) = effect_receiver.recv() => {
@@ -104,7 +108,8 @@ impl ControllerDispatcher {
                                 );
                             }
                             ControllerScheduleCompletion::Report(pending) => {
-                                spawn_report_delivery(
+                                queue_report_delivery(
+                                    &mut report_deliveries,
                                     Arc::clone(&reports),
                                     *pending,
                                     report_completions.clone(),
@@ -189,7 +194,7 @@ fn submit_effects(
 
 fn spawn_next_pass(
     schedule: &mut ControllerSchedule,
-    key: &henosis_controller_runtime::ControllerWorkKey,
+    key: &ControllerWorkKey,
     controllers: &Arc<BTreeMap<ControllerName, Arc<dyn Controller>>>,
     completions: &mpsc::UnboundedSender<(ScheduledControllerPass, ControllerPass)>,
     delay: Duration,
@@ -228,31 +233,58 @@ fn spawn_controller_pass(
     });
 }
 
-fn spawn_report_delivery(
+fn queue_report_delivery(
+    deliveries: &mut BTreeMap<ControllerWorkKey, watch::Sender<ScheduledControllerReport>>,
     reports: Arc<dyn ControllerReportHandler>,
     pending: ScheduledControllerReport,
     completions: mpsc::UnboundedSender<ReportCompletion>,
 ) {
+    match deliveries.entry(pending.key().clone()) {
+        Entry::Occupied(delivery) => {
+            delivery.get().send_replace(pending);
+        }
+        Entry::Vacant(delivery) => {
+            let (sender, receiver) = watch::channel(pending);
+            delivery.insert(sender);
+            spawn_report_delivery(reports, receiver, completions);
+        }
+    }
+}
+
+fn spawn_report_delivery(
+    reports: Arc<dyn ControllerReportHandler>,
+    mut pending: watch::Receiver<ScheduledControllerReport>,
+    completions: mpsc::UnboundedSender<ReportCompletion>,
+) {
     tokio::spawn(async move {
-        let mut attempt = 0;
         loop {
-            match reports.report(pending.report().clone()).await {
-                Ok(follow_up) => {
-                    let _ = completions.send(ReportCompletion { pending, follow_up });
-                    break;
+            let delivery = pending.borrow_and_update().clone();
+            let mut attempt = 0;
+            loop {
+                match reports.report(delivery.report().clone()).await {
+                    Ok(follow_up) => {
+                        let _ = completions.send(ReportCompletion {
+                            pending: delivery,
+                            follow_up,
+                        });
+                        break;
+                    }
+                    Err(error) => {
+                        attempt += 1;
+                        let delay = retry_delay(attempt);
+                        error!(
+                            graph = %delivery.key().graph_id(),
+                            controller = %delivery.key().controller(),
+                            %error,
+                            ?delay,
+                            "controller report was not acknowledged; retaining and retrying",
+                        );
+                        tokio::time::sleep(delay).await;
+                    }
                 }
-                Err(error) => {
-                    attempt += 1;
-                    let delay = retry_delay(attempt);
-                    error!(
-                        graph = %pending.key().graph_id(),
-                        controller = %pending.key().controller(),
-                        %error,
-                        ?delay,
-                        "controller report was not acknowledged; retaining and retrying",
-                    );
-                    tokio::time::sleep(delay).await;
-                }
+            }
+            if pending.changed().await.is_err() {
+                break;
             }
         }
     });
@@ -634,6 +666,7 @@ mod tests {
     use henosis_types::ContentDigest;
     use henosis_types::Generation;
     use tokio::sync::Notify;
+    use tokio::sync::Semaphore;
 
     use super::*;
 
@@ -665,6 +698,62 @@ mod tests {
         }
     }
 
+    struct AlwaysReportsController {
+        calls: Mutex<Vec<Generation>>,
+        name: ControllerName,
+    }
+
+    impl Controller for AlwaysReportsController {
+        fn name(&self) -> &ControllerName {
+            &self.name
+        }
+
+        fn execute<'a>(
+            &'a self,
+            command: &'a ControllerCommand,
+        ) -> BoxFuture<'a, Result<ControllerPass, ControllerError>> {
+            Box::pin(async move {
+                let ControllerCommand::Reconcile(slice) = command else {
+                    return Ok(ControllerPass::Converged(None));
+                };
+                self.calls.lock().unwrap().push(slice.generation());
+                Ok(ControllerPass::Converged(Some(
+                    ready_report(slice, None, Vec::new()).unwrap(),
+                )))
+            })
+        }
+    }
+
+    struct BlockingReportStore {
+        calls: AtomicUsize,
+        in_flight: AtomicUsize,
+        max_in_flight: AtomicUsize,
+        generations: Mutex<Vec<Generation>>,
+        unblock: Semaphore,
+        delivered_latest: Notify,
+    }
+
+    impl ControllerReportHandler for BlockingReportStore {
+        fn report(
+            &self,
+            report: ControllerReport,
+        ) -> BoxFuture<'_, anyhow::Result<Vec<ControllerEffect>>> {
+            Box::pin(async move {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                let in_flight = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                self.max_in_flight.fetch_max(in_flight, Ordering::SeqCst);
+                self.generations.lock().unwrap().push(report.generation());
+                let permit = self.unblock.acquire().await.unwrap();
+                permit.forget();
+                self.in_flight.fetch_sub(1, Ordering::SeqCst);
+                if report.generation() == Generation::new(4).unwrap() {
+                    self.delivered_latest.notify_one();
+                }
+                Ok(Vec::new())
+            })
+        }
+    }
+
     struct FailsFirstReport {
         calls: AtomicUsize,
         accepted: Notify,
@@ -683,6 +772,79 @@ mod tests {
                 Ok(Vec::new())
             })
         }
+    }
+
+    #[tokio::test]
+    async fn superseded_reports_share_one_delivery_worker_per_lane() {
+        let graph = GraphId::from_bytes([8; 16]);
+        let name = controller_name("test");
+        let controller = Arc::new(AlwaysReportsController {
+            calls: Mutex::new(Vec::new()),
+            name: name.clone(),
+        });
+        let reports = Arc::new(BlockingReportStore {
+            calls: AtomicUsize::new(0),
+            in_flight: AtomicUsize::new(0),
+            max_in_flight: AtomicUsize::new(0),
+            generations: Mutex::new(Vec::new()),
+            unblock: Semaphore::new(0),
+            delivered_latest: Notify::new(),
+        });
+        let dispatcher = ControllerDispatcher::start(
+            BTreeMap::from([(name.clone(), controller.clone() as Arc<dyn Controller>)]),
+            reports.clone() as Arc<dyn ControllerReportHandler>,
+        );
+
+        let dispatch = |generation| {
+            let slice = ControllerSlice::new(
+                graph,
+                Generation::new(generation).unwrap(),
+                ContentDigest::digest(&[generation as u8]),
+                name.clone(),
+                BTreeMap::new(),
+                Vec::new(),
+                Vec::new(),
+            );
+            dispatcher.dispatch(vec![ControllerEffect::new(
+                name.clone(),
+                ControllerCommand::Reconcile(slice),
+            )]);
+        };
+
+        dispatch(1);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while reports.calls.load(Ordering::SeqCst) != 1 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("first report should reach the blocked store");
+
+        for generation in 2..=4 {
+            dispatch(generation);
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while controller.calls.lock().unwrap().len() < generation as usize {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("each superseding command should start its pass");
+        }
+
+        assert_eq!(reports.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(reports.in_flight.load(Ordering::SeqCst), 1);
+        assert_eq!(reports.max_in_flight.load(Ordering::SeqCst), 1);
+
+        reports.unblock.add_permits(4);
+        tokio::time::timeout(Duration::from_secs(5), reports.delivered_latest.notified())
+            .await
+            .expect("latest report should be delivered after the store unblocks");
+
+        assert_eq!(reports.max_in_flight.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            *reports.generations.lock().unwrap(),
+            vec![Generation::new(1).unwrap(), Generation::new(4).unwrap()]
+        );
     }
 
     #[tokio::test]
