@@ -7,7 +7,6 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::str::FromStr as _;
 use std::sync::Arc;
-use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 
 use async_stream::try_stream;
@@ -18,29 +17,8 @@ use connectrpc::ServiceRequest;
 use connectrpc::ServiceResult;
 use connectrpc::ServiceStream;
 use faultline::Error as FaultlineError;
-use futures::FutureExt as _;
-use futures::future::BoxFuture;
-use henosis_controller_cloudflare::CloudflareAction;
-use henosis_controller_cloudflare::CloudflareError;
-use henosis_controller_cloudflare::CloudflareObservation;
-use henosis_controller_cloudflare::CloudflareTransport;
-use henosis_controller_cloudflare::LiveCloudflareConfig;
-use henosis_controller_cloudflare::LiveCloudflareTransport;
-use henosis_controller_cloudflare::RouteObservation;
-use henosis_controller_cloudflare::TunnelObservation;
-use henosis_controller_cloudflare::WorkerObservation;
-use henosis_controller_k8s::K8sController;
-use henosis_controller_runtime::DirectoryArtifactStore;
-use henosis_controller_runtime::GitRepository;
-use henosis_controller_runtime::controller_name;
-use henosis_controller_runtime::output;
-use henosis_controller_runtime::publication_id;
-use henosis_controller_runtime::ready_report;
-use henosis_evaluation_engine::BundleSource;
+use henosis_app::verify_bundle_directory;
 use henosis_evaluation_engine::EngineConfig;
-use henosis_evaluation_engine::EvaluationEngine;
-use henosis_evaluation_engine::ResourceContract;
-use henosis_evaluation_engine::ResourceRegistry;
 use henosis_evaluation_engine::inspect_bundle;
 use henosis_journal::Journal;
 use henosis_journal::S2Storage;
@@ -56,24 +34,17 @@ use henosis_types::ComponentInputSource;
 use henosis_types::ComponentIntent;
 use henosis_types::ContentDigest;
 use henosis_types::Controller;
-use henosis_types::ControllerCommand;
-use henosis_types::ControllerError;
 use henosis_types::ControllerName;
-use henosis_types::ControllerReport;
-use henosis_types::ControllerSlice;
 use henosis_types::Generation;
 use henosis_types::GraphId;
 use henosis_types::GraphSourcePolicy;
 use henosis_types::InputName;
-use henosis_types::KindVersion;
 use henosis_types::NativeValue;
 use henosis_types::NewGraphIntent;
 use henosis_types::OutputAvailability;
-use henosis_types::OutputName;
 use henosis_types::OutputSource;
 use henosis_types::Resource;
 use henosis_types::ResourceDispositionKind;
-use henosis_types::ResourceId;
 use henosis_types::SourceProvenance;
 use materialization::MaterializedGraphs;
 use tokio::sync::Mutex;
@@ -90,49 +61,12 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let bind = std::env::var("HENOSIS_BIND").unwrap_or_else(|_| "127.0.0.1:4481".into());
-    let bundle_root = PathBuf::from(
-        std::env::var("HENOSIS_BUNDLE_ROOT").unwrap_or_else(|_| ".henosis/bundles".into()),
-    );
-    let deploy_remote = PathBuf::from(
-        std::env::var("HENOSIS_DEPLOY_REMOTE")
-            .map_err(|_| anyhow::anyhow!("HENOSIS_DEPLOY_REMOTE is required"))?,
-    );
-
-    let source = Arc::new(FileBundleSource {
-        root: bundle_root.clone(),
-    });
-    let config = EngineConfig::default();
-    let evaluator: Arc<dyn henosis_types::Evaluator> = Arc::new(EvaluationEngine::new(
-        source,
-        Arc::new(DemoResourceRegistry),
-        config.clone(),
-    )?);
-    let mut controllers: BTreeMap<ControllerName, Arc<dyn Controller>> = BTreeMap::new();
-    let k8s: Arc<dyn Controller> = Arc::new(K8sController::new(GitRepository::new(deploy_remote)));
-    controllers.insert(k8s.name().clone(), k8s);
-    let cloudflare: Arc<dyn Controller> = if std::env::var("HENOSIS_CLOUDFLARE_LIVE").as_deref()
-        == Ok("1")
-    {
-        let artifact_root = std::env::var("HENOSIS_ARTIFACT_ROOT").map_err(|_| {
-            anyhow::anyhow!("HENOSIS_ARTIFACT_ROOT is required for live Cloudflare")
-        })?;
-        let transport = LiveCloudflareTransport::connect(
-            &LiveCloudflareConfig::default(),
-            Arc::new(DirectoryArtifactStore::new(artifact_root)),
-        )?;
-        info!("Cloudflare controller uses LIVE transport (metadata/identity safety rail enforced)");
-        Arc::new(henosis_controller_cloudflare::CloudflareController::new(
-            transport,
-        ))
-    } else {
-        Arc::new(henosis_controller_cloudflare::CloudflareController::new(
-            RecordedCloudflareTransport::default(),
-        ))
-    };
-    controllers.insert(cloudflare.name().clone(), cloudflare);
-    let supabase: Arc<dyn Controller> = Arc::new(DemoSupabaseController::new());
-    controllers.insert(supabase.name().clone(), supabase);
+    let assembly = henosis_server_assembly::from_environment()?;
+    let bind = assembly.bind;
+    let bundle_root = assembly.bundle_root;
+    let config = assembly.engine_config;
+    let evaluator = assembly.evaluator;
+    let controllers = assembly.controllers;
 
     let s2 = S2Storage::connect(
         required_env("S2_ACCESS_TOKEN")?,
@@ -204,10 +138,10 @@ impl CoreService {
                 })
                 .collect::<Result<Vec<_>, ConnectError>>()?;
             let digest = digest(component.bundle_digest.as_deref().unwrap_or_default())?;
-            let path = self
-                .bundle_root
-                .join(hex(digest.as_bytes()))
-                .join("module.js");
+            let bundle_id = hex(digest.as_bytes());
+            let verified = verify_bundle_directory(&self.bundle_root.join(&bundle_id), &bundle_id)
+                .map_err(|error| invalid(error.to_string()))?;
+            let path = verified.module;
             let bundle_source = tokio::fs::read(&path).await.map_err(|error| {
                 invalid(format!(
                     "cannot read bundle for {name:?} at {}: {error}",
@@ -460,255 +394,6 @@ impl GraphService for CoreService {
         };
         let stream: ServiceStream<proto::WatchGraphResponse> = Box::pin(stream);
         Ok(stream.into())
-    }
-}
-
-struct FileBundleSource {
-    root: PathBuf,
-}
-
-impl BundleSource for FileBundleSource {
-    fn load(
-        &self,
-        bundle: BundleRef,
-    ) -> BoxFuture<'_, Result<Arc<[u8]>, henosis_types::EvaluationError>> {
-        let path = self
-            .root
-            .join(bundle.digest().to_string())
-            .join("module.js");
-        Box::pin(async move {
-            tokio::fs::read(&path)
-                .await
-                .map(Arc::<[u8]>::from)
-                .map_err(|error| {
-                    henosis_types::EvaluationError::new(format!(
-                        "cannot load bundle {}: {error}",
-                        path.display()
-                    ))
-                })
-        })
-    }
-}
-
-struct DemoResourceRegistry;
-
-impl ResourceRegistry for DemoResourceRegistry {
-    fn validate(
-        &self,
-        kind: &KindVersion,
-        body: &serde_json::Value,
-    ) -> Result<ResourceContract, String> {
-        if !body.is_object() {
-            return Err(format!("{kind} body must be an object"));
-        }
-        let (controller, outputs): (&str, &[&str]) = match kind.to_string().as_str() {
-            "k8s/object@1" => ("k8s", &[]),
-            "supabase/schema@1" => (
-                "supabase",
-                &[
-                    "project",
-                    "database",
-                    "schema",
-                    "apiUrl",
-                    "restUrl",
-                    "databaseUrlRef",
-                    "anonKeyRef",
-                ],
-            ),
-            "cloudflare/worker@1" => (
-                "cloudflare",
-                &["url", "workerName", "deploymentId", "versionId"],
-            ),
-            "cloudflare/tunnel@1" => (
-                "cloudflare",
-                &["tunnelId", "tunnelName", "privateHostname", "tokenRef"],
-            ),
-            "cloudflare/route@1" => ("cloudflare", &["hostname"]),
-            other => return Err(format!("unsupported resource kind {other}")),
-        };
-        Ok(ResourceContract::new(
-            controller_name(controller),
-            outputs
-                .iter()
-                .map(|name| OutputName::new(*name).expect("built-in API output name"))
-                .collect(),
-        ))
-    }
-}
-
-struct DemoSupabaseController {
-    name: ControllerName,
-}
-
-impl DemoSupabaseController {
-    fn new() -> Self {
-        Self {
-            name: controller_name("supabase"),
-        }
-    }
-
-    fn reconcile(&self, slice: &ControllerSlice) -> Result<ControllerReport, ControllerError> {
-        let mut outputs = Vec::new();
-        for resource in slice.resources() {
-            for (name, value) in [
-                ("project", serde_json::json!("henosis-local")),
-                ("database", serde_json::json!("postgres")),
-                ("schema", serde_json::json!("catalog")),
-                ("apiUrl", serde_json::json!("http://127.0.0.1:4484")),
-                (
-                    "restUrl",
-                    serde_json::json!("http://127.0.0.1:4484/rest/v1"),
-                ),
-                (
-                    "databaseUrlRef",
-                    serde_json::json!("demo-fake://supabase/database"),
-                ),
-                (
-                    "anonKeyRef",
-                    serde_json::json!("demo-fake://supabase/anon-key"),
-                ),
-            ] {
-                if resource
-                    .outputs()
-                    .any(|declaration| declaration.name().as_str() == name)
-                {
-                    outputs.push(
-                        output(resource, name, value)
-                            .map_err(|error| ControllerError::new(error.to_string()))?,
-                    );
-                }
-            }
-        }
-        ready_report(slice, Some(publication_id(b"demo-supabase-fake")), outputs)
-            .map_err(|error| ControllerError::new(error.to_string()))
-    }
-}
-
-impl Controller for DemoSupabaseController {
-    fn name(&self) -> &ControllerName {
-        &self.name
-    }
-
-    fn execute<'a>(
-        &'a self,
-        command: &'a ControllerCommand,
-    ) -> BoxFuture<'a, Result<Option<ControllerReport>, ControllerError>> {
-        Box::pin(async move {
-            match command {
-                ControllerCommand::Reconcile(slice) => self.reconcile(slice).map(Some),
-                ControllerCommand::Supersede(_) | ControllerCommand::Retire(_) => Ok(None),
-            }
-        })
-    }
-}
-
-#[derive(Default)]
-struct RecordedCloudflareTransport {
-    resources: StdMutex<BTreeMap<(GraphId, ResourceId), CloudflareObservation>>,
-}
-
-impl CloudflareTransport for RecordedCloudflareTransport {
-    fn observe<'a>(
-        &'a self,
-        graph: GraphId,
-        resource: &'a Resource,
-    ) -> BoxFuture<'a, Result<CloudflareObservation, CloudflareError>> {
-        async move {
-            Ok(self
-                .resources
-                .lock()
-                .expect("recorded Cloudflare lock is not poisoned")
-                .get(&(graph, resource.id()))
-                .cloned()
-                .unwrap_or(CloudflareObservation::Missing))
-        }
-        .boxed()
-    }
-
-    fn act<'a>(
-        &'a self,
-        graph: GraphId,
-        resource: &'a Resource,
-        action: CloudflareAction,
-    ) -> BoxFuture<'a, Result<(), CloudflareError>> {
-        async move {
-            let mut resources = self
-                .resources
-                .lock()
-                .expect("recorded Cloudflare lock is not poisoned");
-            let key = (graph, resource.id());
-            match action {
-                CloudflareAction::UploadWorker(_) => {
-                    resources.insert(
-                        key,
-                        CloudflareObservation::Worker {
-                            digest: resource.digest(),
-                            subdomain_enabled: false,
-                            observation: WorkerObservation {
-                                url: format!(
-                                    "https://{}.workers.demo.invalid",
-                                    resource.path().address().name()
-                                ),
-                                worker_name: resource.path().address().name().to_string(),
-                                deployment_id: format!("recorded-{}", resource.id()),
-                                version_id: "recorded-v1".into(),
-                            },
-                        },
-                    );
-                }
-                CloudflareAction::EnableWorkerSubdomain => {
-                    let Some(CloudflareObservation::Worker {
-                        subdomain_enabled, ..
-                    }) = resources.get_mut(&key)
-                    else {
-                        return Err(CloudflareError::Unavailable(
-                            "recorded Worker disappeared".into(),
-                        ));
-                    };
-                    *subdomain_enabled = true;
-                }
-                CloudflareAction::CreateTunnel => {
-                    resources.insert(
-                        key,
-                        CloudflareObservation::Tunnel {
-                            configured: false,
-                            observation: TunnelObservation {
-                                tunnel_id: format!("recorded-{}", resource.id()),
-                                tunnel_name: resource.id().to_string(),
-                                private_hostname: "supabase.internal.demo.invalid".into(),
-                                token_ref: "demo-fake://cloudflare/tunnel-token".into(),
-                            },
-                        },
-                    );
-                }
-                CloudflareAction::ConfigureTunnel(_) => {
-                    let Some(CloudflareObservation::Tunnel { configured, .. }) =
-                        resources.get_mut(&key)
-                    else {
-                        return Err(CloudflareError::Unavailable(
-                            "recorded Tunnel disappeared".into(),
-                        ));
-                    };
-                    *configured = true;
-                }
-                CloudflareAction::WriteRoute(body) => {
-                    resources.insert(
-                        key,
-                        CloudflareObservation::Route {
-                            matches: true,
-                            observation: RouteObservation {
-                                hostname: body.pattern,
-                            },
-                        },
-                    );
-                }
-                CloudflareAction::Delete => {
-                    resources.remove(&key);
-                }
-            }
-            Ok(())
-        }
-        .boxed()
     }
 }
 

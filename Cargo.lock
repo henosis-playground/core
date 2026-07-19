@@ -1312,14 +1312,13 @@ dependencies = [
  "buffa",
  "connectrpc",
  "faultline",
- "futures",
- "henosis-controller-cloudflare",
- "henosis-controller-k8s",
+ "henosis-app",
  "henosis-controller-runtime",
  "henosis-evaluation-engine",
  "henosis-journal",
  "henosis-orchestrator",
  "henosis-proto",
+ "henosis-server-assembly",
  "henosis-storage",
  "henosis-types",
  "reqwest",
@@ -1427,6 +1426,23 @@ dependencies = [
  "buffa",
  "connectrpc",
  "serde",
+ "workspace-hack",
+]
+
+[[package]]
+name = "henosis-server-assembly"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "futures",
+ "henosis-controller-cloudflare",
+ "henosis-controller-k8s",
+ "henosis-controller-runtime",
+ "henosis-evaluation-engine",
+ "henosis-types",
+ "serde_json",
+ "tokio",
+ "tracing",
  "workspace-hack",
 ]
 

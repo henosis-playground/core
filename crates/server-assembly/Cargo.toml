@@ -1,0 +1,24 @@
+[package]
+name = "henosis-server-assembly"
+version = "0.0.0"
+description = "Composition root for the Henosis server"
+repository.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+futures.workspace = true
+henosis-controller-cloudflare.workspace = true
+henosis-controller-k8s.workspace = true
+henosis-controller-runtime.workspace = true
+henosis-evaluation-engine.workspace = true
+henosis-types.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+
+[lints]
+workspace = true

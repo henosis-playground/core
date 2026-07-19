@@ -75,6 +75,7 @@ henosis-journal = { path = "crates/journal" }
 henosis-multi-stream-merge = { path = "crates/multi-stream-merge" }
 henosis-orchestrator = { path = "crates/orchestrator" }
 henosis-proto = { path = "crates/proto" }
+henosis-server-assembly = { path = "crates/server-assembly" }
 henosis-sim = { path = "crates/henosis-sim" }
 henosis-storage = { path = "crates/storage" }
 henosis-testkit = { path = "crates/henosis-testkit" }
