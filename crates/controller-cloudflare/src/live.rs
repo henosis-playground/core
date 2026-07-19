@@ -1488,6 +1488,7 @@ mod tests {
             Generation::new(1).unwrap(),
             ContentDigest::digest(b"cloudflare-live-benchmark"),
             crate::controller_name(crate::CONTROLLER_NAME),
+            BTreeMap::new(),
             vec![backend, frontend],
             Vec::new(),
         );

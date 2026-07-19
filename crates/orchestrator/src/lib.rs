@@ -15,6 +15,7 @@ use thiserror::Error as ThisError;
 use tracing::instrument;
 
 use henosis_types::BlockedMarker;
+use henosis_types::BundleRef;
 use henosis_types::ComponentInputSource;
 use henosis_types::ComponentIntent;
 use henosis_types::ComponentName;
@@ -225,7 +226,12 @@ impl Core {
                     "replayed live graph has no accepted plan"
                 ))
             })?;
-            transition.effects = dispatch_effects(graph_id, None, plan);
+            let bundles = graph
+                .intent
+                .components()
+                .map(|component| (component.name().clone(), component.bundle()))
+                .collect();
+            transition.effects = dispatch_effects(graph_id, bundles, None, plan);
             self.runtime
                 .get_mut(&graph_id)
                 .expect("runtime was rebuilt for the graph")
@@ -580,7 +586,13 @@ impl Core {
             transition.extend(self.check_quiescence(graph_id)?);
             return Ok(transition);
         }
-        let effects = dispatch_effects(graph_id, previous.as_ref(), &plan);
+        let bundles = self
+            .graph(graph_id)?
+            .intent
+            .components()
+            .map(|component| (component.name().clone(), component.bundle()))
+            .collect();
+        let effects = dispatch_effects(graph_id, bundles, previous.as_ref(), &plan);
         let pending = effects
             .iter()
             .filter_map(|effect| match effect.command() {
@@ -951,6 +963,7 @@ struct ComponentInterpretation {
 
 fn dispatch_effects(
     graph_id: GraphId,
+    bundles: BTreeMap<ComponentName, BundleRef>,
     previous: Option<&Plan>,
     plan: &Plan,
 ) -> Vec<ControllerEffect> {
@@ -982,6 +995,7 @@ fn dispatch_effects(
                 plan.generation(),
                 plan.digest(),
                 controller,
+                bundles.clone(),
                 resources,
                 superseded,
             )),

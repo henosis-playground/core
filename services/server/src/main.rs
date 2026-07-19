@@ -2,13 +2,6 @@
 
 mod materialization;
 
-use std::collections::BTreeMap;
-use std::collections::VecDeque;
-use std::path::PathBuf;
-use std::str::FromStr as _;
-use std::sync::Arc;
-use std::time::Duration;
-
 use async_stream::try_stream;
 use connectrpc::ConnectError;
 use connectrpc::ErrorCode;
@@ -33,8 +26,6 @@ use henosis_types::ComponentInputBinding;
 use henosis_types::ComponentInputSource;
 use henosis_types::ComponentIntent;
 use henosis_types::ContentDigest;
-use henosis_types::Controller;
-use henosis_types::ControllerName;
 use henosis_types::Generation;
 use henosis_types::GraphId;
 use henosis_types::GraphSourcePolicy;
@@ -47,9 +38,12 @@ use henosis_types::Resource;
 use henosis_types::ResourceDispositionKind;
 use henosis_types::SourceProvenance;
 use materialization::MaterializedGraphs;
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+use std::str::FromStr as _;
+use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
-use tracing::error;
 use tracing::info;
 
 #[tokio::main]
@@ -76,20 +70,22 @@ async fn main() -> anyhow::Result<()> {
     )?;
     let (materialized, resume_effects) =
         MaterializedGraphs::boot(Arc::clone(&evaluator), Journal::new(Arc::new(s2))).await?;
-    let service = Arc::new(CoreService {
+    let reports = Arc::new(ControllerReports {
         materialized,
-        bundle_root,
-        engine_config: config,
-        controllers: Arc::new(controllers),
         watches: Arc::new(Mutex::new(BTreeMap::new())),
     });
+    let dispatcher = henosis_server_assembly::ControllerDispatcher::start(
+        controllers,
+        Arc::clone(&reports) as Arc<dyn henosis_server_assembly::ControllerReportHandler>,
+    );
+    let service = Arc::new(CoreService {
+        reports,
+        bundle_root,
+        engine_config: config,
+        dispatcher,
+    });
     if !resume_effects.is_empty() {
-        let service = Arc::clone(&service);
-        tokio::spawn(async move {
-            if let Err(error) = service.drive(resume_effects).await {
-                error!(%error, "controller resume after journal replay failed");
-            }
-        });
+        service.dispatcher.dispatch(resume_effects);
     }
     let router = service.register(Router::new());
     info!(%bind, "Henosis core demo server listening");
@@ -102,10 +98,14 @@ async fn main() -> anyhow::Result<()> {
 
 #[derive(Clone)]
 struct CoreService {
-    materialized: MaterializedGraphs,
+    reports: Arc<ControllerReports>,
     bundle_root: PathBuf,
     engine_config: EngineConfig,
-    controllers: Arc<BTreeMap<ControllerName, Arc<dyn Controller>>>,
+    dispatcher: henosis_server_assembly::ControllerDispatcher,
+}
+
+struct ControllerReports {
+    materialized: MaterializedGraphs,
     watches: Arc<Mutex<BTreeMap<GraphId, watch::Sender<proto::GraphStatus>>>>,
 }
 
@@ -163,6 +163,7 @@ impl CoreService {
 
     async fn apply(&self, command: Command) -> Result<proto::GraphStatus, ConnectError> {
         let applied = self
+            .reports
             .materialized
             .apply(command)
             .await
@@ -170,48 +171,25 @@ impl CoreService {
         let graph_id = applied.graph_id;
         let transition = applied.transition;
         let status = graph_status(&applied.state, graph_id)?;
-        self.publish(graph_id, status.clone()).await;
+        self.reports.publish(graph_id, status.clone()).await;
         if !transition.effects().is_empty() {
-            let service = self.clone();
-            let effects = transition.effects().to_vec();
-            tokio::spawn(async move {
-                if let Err(error) = service.drive(effects).await {
-                    error!(%error, "controller dispatch failed");
-                }
-            });
+            self.dispatcher.dispatch(transition.effects().to_vec());
         }
         Ok(status)
     }
 
-    async fn drive(&self, effects: Vec<ControllerEffect>) -> anyhow::Result<()> {
-        let mut queue = VecDeque::from(effects);
-        while let Some(effect) = queue.pop_front() {
-            let controller = self
-                .controllers
-                .get(effect.controller())
-                .ok_or_else(|| anyhow::anyhow!("no controller named {}", effect.controller()))?;
-            if effect.controller().as_str() == "cloudflare" {
-                tokio::time::sleep(Duration::from_millis(1_500)).await;
-            }
-            let Some(report) = controller.execute(effect.command()).await? else {
-                continue;
-            };
-            let applied = self
-                .materialized
-                .apply(Command::ReportController(report))
-                .await?;
-            let graph_id = applied.graph_id;
-            let transition = applied.transition;
-            let status = graph_status(&applied.state, graph_id)
-                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-            self.publish(graph_id, status).await;
-            if !transition.effects().is_empty() {
-                queue = VecDeque::from(transition.effects().to_vec());
-            }
-        }
-        Ok(())
+    async fn current(&self, graph_id: GraphId) -> Result<proto::GraphStatus, ConnectError> {
+        let state = self
+            .reports
+            .materialized
+            .snapshot(graph_id)
+            .await
+            .ok_or_else(|| ConnectError::new(ErrorCode::NotFound, "graph does not exist"))?;
+        graph_status(&state, graph_id)
     }
+}
 
+impl ControllerReports {
     async fn publish(&self, graph_id: GraphId, status: proto::GraphStatus) {
         let mut watches = self.watches.lock().await;
         if let Some(sender) = watches.get(&graph_id) {
@@ -221,14 +199,24 @@ impl CoreService {
             watches.insert(graph_id, sender);
         }
     }
+}
 
-    async fn current(&self, graph_id: GraphId) -> Result<proto::GraphStatus, ConnectError> {
-        let state = self
-            .materialized
-            .snapshot(graph_id)
-            .await
-            .ok_or_else(|| ConnectError::new(ErrorCode::NotFound, "graph does not exist"))?;
-        graph_status(&state, graph_id)
+impl henosis_server_assembly::ControllerReportHandler for ControllerReports {
+    fn report(
+        &self,
+        report: henosis_types::ControllerReport,
+    ) -> futures::future::BoxFuture<'_, anyhow::Result<Vec<ControllerEffect>>> {
+        Box::pin(async move {
+            let applied = self
+                .materialized
+                .apply(Command::ReportController(report))
+                .await?;
+            let graph_id = applied.graph_id;
+            let status = graph_status(&applied.state, graph_id)
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            self.publish(graph_id, status).await;
+            Ok(applied.transition.effects().to_vec())
+        })
     }
 }
 
@@ -332,6 +320,7 @@ impl GraphService for CoreService {
             .include_retired
             .unwrap_or_default();
         let graphs = self
+            .reports
             .materialized
             .snapshots()
             .await
@@ -356,7 +345,7 @@ impl GraphService for CoreService {
         let graph_id = parse_graph(request.graph_id.as_deref().unwrap_or_default())?;
         let current = self.current(graph_id).await?;
         let mut receiver = {
-            let mut watches = self.watches.lock().await;
+            let mut watches = self.reports.watches.lock().await;
             watches
                 .entry(graph_id)
                 .or_insert_with(|| watch::channel(current.clone()).0)

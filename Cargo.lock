@@ -1218,6 +1218,8 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 name = "henosis-app"
 version = "0.0.0"
 dependencies = [
+ "futures",
+ "henosis-types",
  "hex",
  "minicbor",
  "regex",
@@ -1312,6 +1314,7 @@ dependencies = [
  "buffa",
  "connectrpc",
  "faultline",
+ "futures",
  "henosis-app",
  "henosis-controller-runtime",
  "henosis-evaluation-engine",
@@ -1435,10 +1438,13 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "futures",
+ "henosis-app",
  "henosis-controller-cloudflare",
  "henosis-controller-k8s",
  "henosis-controller-runtime",
+ "henosis-controller-supabase",
  "henosis-evaluation-engine",
+ "henosis-orchestrator",
  "henosis-types",
  "serde_json",
  "tokio",

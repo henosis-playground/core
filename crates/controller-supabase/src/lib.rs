@@ -116,8 +116,19 @@ pub enum SupabaseOperation {
     },
 }
 
-pub trait ComponentBundleResolver: Send + Sync {
+pub trait ComponentBundleResolver {
     fn resolve(&self, component: &ComponentName) -> Result<BundleRef, SupabaseError>;
+}
+
+impl ComponentBundleResolver for ControllerSlice {
+    fn resolve(&self, component: &ComponentName) -> Result<BundleRef, SupabaseError> {
+        self.bundle(component).ok_or_else(|| {
+            SupabaseError::Plan(format!(
+                "error[supabase.bundle.missing]: controller slice has no bundle for component \
+                 {component}"
+            ))
+        })
+    }
 }
 
 pub trait SupabaseTarget: Send + Sync {
@@ -141,7 +152,11 @@ pub struct SupabaseController<T> {
     name: ControllerName,
     target: T,
     config_files: Arc<dyn ConfigClosureReader>,
-    bundles: Arc<dyn ComponentBundleResolver>,
+}
+
+struct SupabasePass<'a, T> {
+    controller: &'a SupabaseController<T>,
+    slice: Option<&'a ControllerSlice>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -163,21 +178,24 @@ where
     T: SupabaseTarget,
 {
     #[must_use]
-    pub fn new(
-        target: T,
-        config_files: Arc<dyn ConfigClosureReader>,
-        bundles: Arc<dyn ComponentBundleResolver>,
-    ) -> Self {
+    pub fn new(target: T, config_files: Arc<dyn ConfigClosureReader>) -> Self {
         Self {
             name: controller_name(CONTROLLER_NAME),
             target,
             config_files,
-            bundles,
+        }
+    }
+
+    fn for_slice<'a>(&'a self, slice: &'a ControllerSlice) -> SupabasePass<'a, T> {
+        SupabasePass {
+            controller: self,
+            slice: Some(slice),
         }
     }
 
     async fn reconcile(&self, slice: &ControllerSlice) -> Result<ControllerPass, ControllerError> {
-        match reconcile_slice(self, slice).await {
+        let pass = self.for_slice(slice);
+        match reconcile_slice(&pass, slice).await {
             Ok(SlicePass::Acted) => Ok(ControllerPass::Acted),
             Ok(SlicePass::Converged(convergence)) => ready_report(
                 slice,
@@ -193,7 +211,7 @@ where
     }
 }
 
-impl<T> PerResourceReconciler for SupabaseController<T>
+impl<T> PerResourceReconciler for SupabasePass<'_, T>
 where
     T: SupabaseTarget,
 {
@@ -208,40 +226,46 @@ where
     ) -> BoxFuture<'a, Result<Self::Observation, Self::Error>> {
         async move {
             let body = decode_body(resource)?;
-            let target = self.target.observe(graph_id, resource.id(), &body.schema)?;
+            let target = self
+                .controller
+                .target
+                .observe(graph_id, resource.id(), &body.schema)?;
             let mut migrations = Vec::with_capacity(body.migrations.len());
-            for migration in &body.migrations {
-                let bundle = self.bundles.resolve(resource.path().instance())?;
-                let bytes = self
-                    .config_files
-                    .read(bundle, &migration.path)
-                    .await
-                    .map_err(|error| SupabaseError::Plan(error.to_string()))?;
-                let actual = format!("sha256:{}", hex::encode(Sha256::digest(bytes.as_ref())));
-                if actual != migration.sha256 {
-                    return Err(SupabaseError::Plan(format!(
-                        "error[supabase.plan.checksum]: migration {:?} for {} declares {}, but \
-                         file {} hashes to {}",
-                        migration.id,
-                        resource.path(),
-                        migration.sha256,
-                        migration.path,
-                        actual
-                    )));
+            if let Some(slice) = self.slice {
+                let bundle = slice.resolve(resource.path().instance())?;
+                for migration in &body.migrations {
+                    let bytes = self
+                        .controller
+                        .config_files
+                        .read(bundle, &migration.path)
+                        .await
+                        .map_err(|error| SupabaseError::Plan(error.to_string()))?;
+                    let actual = format!("sha256:{}", hex::encode(Sha256::digest(bytes.as_ref())));
+                    if actual != migration.sha256 {
+                        return Err(SupabaseError::Plan(format!(
+                            "error[supabase.plan.checksum]: migration {:?} for {} declares {}, \
+                             but file {} hashes to {}",
+                            migration.id,
+                            resource.path(),
+                            migration.sha256,
+                            migration.path,
+                            actual
+                        )));
+                    }
+                    let sql = String::from_utf8(bytes.to_vec()).map_err(|_| {
+                        SupabaseError::Plan(format!(
+                            "error[supabase.plan.migration-encoding]: migration {:?} for {} is \
+                             not UTF-8",
+                            migration.id,
+                            resource.path()
+                        ))
+                    })?;
+                    migrations.push(PreparedMigration {
+                        id: migration.id.clone(),
+                        checksum: migration.sha256.clone(),
+                        sql,
+                    });
                 }
-                let sql = String::from_utf8(bytes.to_vec()).map_err(|_| {
-                    SupabaseError::Plan(format!(
-                        "error[supabase.plan.migration-encoding]: migration {:?} for {} is not \
-                         UTF-8",
-                        migration.id,
-                        resource.path()
-                    ))
-                })?;
-                migrations.push(PreparedMigration {
-                    id: migration.id.clone(),
-                    checksum: migration.sha256.clone(),
-                    sql,
-                });
             }
             Ok(SupabaseResourceObservation {
                 target,
@@ -337,7 +361,7 @@ where
                     }));
                 }
                 Ok(ReconcileDecision::Converged(ResourceConvergence {
-                    outputs: resource_outputs(&self.target, resource, &observed.body)?,
+                    outputs: resource_outputs(&self.controller.target, resource, &observed.body)?,
                     evidence: observation_digest(&observed.target).into_bytes(),
                 }))
             }
@@ -367,12 +391,14 @@ where
                     graph,
                     resource,
                     schema,
-                } => observation_digest(&self.target.observe(*graph, *resource, schema)?),
+                } => {
+                    observation_digest(&self.controller.target.observe(*graph, *resource, schema)?)
+                }
                 SupabaseOperation::ConfigureApi {
                     observed_digest, ..
                 } => observed_digest.clone(),
             };
-            self.target.apply(&observed_digest, &action)?;
+            self.controller.target.apply(&observed_digest, &action)?;
             Ok(())
         }
         .boxed()
@@ -395,7 +421,11 @@ where
             match command {
                 ControllerCommand::Reconcile(slice) => self.reconcile(slice).await,
                 ControllerCommand::Supersede(supersession) => {
-                    reconcile_absent(self, supersession.graph_id, &supersession.resources)
+                    let pass = SupabasePass {
+                        controller: self,
+                        slice: None,
+                    };
+                    reconcile_absent(&pass, supersession.graph_id, &supersession.resources)
                         .await
                         .map(|pass| match pass {
                             SlicePass::Acted => ControllerPass::Acted,
@@ -404,7 +434,11 @@ where
                         .map_err(|error| ControllerError::new(error.to_string()))
                 }
                 ControllerCommand::Retire(retirement) => {
-                    reconcile_absent(self, retirement.graph_id, &retirement.resources)
+                    let pass = SupabasePass {
+                        controller: self,
+                        slice: None,
+                    };
+                    reconcile_absent(&pass, retirement.graph_id, &retirement.resources)
                         .await
                         .map(|pass| match pass {
                             SlicePass::Acted => ControllerPass::Acted,
@@ -556,7 +590,11 @@ fn observation_digest(observed: &SupabaseObservation) -> String {
 
 #[derive(Clone, Debug)]
 pub struct LocalSupabaseConfig {
-    pub connection_url_file: PathBuf,
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    pub database: String,
+    pub password_file: PathBuf,
     pub api_url: String,
     pub database_url_ref: String,
     pub anon_key_ref: String,
@@ -574,9 +612,16 @@ impl LocalSupabaseTarget {
     }
 
     fn connect(&self) -> Result<postgres::Client, SupabaseError> {
-        let connection_url = fs::read_to_string(&self.config.connection_url_file)
+        let password = fs::read_to_string(&self.config.password_file)
             .map_err(|error| SupabaseError::Unavailable(error.to_string()))?;
-        postgres::Client::connect(connection_url.trim(), postgres::NoTls).map_err(database_error)
+        postgres::Config::new()
+            .host(&self.config.host)
+            .port(self.config.port)
+            .user(&self.config.user)
+            .password(password.trim())
+            .dbname(&self.config.database)
+            .connect(postgres::NoTls)
+            .map_err(database_error)
     }
 }
 
@@ -931,14 +976,6 @@ mod tests {
         sql: Arc<[u8]>,
     }
 
-    struct FakeBundles;
-
-    impl ComponentBundleResolver for FakeBundles {
-        fn resolve(&self, _component: &ComponentName) -> Result<BundleRef, SupabaseError> {
-            Ok(BundleRef::new(ContentDigest::digest(b"bundle")))
-        }
-    }
-
     impl ConfigClosureReader for FakeConfigFiles {
         fn read<'a>(
             &'a self,
@@ -1064,7 +1101,9 @@ mod tests {
         let slice = slice();
         for expected in ["ensure schema", "apply migration", "configure API"] {
             assert_eq!(
-                reconcile_slice(&controller, &slice).await.unwrap(),
+                reconcile_slice(&controller.for_slice(&slice), &slice)
+                    .await
+                    .unwrap(),
                 SlicePass::Acted,
                 "{expected} is the sole action in its pass"
             );
@@ -1082,7 +1121,9 @@ mod tests {
             SupabaseOperation::ConfigureApi { .. }
         ));
         assert!(matches!(
-            reconcile_slice(&controller, &slice).await.unwrap(),
+            reconcile_slice(&controller.for_slice(&slice), &slice)
+                .await
+                .unwrap(),
             SlicePass::Converged(_)
         ));
         assert_eq!(actions.lock().unwrap().len(), 3);
@@ -1093,19 +1134,21 @@ mod tests {
         let (controller, actions) = controller();
         let slice = slice();
         assert_eq!(
-            reconcile_slice(&controller, &slice).await.unwrap(),
+            reconcile_slice(&controller.for_slice(&slice), &slice)
+                .await
+                .unwrap(),
             SlicePass::Acted
         );
         assert_eq!(
-            reconcile_slice(&controller, &slice).await.unwrap(),
+            reconcile_slice(&controller.for_slice(&slice), &slice)
+                .await
+                .unwrap(),
             SlicePass::Acted
         );
         let resource = &slice.resources()[0];
-        let observed = controller
-            .observe(slice.graph_id(), resource)
-            .await
-            .unwrap();
-        let ReconcileDecision::Act(action) = controller
+        let pass = controller.for_slice(&slice);
+        let observed = pass.observe(slice.graph_id(), resource).await.unwrap();
+        let ReconcileDecision::Act(action) = pass
             .diff(slice.graph_id(), resource, ResourceGoal::Present, &observed)
             .unwrap()
         else {
@@ -1118,7 +1161,7 @@ mod tests {
             .unwrap()
             .exposed
             .insert("other_graph".into());
-        let error = controller
+        let error = pass
             .act(slice.graph_id(), resource, action)
             .await
             .unwrap_err();
@@ -1183,7 +1226,9 @@ mod tests {
             ),
             "catalog".into(),
         );
-        let error = reconcile_slice(&controller, &slice).await.unwrap_err();
+        let error = reconcile_slice(&controller.for_slice(&slice), &slice)
+            .await
+            .unwrap_err();
         assert!(
             error
                 .to_string()
@@ -1214,7 +1259,6 @@ mod tests {
             Arc::new(FakeConfigFiles {
                 sql: Arc::from(sql.as_bytes()),
             }),
-            Arc::new(FakeBundles),
         )
     }
 
@@ -1259,6 +1303,10 @@ mod tests {
             Generation::new(1).unwrap(),
             ContentDigest::digest(b"plan"),
             controller_name(CONTROLLER_NAME),
+            BTreeMap::from([(
+                ComponentName::new("catalog").unwrap(),
+                BundleRef::new(ContentDigest::digest(b"bundle")),
+            )]),
             vec![resource],
             Vec::new(),
         )

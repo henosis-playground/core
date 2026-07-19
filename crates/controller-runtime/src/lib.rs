@@ -11,9 +11,6 @@ use futures::future::BoxFuture;
 use henosis_types::ArtifactDigest;
 use henosis_types::ArtifactStore;
 use henosis_types::ArtifactStoreError;
-use henosis_types::BundleRef;
-use henosis_types::ConfigClosureError;
-use henosis_types::ConfigClosureReader;
 use henosis_types::ControllerCommand;
 use henosis_types::ControllerName;
 use henosis_types::ControllerPass;
@@ -30,7 +27,6 @@ use henosis_types::PublicationId;
 use henosis_types::Resource;
 use henosis_types::ResourceDisposition;
 use henosis_types::ResourceDispositionKind;
-use serde::Deserialize;
 use sha2::Digest as _;
 use sha2::Sha256;
 use thiserror::Error;
@@ -467,100 +463,6 @@ impl ArtifactStore for DirectoryArtifactStore {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct DirectoryConfigClosureReader {
-    root: PathBuf,
-}
-
-impl DirectoryConfigClosureReader {
-    #[must_use]
-    pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
-    }
-}
-
-#[derive(Deserialize)]
-struct BundleManifest {
-    config_files: Vec<ConfigFileManifestEntry>,
-}
-
-#[derive(Deserialize)]
-struct ConfigFileManifestEntry {
-    path: String,
-    sha256: String,
-}
-
-impl ConfigClosureReader for DirectoryConfigClosureReader {
-    fn read<'a>(
-        &'a self,
-        bundle: BundleRef,
-        path: &'a str,
-    ) -> BoxFuture<'a, Result<std::sync::Arc<[u8]>, ConfigClosureError>> {
-        Box::pin(async move {
-            if !valid_relative_path(path) {
-                return Err(ConfigClosureError::InvalidManifest {
-                    bundle,
-                    message: format!("invalid configuration-file path {path:?}"),
-                });
-            }
-            let directory = self.root.join(bundle.digest().to_string());
-            let manifest_path = directory.join("manifest.json");
-            let manifest_bytes =
-                fs::read(&manifest_path).map_err(|error| ConfigClosureError::Unavailable {
-                    bundle,
-                    path: path.to_owned(),
-                    message: format!("cannot read {}: {error}", manifest_path.display()),
-                })?;
-            let manifest: BundleManifest =
-                serde_json::from_slice(&manifest_bytes).map_err(|error| {
-                    ConfigClosureError::InvalidManifest {
-                        bundle,
-                        message: error.to_string(),
-                    }
-                })?;
-            let entry = manifest
-                .config_files
-                .into_iter()
-                .find(|entry| entry.path == path)
-                .ok_or_else(|| ConfigClosureError::Missing {
-                    bundle,
-                    path: path.to_owned(),
-                })?;
-            let expected: ArtifactDigest =
-                entry
-                    .sha256
-                    .parse()
-                    .map_err(|error| ConfigClosureError::InvalidManifest {
-                        bundle,
-                        message: format!("configuration file {path:?} has invalid digest: {error}"),
-                    })?;
-            let file_path = directory.join("files").join(path);
-            let bytes = fs::read(&file_path).map_err(|error| ConfigClosureError::Unavailable {
-                bundle,
-                path: path.to_owned(),
-                message: error.to_string(),
-            })?;
-            let actual = ArtifactDigest::from_bytes(Sha256::digest(&bytes).into());
-            if actual != expected {
-                return Err(ConfigClosureError::DigestMismatch {
-                    bundle,
-                    path: path.to_owned(),
-                    expected: expected.to_string(),
-                    actual: actual.to_string(),
-                });
-            }
-            Ok(std::sync::Arc::from(bytes))
-        })
-    }
-}
-
-fn valid_relative_path(path: &str) -> bool {
-    !path.is_empty()
-        && !path.starts_with('/')
-        && !path.contains('\\')
-        && path.split('/').all(|part| !matches!(part, "" | "." | ".."))
-}
-
 // === GIT TARGET ===
 
 #[derive(Clone, Debug)]
@@ -953,6 +855,7 @@ mod tests {
                 Generation::new(generation).unwrap(),
                 ContentDigest::digest(&[generation as u8]),
                 controller.clone(),
+                BTreeMap::new(),
                 Vec::new(),
                 Vec::new(),
             ))
@@ -1034,42 +937,5 @@ mod tests {
             repository.read_directory("env/test", "resource").unwrap(),
             BTreeMap::from([("state".into(), b"new".to_vec())])
         );
-    }
-
-    #[test]
-    fn config_closure_reader_round_trips_and_verifies_declared_bytes() {
-        let root = tempfile::tempdir().unwrap();
-        let bundle = BundleRef::new(ContentDigest::digest(b"bundle"));
-        let directory = root.path().join(bundle.digest().to_string());
-        let file = directory.join("files/migrations/001.sql");
-        fs::create_dir_all(file.parent().unwrap()).unwrap();
-        let sql = b"select 1;";
-        let digest = ArtifactDigest::from_bytes(Sha256::digest(sql).into());
-        fs::write(&file, sql).unwrap();
-        fs::write(
-            directory.join("manifest.json"),
-            serde_json::to_vec(&serde_json::json!({
-                "config_files": [{
-                    "path": "migrations/001.sql",
-                    "sha256": digest.to_string(),
-                    "size": sql.len(),
-                }]
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-
-        let reader = DirectoryConfigClosureReader::new(root.path());
-        assert_eq!(
-            block_on(reader.read(bundle, "migrations/001.sql"))
-                .unwrap()
-                .as_ref(),
-            sql
-        );
-        fs::write(file, b"changed").unwrap();
-        assert!(matches!(
-            block_on(reader.read(bundle, "migrations/001.sql")),
-            Err(ConfigClosureError::DigestMismatch { .. })
-        ));
     }
 }

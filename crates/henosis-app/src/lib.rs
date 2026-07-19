@@ -3,15 +3,42 @@
 mod bundle;
 mod operation;
 
-pub use bundle::{
-    ArtifactRequirement, BUNDLE_FORMAT_VERSION, BundleArtifact, BundleError, BundleManifestV1,
-    BundleRequest, BundleSetManifest, Bundler, BundlerIdentity, CompiledDependencyManifest,
-    ConfigFileEntry, ESBUILD_SHA256, ESBUILD_VERSION, EsbuildBundler, RUNTIME_API_VERSION,
-    VerifiedBundle, WorkloadArtifactKind, verify_bundle_directory,
-};
-pub use operation::{
-    ApplyGraph, ApplyOutcome, ArtifactBinding, ArtifactService, BlockedOn, BundlePin,
-    CheckoutService, CoreClient, GraphIntent, GraphOperation, GraphOutput, GraphPhase,
-    GraphSourcePolicy, GraphStatus, GraphSummary, OperationError, PreparedSource,
-    ResourceDisposition, SourceProvenance, SourceRequest,
-};
+pub use bundle::ArtifactRequirement;
+pub use bundle::BUNDLE_FORMAT_VERSION;
+pub use bundle::BundleArtifact;
+pub use bundle::BundleError;
+pub use bundle::BundleManifestV1;
+pub use bundle::BundleRequest;
+pub use bundle::BundleSetManifest;
+pub use bundle::Bundler;
+pub use bundle::BundlerIdentity;
+pub use bundle::CompiledDependencyManifest;
+pub use bundle::ConfigFileEntry;
+pub use bundle::ESBUILD_SHA256;
+pub use bundle::ESBUILD_VERSION;
+pub use bundle::EsbuildBundler;
+pub use bundle::RUNTIME_API_VERSION;
+pub use bundle::VerifiedBundle;
+pub use bundle::VerifiedBundleDirectory;
+pub use bundle::WorkloadArtifactKind;
+pub use bundle::verify_bundle_directory;
+pub use operation::ApplyGraph;
+pub use operation::ApplyOutcome;
+pub use operation::ArtifactBinding;
+pub use operation::ArtifactService;
+pub use operation::BlockedOn;
+pub use operation::BundlePin;
+pub use operation::CheckoutService;
+pub use operation::CoreClient;
+pub use operation::GraphIntent;
+pub use operation::GraphOperation;
+pub use operation::GraphOutput;
+pub use operation::GraphPhase;
+pub use operation::GraphSourcePolicy;
+pub use operation::GraphStatus;
+pub use operation::GraphSummary;
+pub use operation::OperationError;
+pub use operation::PreparedSource;
+pub use operation::ResourceDisposition;
+pub use operation::SourceProvenance;
+pub use operation::SourceRequest;

@@ -2,27 +2,186 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::time::Duration;
 
 use futures::FutureExt as _;
 use futures::future::BoxFuture;
-use henosis_controller_cloudflare::{
-    CloudflareAction, CloudflareError, CloudflareObservation, CloudflareTransport,
-    LiveCloudflareConfig, LiveCloudflareTransport, RouteObservation, TunnelObservation,
-    WorkerObservation,
-};
+use henosis_app::VerifiedBundleDirectory;
+use henosis_controller_cloudflare::CloudflareAction;
+use henosis_controller_cloudflare::CloudflareError;
+use henosis_controller_cloudflare::CloudflareObservation;
+use henosis_controller_cloudflare::CloudflareTransport;
+use henosis_controller_cloudflare::LiveCloudflareConfig;
+use henosis_controller_cloudflare::LiveCloudflareTransport;
+use henosis_controller_cloudflare::RouteObservation;
+use henosis_controller_cloudflare::TunnelObservation;
+use henosis_controller_cloudflare::WorkerObservation;
 use henosis_controller_k8s::K8sController;
-use henosis_controller_runtime::{
-    DirectoryArtifactStore, GitRepository, controller_name, output, publication_id, ready_report,
-};
-use henosis_evaluation_engine::{
-    BundleSource, EngineConfig, EvaluationEngine, ResourceContract, ResourceRegistry,
-};
-use henosis_types::{
-    BundleRef, Controller, ControllerCommand, ControllerError, ControllerName, ControllerPass,
-    ControllerReport, ControllerSlice, GraphId, KindVersion, OutputName, Resource, ResourceId,
-};
+use henosis_controller_runtime::ControllerSchedule;
+use henosis_controller_runtime::ControllerScheduleCompletion;
+use henosis_controller_runtime::DirectoryArtifactStore;
+use henosis_controller_runtime::GitRepository;
+use henosis_controller_runtime::ScheduledControllerPass;
+use henosis_controller_runtime::controller_name;
+use henosis_controller_runtime::output;
+use henosis_controller_runtime::publication_id;
+use henosis_controller_runtime::ready_report;
+use henosis_controller_supabase::LocalSupabaseConfig;
+use henosis_controller_supabase::LocalSupabaseTarget;
+use henosis_controller_supabase::SupabaseController;
+use henosis_evaluation_engine::BundleSource;
+use henosis_evaluation_engine::EngineConfig;
+use henosis_evaluation_engine::EvaluationEngine;
+use henosis_evaluation_engine::ResourceContract;
+use henosis_evaluation_engine::ResourceRegistry;
+use henosis_orchestrator::ControllerEffect;
+use henosis_types::BundleRef;
+use henosis_types::Controller;
+use henosis_types::ControllerCommand;
+use henosis_types::ControllerError;
+use henosis_types::ControllerName;
+use henosis_types::ControllerPass;
+use henosis_types::ControllerReport;
+use henosis_types::ControllerSlice;
+use henosis_types::GraphId;
+use henosis_types::KindVersion;
+use henosis_types::OutputName;
+use henosis_types::Resource;
+use henosis_types::ResourceId;
+use tokio::sync::mpsc;
+use tracing::error;
 use tracing::info;
+
+pub trait ControllerReportHandler: Send + Sync {
+    fn report(
+        &self,
+        report: ControllerReport,
+    ) -> BoxFuture<'_, anyhow::Result<Vec<ControllerEffect>>>;
+}
+
+#[derive(Clone)]
+pub struct ControllerDispatcher {
+    effects: mpsc::UnboundedSender<Vec<ControllerEffect>>,
+}
+
+impl ControllerDispatcher {
+    #[must_use]
+    pub fn start(
+        controllers: BTreeMap<ControllerName, Arc<dyn Controller>>,
+        reports: Arc<dyn ControllerReportHandler>,
+    ) -> Self {
+        let (effects, mut effect_receiver) = mpsc::unbounded_channel::<Vec<ControllerEffect>>();
+        let (completions, mut completion_receiver) =
+            mpsc::unbounded_channel::<(ScheduledControllerPass, anyhow::Result<ControllerPass>)>();
+        tokio::spawn(async move {
+            let controllers = Arc::new(controllers);
+            let mut schedule = ControllerSchedule::default();
+            loop {
+                tokio::select! {
+                    Some(incoming) = effect_receiver.recv() => {
+                        for effect in incoming {
+                            if let Some(key) = schedule.submit(
+                                effect.controller().clone(),
+                                effect.command().clone(),
+                            ) {
+                                spawn_controller_pass(
+                                    Arc::clone(&controllers),
+                                    schedule.pass(&key).expect("submitted lane has a pass"),
+                                    completions.clone(),
+                                );
+                            }
+                        }
+                    }
+                    Some((pass, outcome)) = completion_receiver.recv() => {
+                        let outcome = match outcome {
+                            Ok(outcome) => outcome,
+                            Err(error) => {
+                                error!(%error, "controller dispatch failed; retrying lane");
+                                if let Some(next) = schedule.pass(pass.key()) {
+                                    spawn_controller_pass(
+                                        Arc::clone(&controllers),
+                                        next,
+                                        completions.clone(),
+                                    );
+                                }
+                                continue;
+                            }
+                        };
+                        match schedule.complete(&pass, outcome) {
+                            ControllerScheduleCompletion::Continue => {
+                                if let Some(next) = schedule.pass(pass.key()) {
+                                    spawn_controller_pass(
+                                        Arc::clone(&controllers),
+                                        next,
+                                        completions.clone(),
+                                    );
+                                }
+                            }
+                            ControllerScheduleCompletion::Complete(None) => {}
+                            ControllerScheduleCompletion::Complete(Some(report)) => {
+                                match reports.report(report).await {
+                                    Ok(follow_up) => {
+                                        for effect in follow_up {
+                                            if let Some(key) = schedule.submit(
+                                                effect.controller().clone(),
+                                                effect.command().clone(),
+                                            ) {
+                                                spawn_controller_pass(
+                                                    Arc::clone(&controllers),
+                                                    schedule.pass(&key).expect(
+                                                        "submitted follow-up lane has a pass",
+                                                    ),
+                                                    completions.clone(),
+                                                );
+                                            }
+                                        }
+                                    }
+                                    Err(error) => error!(%error, "controller report failed"),
+                                }
+                            }
+                        }
+                    }
+                    else => break,
+                }
+            }
+        });
+        Self { effects }
+    }
+
+    pub fn dispatch(&self, effects: Vec<ControllerEffect>) {
+        if self.effects.send(effects).is_err() {
+            error!("controller dispatcher stopped");
+        }
+    }
+}
+
+fn spawn_controller_pass(
+    controllers: Arc<BTreeMap<ControllerName, Arc<dyn Controller>>>,
+    pass: ScheduledControllerPass,
+    completions: mpsc::UnboundedSender<(ScheduledControllerPass, anyhow::Result<ControllerPass>)>,
+) {
+    tokio::spawn(async move {
+        let outcome = async {
+            let controller = controllers.get(pass.key().controller()).ok_or_else(|| {
+                anyhow::anyhow!("no controller named {}", pass.key().controller())
+            })?;
+            if pass.key().controller().as_str() == "cloudflare" {
+                tokio::time::sleep(Duration::from_millis(1_500)).await;
+            }
+            controller
+                .execute(pass.command())
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))
+        }
+        .await;
+        if outcome.is_err() {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+        let _ = completions.send((pass, outcome));
+    });
+}
 
 pub struct ServerAssembly {
     pub bind: String,
@@ -42,9 +201,10 @@ pub fn from_environment() -> anyhow::Result<ServerAssembly> {
             .map_err(|_| anyhow::anyhow!("HENOSIS_DEPLOY_REMOTE is required"))?,
     );
     let engine_config = EngineConfig::default();
+    let bundles = Arc::new(VerifiedBundleDirectory::new(bundle_root.clone()));
     let evaluator: Arc<dyn henosis_types::Evaluator> = Arc::new(EvaluationEngine::new(
         Arc::new(FileBundleSource {
-            root: bundle_root.clone(),
+            bundles: Arc::clone(&bundles),
         }),
         Arc::new(BuiltinResourceRegistry),
         engine_config.clone(),
@@ -73,7 +233,37 @@ pub fn from_environment() -> anyhow::Result<ServerAssembly> {
         ))
     };
     controllers.insert(cloudflare.name().clone(), cloudflare);
-    let supabase: Arc<dyn Controller> = Arc::new(DemoSupabaseController::new());
+    let supabase: Arc<dyn Controller> = if std::env::var("HENOSIS_SUPABASE_LIVE").as_deref()
+        == Ok("1")
+    {
+        let target = LocalSupabaseTarget::new(LocalSupabaseConfig {
+            host: string_env("HENOSIS_SUPABASE_HOST", "supabase-db"),
+            port: string_env("HENOSIS_SUPABASE_PORT", "5432").parse()?,
+            user: string_env("HENOSIS_SUPABASE_USER", "postgres"),
+            database: string_env("HENOSIS_SUPABASE_DATABASE", "postgres"),
+            password_file: PathBuf::from(string_env(
+                "HENOSIS_SUPABASE_PASSWORD_FILE",
+                "/run/secrets/supabase-postgres-password",
+            )),
+            api_url: string_env("HENOSIS_SUPABASE_API_URL", "http://127.0.0.1:4484"),
+            database_url_ref: string_env(
+                "HENOSIS_SUPABASE_DATABASE_URL_REF",
+                "docker-secret://supabase-connection-url",
+            ),
+            anon_key_ref: string_env(
+                "HENOSIS_SUPABASE_ANON_KEY_REF",
+                "docker-secret://supabase-anon-key",
+            ),
+        });
+        info!("Supabase controller uses LIVE local Postgres/PostgREST target");
+        Arc::new(SupabaseController::new(target, bundles))
+    } else {
+        // LOUD PROTOTYPE FALLBACK: tests and setups without a local Supabase target
+        // retain the recorded controller. Set HENOSIS_SUPABASE_LIVE=1 to use
+        // the real target above.
+        info!("Supabase controller uses RECORDED fallback; set HENOSIS_SUPABASE_LIVE=1 for live");
+        Arc::new(DemoSupabaseController::new())
+    };
     controllers.insert(supabase.name().clone(), supabase);
 
     Ok(ServerAssembly {
@@ -85,8 +275,12 @@ pub fn from_environment() -> anyhow::Result<ServerAssembly> {
     })
 }
 
+fn string_env(name: &str, default: &str) -> String {
+    std::env::var(name).unwrap_or_else(|_| default.to_owned())
+}
+
 struct FileBundleSource {
-    root: PathBuf,
+    bundles: Arc<VerifiedBundleDirectory>,
 }
 
 impl BundleSource for FileBundleSource {
@@ -94,20 +288,11 @@ impl BundleSource for FileBundleSource {
         &self,
         bundle: BundleRef,
     ) -> BoxFuture<'_, Result<Arc<[u8]>, henosis_types::EvaluationError>> {
-        let path = self
-            .root
-            .join(bundle.digest().to_string())
-            .join("module.js");
         Box::pin(async move {
-            tokio::fs::read(&path)
-                .await
-                .map(Arc::<[u8]>::from)
-                .map_err(|error| {
-                    henosis_types::EvaluationError::new(format!(
-                        "cannot load bundle {}: {error}",
-                        path.display()
-                    ))
-                })
+            self.bundles
+                .verify(bundle)
+                .map(|verified| Arc::<[u8]>::from(verified.module))
+                .map_err(|error| henosis_types::EvaluationError::new(error.to_string()))
         })
     }
 }

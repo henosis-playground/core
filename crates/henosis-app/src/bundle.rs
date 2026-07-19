@@ -3,22 +3,30 @@ use std::collections::BTreeSet;
 use std::ffi::OsStr;
 use std::fs;
 use std::io::Write as _;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::path::Path;
+use std::path::PathBuf;
+use std::process::Command;
+use std::process::Stdio;
 use std::sync::LazyLock;
 
 use minicbor::Encoder;
 use regex::Regex;
-use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
-use tempfile::{Builder, TempPath};
-use walkdir::{DirEntry, WalkDir};
+use serde::Deserialize;
+use serde::Serialize;
+use sha2::Digest;
+use sha2::Sha256;
+use tempfile::Builder;
+use tempfile::TempPath;
+use walkdir::DirEntry;
+use walkdir::WalkDir;
 
 pub const BUNDLE_FORMAT_VERSION: u32 = 1;
 pub const RUNTIME_API_VERSION: &str = "henosis-component-api-v1";
 pub const ESBUILD_VERSION: &str = "0.27.0";
 pub const ESBUILD_SHA256: &str = "e4d41ef34045d7d1751c375cd4a90d07d929832f838830dc5212689a6567ee58";
-const ESBUILD_CONFIG: &str = "bundle=true;charset=utf8;external=henosis:*;format=esm;legal-comments=none;minify=false;packages=bundle;platform=browser;splitting=false;target=esnext;tree-shaking=true";
+const ESBUILD_CONFIG: &str = "bundle=true;charset=utf8;external=henosis:*;format=esm;\
+                              legal-comments=none;minify=false;packages=bundle;platform=browser;\
+                              splitting=false;target=esnext;tree-shaking=true";
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 const PACKAGED_ESBUILD: &[u8] = include_bytes!("../../../tools/esbuild/linux-x64/esbuild");
@@ -127,14 +135,18 @@ pub enum BundleError {
         source: serde_json::Error,
     },
     #[error(
-        "error[HENOSIS_BUNDLE_FILE_MANIFEST]: component `{component}` has a non-static files manifest\n  --> {source_path}\n  = help: declare configuration files directly as config.file(\"path\") calls"
+        "error[HENOSIS_BUNDLE_FILE_MANIFEST]: component `{component}` has a non-static files \
+         manifest\n  --> {source_path}\n  = help: declare configuration files directly as \
+         config.file(\"path\") calls"
     )]
     InvalidFileManifest {
         component: String,
         source_path: PathBuf,
     },
     #[error(
-        "error[HENOSIS_BUNDLE_FILE_MISSING]: component `{component}` declares missing native {kind} `{path}`\n  --> {source_path}:{line}:{column}\n   |\n  = help: create the referenced path or remove it from the component files manifest"
+        "error[HENOSIS_BUNDLE_FILE_MISSING]: component `{component}` declares missing native \
+         {kind} `{path}`\n  --> {source_path}:{line}:{column}\n   |\n  = help: create the \
+         referenced path or remove it from the component files manifest"
     )]
     MissingNativeFile {
         component: String,
@@ -145,7 +157,9 @@ pub enum BundleError {
         column: usize,
     },
     #[error(
-        "error[HENOSIS_BUNDLE_FILE_PATH]: component `{component}` declares invalid native path `{path}`\n  --> {source_path}:{line}:{column}\n  = help: use a normalized repository-relative path without dot, parent, empty, or backslash segments"
+        "error[HENOSIS_BUNDLE_FILE_PATH]: component `{component}` declares invalid native path \
+         `{path}`\n  --> {source_path}:{line}:{column}\n  = help: use a normalized \
+         repository-relative path without dot, parent, empty, or backslash segments"
     )]
     InvalidNativePath {
         component: String,
@@ -155,7 +169,9 @@ pub enum BundleError {
         column: usize,
     },
     #[error(
-        "error[HENOSIS_BUNDLE_FILE_DIGEST]: component `{component}` expected {expected} for `{path}`, but the file hashes to {actual}\n  --> {source_path}:{line}:{column}\n  = help: update the optional expected digest or restore the intended file bytes"
+        "error[HENOSIS_BUNDLE_FILE_DIGEST]: component `{component}` expected {expected} for \
+         `{path}`, but the file hashes to {actual}\n  --> {source_path}:{line}:{column}\n  = \
+         help: update the optional expected digest or restore the intended file bytes"
     )]
     NativeDigestMismatch {
         component: String,
@@ -167,14 +183,17 @@ pub enum BundleError {
         column: usize,
     },
     #[error(
-        "error[HENOSIS_WORKER_SOURCE]: component `{component}` has a non-static Worker source\n  --> {source_path}\n  = help: write source: {{ entry: \"workers/name.ts\" }} with an optional static assets path"
+        "error[HENOSIS_WORKER_SOURCE]: component `{component}` has a non-static Worker source\n  \
+         --> {source_path}\n  = help: write source: {{ entry: \"workers/name.ts\" }} with an \
+         optional static assets path"
     )]
     InvalidWorkerSource {
         component: String,
         source_path: PathBuf,
     },
     #[error(
-        "error[HENOSIS_ARTIFACT_MISSING]: component `{component}` declares missing {kind} source `{path}`\n  --> {source_path}:{line}:{column}"
+        "error[HENOSIS_ARTIFACT_MISSING]: component `{component}` declares missing {kind} source \
+         `{path}`\n  --> {source_path}:{line}:{column}"
     )]
     MissingArtifactSource {
         component: String,
@@ -261,7 +280,8 @@ pub struct BundleArtifact {
     pub manifest: PathBuf,
     pub executable_sha256: String,
     pub artifact_requirements: Vec<ArtifactRequirement>,
-    /// Canonical source and package files observed while producing this component bundle.
+    /// Canonical source and package files observed while producing this
+    /// component bundle.
     #[serde(default)]
     pub dependencies: Vec<PathBuf>,
 }
@@ -931,7 +951,10 @@ fn generated_entry_source(
         })
         .collect::<Vec<_>>();
     format!(
-        "import componentDefinition from {};\n{imports}import {{ createBundle }} from \"@henosis/core\";\nconst bundle = createBundle(componentDefinition, {}, {{ {} }}, [{}], {});\nexport const protocolVersion = bundle.protocolVersion;\nexport const component = bundle.component;\nexport const evaluate = bundle.evaluate;\n",
+        "import componentDefinition from {};\n{imports}import {{ createBundle }} from \
+         \"@henosis/core\";\nconst bundle = createBundle(componentDefinition, {}, {{ {} }}, [{}], \
+         {});\nexport const protocolVersion = bundle.protocolVersion;\nexport const component = \
+         bundle.component;\nexport const evaluate = bundle.evaluate;\n",
         serde_json::to_string(import_path).expect("path string is JSON encodable"),
         serde_json::to_string(closure_wire).expect("closure manifest is JSON encodable"),
         entries.join(", "),
@@ -1158,7 +1181,8 @@ fn inspect_compiled_dependencies(
         .args([
             "--input-type=module",
             "--eval",
-            "const module = await import(process.argv[1]); process.stdout.write(JSON.stringify(module.component.compiledDependencies ?? []));",
+            "const module = await import(process.argv[1]); \
+             process.stdout.write(JSON.stringify(module.component.compiledDependencies ?? []));",
             &module_url,
         ])
         .output()
@@ -1390,6 +1414,90 @@ fn bundle_id(manifest: &BundleManifestV1) -> Result<String, BundleError> {
     Ok(sha256(&bytes))
 }
 
+#[derive(Clone, Debug)]
+pub struct VerifiedBundleDirectory {
+    root: PathBuf,
+}
+
+impl VerifiedBundleDirectory {
+    #[must_use]
+    pub fn new(root: impl Into<PathBuf>) -> Self {
+        Self { root: root.into() }
+    }
+
+    pub fn verify(&self, bundle: henosis_types::BundleRef) -> Result<VerifiedBundle, BundleError> {
+        let bundle_id = bundle.digest().to_string();
+        verify_bundle_directory(&self.root.join(&bundle_id), &bundle_id)
+    }
+}
+
+impl henosis_types::ConfigClosureReader for VerifiedBundleDirectory {
+    fn read<'a>(
+        &'a self,
+        bundle: henosis_types::BundleRef,
+        path: &'a str,
+    ) -> futures::future::BoxFuture<
+        'a,
+        Result<std::sync::Arc<[u8]>, henosis_types::ConfigClosureError>,
+    > {
+        Box::pin(async move {
+            if !valid_repository_path(path) {
+                return Err(henosis_types::ConfigClosureError::InvalidManifest {
+                    bundle,
+                    message: format!("invalid configuration-file path {path:?}"),
+                });
+            }
+            let verified = self.verify(bundle).map_err(|error| {
+                henosis_types::ConfigClosureError::InvalidManifest {
+                    bundle,
+                    message: error.to_string(),
+                }
+            })?;
+            let entry = verified
+                .manifest
+                .config_files
+                .iter()
+                .find(|entry| entry.path == path)
+                .ok_or_else(|| henosis_types::ConfigClosureError::Missing {
+                    bundle,
+                    path: path.to_owned(),
+                })?;
+            let file_path = self
+                .root
+                .join(bundle.digest().to_string())
+                .join("files")
+                .join(path);
+            let bytes = fs::read(&file_path).map_err(|error| {
+                henosis_types::ConfigClosureError::Unavailable {
+                    bundle,
+                    path: path.to_owned(),
+                    message: format!("cannot read {}: {error}", file_path.display()),
+                }
+            })?;
+            let actual = format!("sha256:{}", sha256(&bytes));
+            if actual != entry.sha256 {
+                return Err(henosis_types::ConfigClosureError::DigestMismatch {
+                    bundle,
+                    path: path.to_owned(),
+                    expected: entry.sha256.clone(),
+                    actual,
+                });
+            }
+            if bytes.len() as u64 != entry.size {
+                return Err(henosis_types::ConfigClosureError::InvalidManifest {
+                    bundle,
+                    message: format!(
+                        "configuration file {path:?} declares {} bytes, but stores {}",
+                        entry.size,
+                        bytes.len()
+                    ),
+                });
+            }
+            Ok(std::sync::Arc::from(bytes))
+        })
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct VerifiedBundle {
     pub bundle_id: String,
@@ -1518,7 +1626,8 @@ mod tests {
         fs::create_dir_all(repo.path().join("node_modules/@henosis/core")).unwrap();
         fs::write(
             repo.path().join("src/web.ts"),
-            "import { defineComponent } from '@henosis/core'; export default defineComponent({ name: 'web', outputs: {}, build() { return {}; } });",
+            "import { defineComponent } from '@henosis/core'; export default defineComponent({ \
+             name: 'web', outputs: {}, build() { return {}; } });",
         )
         .unwrap();
         fs::write(
@@ -1528,7 +1637,11 @@ mod tests {
         .unwrap();
         fs::write(
             repo.path().join("node_modules/@henosis/core/index.js"),
-            "export function defineComponent(spec) { return spec; } export function createBundle(component) { return { protocolVersion: 1, component: { name: component.name, inputs: {}, outputs: {} }, evaluate() { return { protocolVersion: 1, status: 'complete', resources: [], outputs: {}, observedOutputs: {}, reads: [] }; } }; }",
+            "export function defineComponent(spec) { return spec; } export function \
+             createBundle(component) { return { protocolVersion: 1, component: { name: \
+             component.name, inputs: {}, outputs: {} }, evaluate() { return { protocolVersion: 1, \
+             status: 'complete', resources: [], outputs: {}, observedOutputs: {}, reads: [] }; } \
+             }; }",
         )
         .unwrap();
         fs::write(
@@ -1572,7 +1685,9 @@ mod tests {
         fs::create_dir_all(repo.path().join("node_modules/@henosis/core")).unwrap();
         fs::write(
             repo.path().join("src/database.ts"),
-            "import { config, defineComponent } from '@henosis/core'; export default defineComponent({ name: 'database', files: [config.file('migrations/001.sql')], outputs: {}, build() { return {}; } });",
+            "import { config, defineComponent } from '@henosis/core'; export default \
+             defineComponent({ name: 'database', files: [config.file('migrations/001.sql')], \
+             outputs: {}, build() { return {}; } });",
         )
         .unwrap();
         fs::write(
@@ -1582,7 +1697,11 @@ mod tests {
         .unwrap();
         fs::write(
             repo.path().join("node_modules/@henosis/core/index.js"),
-            "export const config = { file(path) { return { path }; } }; export function defineComponent(spec) { return spec; } export function createBundle(component, files) { return { protocolVersion: 1, component: { name: component.name, inputs: {}, outputs: {}, files }, evaluate() { return { protocolVersion: 1, status: 'complete', resources: [], outputs: {}, observedOutputs: {}, reads: [] }; } }; }",
+            "export const config = { file(path) { return { path }; } }; export function \
+             defineComponent(spec) { return spec; } export function createBundle(component, \
+             files) { return { protocolVersion: 1, component: { name: component.name, inputs: {}, \
+             outputs: {}, files }, evaluate() { return { protocolVersion: 1, status: 'complete', \
+             resources: [], outputs: {}, observedOutputs: {}, reads: [] }; } }; }",
         )
         .unwrap();
         fs::write(repo.path().join("migrations/001.sql"), "select 1;\n").unwrap();
@@ -1625,7 +1744,11 @@ mod tests {
         let entry = repo.path().join("src/web.ts");
         fs::write(
             &entry,
-            "import a from '@henosis/service-a'; import { worker } from '@henosis/platform-cloudflare'; export default defineComponent({ name: 'web', outputs: {}, build(ctx) { ctx.emit(worker.create('web', { source: { entry: 'workers/web.ts', assets: 'public' }, vars: { BACKEND_URL: a.outputs.api.value } })); return {}; } });",
+            "import a from '@henosis/service-a'; import { worker } from \
+             '@henosis/platform-cloudflare'; export default defineComponent({ name: 'web', \
+             outputs: {}, build(ctx) { ctx.emit(worker.create('web', { source: { entry: \
+             'workers/web.ts', assets: 'public' }, vars: { BACKEND_URL: a.outputs.api.value } \
+             })); return {}; } });",
         )
         .unwrap();
         let component = ComponentSource {
@@ -1641,7 +1764,8 @@ mod tests {
         let entry_source = generated_entry_source("./src/web.ts", &[], &inputs, &[], "revision");
         assert!(entry_source.contains("\"aApi\": __henosis_producer_0.outputs.api"));
         assert!(entry_source.contains(
-            "\"workerEntry\": { source: \"artifact\", kind: \"cloudflare-worker\", path: \"workers/web.ts\" }"
+            "\"workerEntry\": { source: \"artifact\", kind: \"cloudflare-worker\", path: \
+             \"workers/web.ts\" }"
         ));
         assert!(entry_source.contains(
             "\"workerAssets\": { source: \"artifact\", kind: \"static-assets\", path: \"public\" }"
@@ -1656,12 +1780,15 @@ mod tests {
         fs::create_dir_all(repo.path().join("node_modules/@henosis/service-a")).unwrap();
         fs::write(
             repo.path().join("src/web.ts"),
-            "import { defineComponent } from '@henosis/core';\nimport { readApi } from './helper';\nexport default defineComponent({ name: 'web', outputs: {}, build() { readApi(); return {}; } });",
+            "import { defineComponent } from '@henosis/core';\nimport { readApi } from \
+             './helper';\nexport default defineComponent({ name: 'web', outputs: {}, build() { \
+             readApi(); return {}; } });",
         )
         .unwrap();
         fs::write(
             repo.path().join("src/helper.ts"),
-            "import producer from '@henosis/service-a'; export function readApi() { return producer.outputs.api.value; }",
+            "import producer from '@henosis/service-a'; export function readApi() { return \
+             producer.outputs.api.value; }",
         )
         .unwrap();
         fs::write(
@@ -1671,7 +1798,17 @@ mod tests {
         .unwrap();
         fs::write(
             repo.path().join("node_modules/@henosis/core/index.js"),
-            "export function defineComponent(spec) { return spec; } export function createBundle(component, files, inputs, dependencies) { return { protocolVersion: 1, component: { name: component.name, inputs: Object.fromEntries(Object.entries(inputs).map(([name, handle]) => [name, { component: handle.component, output: handle.output, optional: handle.optional }])), outputs: {}, compiledDependencies: dependencies.map(({ component, revision, consumedOutputs }) => ({ component: component.name, revision, consumedOutputs, outputs: Object.fromEntries(Object.entries(component.outputs).map(([name, handle]) => [name, { availability: 'static', optional: handle.optional, schema: handle.schema }])) })) }, evaluate() { return { protocolVersion: 1, status: 'complete', resources: [], outputs: {}, observedOutputs: {}, reads: [] }; } }; }",
+            "export function defineComponent(spec) { return spec; } export function \
+             createBundle(component, files, inputs, dependencies) { return { protocolVersion: 1, \
+             component: { name: component.name, inputs: \
+             Object.fromEntries(Object.entries(inputs).map(([name, handle]) => [name, { \
+             component: handle.component, output: handle.output, optional: handle.optional }])), \
+             outputs: {}, compiledDependencies: dependencies.map(({ component, revision, \
+             consumedOutputs }) => ({ component: component.name, revision, consumedOutputs, \
+             outputs: Object.fromEntries(Object.entries(component.outputs).map(([name, handle]) \
+             => [name, { availability: 'static', optional: handle.optional, schema: handle.schema \
+             }])) })) }, evaluate() { return { protocolVersion: 1, status: 'complete', resources: \
+             [], outputs: {}, observedOutputs: {}, reads: [] }; } }; }",
         )
         .unwrap();
         fs::write(
@@ -1726,7 +1863,10 @@ mod tests {
         .unwrap();
         fs::write(
             repo.path().join("src/web.ts"),
-            "import { defineComponent } from '@henosis/core'; import { worker } from '@henosis/platform-cloudflare'; export default defineComponent({ name: 'web', outputs: {}, build(ctx) { ctx.emit(worker.create('web', { source: { entry: 'workers/web.ts' } })); return {}; } });",
+            "import { defineComponent } from '@henosis/core'; import { worker } from \
+             '@henosis/platform-cloudflare'; export default defineComponent({ name: 'web', \
+             outputs: {}, build(ctx) { ctx.emit(worker.create('web', { source: { entry: \
+             'workers/web.ts' } })); return {}; } });",
         )
         .unwrap();
         fs::write(
@@ -1736,7 +1876,11 @@ mod tests {
         .unwrap();
         fs::write(
             repo.path().join("node_modules/@henosis/core/index.js"),
-            "export function defineComponent(spec) { return spec; } export function createBundle(component) { return { protocolVersion: 1, component: { name: component.name, inputs: {}, outputs: {} }, evaluate() { return { protocolVersion: 1, status: 'complete', resources: [], outputs: {}, observedOutputs: {}, reads: [] }; } }; }",
+            "export function defineComponent(spec) { return spec; } export function \
+             createBundle(component) { return { protocolVersion: 1, component: { name: \
+             component.name, inputs: {}, outputs: {} }, evaluate() { return { protocolVersion: 1, \
+             status: 'complete', resources: [], outputs: {}, observedOutputs: {}, reads: [] }; } \
+             }; }",
         )
         .unwrap();
         fs::write(
@@ -1746,8 +1890,10 @@ mod tests {
         )
         .unwrap();
         fs::write(
-            repo.path().join("node_modules/@henosis/platform-cloudflare/index.js"),
-            "export const worker = { create(name, body) { return { kind: 'cloudflare/worker@1', name, body, outputs: {}, configFiles: [] }; } };",
+            repo.path()
+                .join("node_modules/@henosis/platform-cloudflare/index.js"),
+            "export const worker = { create(name, body) { return { kind: 'cloudflare/worker@1', \
+             name, body, outputs: {}, configFiles: [] }; } };",
         )
         .unwrap();
         fs::write(

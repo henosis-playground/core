@@ -10,9 +10,7 @@ use henosis_controller_cloudflare::CloudflareController;
 use henosis_controller_k8s::K8sController;
 use henosis_controller_runtime::ControllerSchedule;
 use henosis_controller_runtime::ControllerScheduleCompletion;
-use henosis_controller_supabase::ComponentBundleResolver;
 use henosis_controller_supabase::SupabaseController;
-use henosis_controller_supabase::SupabaseError;
 use henosis_orchestrator::Command;
 use henosis_orchestrator::Core;
 use henosis_orchestrator::MaterializedCore;
@@ -145,11 +143,7 @@ impl RealControllerWorld {
             trace: TraceRecorder::new(seed),
             k8s: K8sController::new(k8s_target.clone()),
             cloudflare: CloudflareController::new(cloudflare_target.clone()),
-            supabase: SupabaseController::new(
-                supabase_target.clone(),
-                Arc::new(NoConfigFiles),
-                Arc::new(NoBundles),
-            ),
+            supabase: SupabaseController::new(supabase_target.clone(), Arc::new(NoConfigFiles)),
             k8s_target,
             cloudflare_target,
             supabase_target,
@@ -272,11 +266,8 @@ impl RealControllerWorld {
                 self.cloudflare = CloudflareController::new(self.cloudflare_target.clone());
             }
             "supabase" => {
-                self.supabase = SupabaseController::new(
-                    self.supabase_target.clone(),
-                    Arc::new(NoConfigFiles),
-                    Arc::new(NoBundles),
-                );
+                self.supabase =
+                    SupabaseController::new(self.supabase_target.clone(), Arc::new(NoConfigFiles));
             }
             _ => panic!("unknown fixture controller {controller}"),
         }
@@ -737,16 +728,6 @@ impl ConfigClosureReader for NoConfigFiles {
                 path: path.to_owned(),
             })
         })
-    }
-}
-
-struct NoBundles;
-
-impl ComponentBundleResolver for NoBundles {
-    fn resolve(&self, _component: &ComponentName) -> Result<BundleRef, SupabaseError> {
-        Err(SupabaseError::Plan(
-            "fixture has no migration bundles".to_owned(),
-        ))
     }
 }
 

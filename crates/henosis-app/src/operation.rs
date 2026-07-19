@@ -1,11 +1,17 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::future::Future;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
-use crate::{ArtifactRequirement, BundleError, BundleRequest, Bundler};
+use crate::ArtifactRequirement;
+use crate::BundleError;
+use crate::BundleRequest;
+use crate::Bundler;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BundlePin {
@@ -241,7 +247,8 @@ pub enum OperationError {
     #[error("artifact binding `{component}.{input}` was produced more than once")]
     DuplicateArtifact { component: String, input: String },
     #[error(
-        "artifact binding `{component}.{input}` has kind {actual:?}, but the bundle requires {expected:?}"
+        "artifact binding `{component}.{input}` has kind {actual:?}, but the bundle requires \
+         {expected:?}"
     )]
     IncompatibleArtifact {
         component: String,

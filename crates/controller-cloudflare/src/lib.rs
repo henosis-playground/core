@@ -710,6 +710,7 @@ mod tests {
             Generation::new(1).unwrap(),
             ContentDigest::digest(b"plan"),
             controller_name(CONTROLLER_NAME),
+            BTreeMap::new(),
             vec![resource],
             Vec::new(),
         )

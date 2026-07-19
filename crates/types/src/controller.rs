@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use futures::future::BoxFuture;
 use iddqd::IdOrdItem;
 use iddqd::IdOrdMap;
@@ -6,6 +8,8 @@ use serde::Deserialize;
 use serde::Serialize;
 use thiserror::Error;
 
+use crate::BundleRef;
+use crate::ComponentName;
 use crate::ContentDigest;
 use crate::ControllerName;
 use crate::Generation;
@@ -22,6 +26,7 @@ pub struct ControllerSlice {
     generation: Generation,
     plan_digest: ContentDigest,
     controller: ControllerName,
+    bundles: BTreeMap<ComponentName, BundleRef>,
     resources: Vec<Resource>,
     superseded: Vec<Resource>,
 }
@@ -33,6 +38,7 @@ impl ControllerSlice {
         generation: Generation,
         plan_digest: ContentDigest,
         controller: ControllerName,
+        bundles: BTreeMap<ComponentName, BundleRef>,
         mut resources: Vec<Resource>,
         mut superseded: Vec<Resource>,
     ) -> Self {
@@ -44,6 +50,7 @@ impl ControllerSlice {
             generation,
             plan_digest,
             controller,
+            bundles,
             resources,
             superseded,
         }
@@ -67,6 +74,11 @@ impl ControllerSlice {
     #[must_use]
     pub const fn controller(&self) -> &ControllerName {
         &self.controller
+    }
+
+    #[must_use]
+    pub fn bundle(&self, component: &ComponentName) -> Option<BundleRef> {
+        self.bundles.get(component).copied()
     }
 
     #[must_use]
