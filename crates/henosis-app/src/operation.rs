@@ -514,3 +514,65 @@ fn validate_bindings(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pin(digest: &str, source: Option<SourceProvenance>) -> BundlePin {
+        BundlePin {
+            component: "web".to_owned(),
+            bundle_id: "a".repeat(64),
+            input_bindings: BTreeMap::from([(
+                "workerArtifact".to_owned(),
+                serde_json::json!(digest),
+            )]),
+            source,
+        }
+    }
+
+    #[test]
+    fn provenance_does_not_create_a_deployable_change() {
+        let old = pin("sha256:11", None);
+        let new = pin(
+            "sha256:11",
+            Some(SourceProvenance::Local {
+                repository: None,
+                base_revision: None,
+                dirty: true,
+            }),
+        );
+        assert!(same_deployable_pins(&[old], &[new]));
+    }
+
+    #[test]
+    fn artifact_binding_change_is_deployable() {
+        let mut current = GraphStatus::planning("graph_test", 1);
+        current.bundles = vec![pin("sha256:11", None)];
+        let desired = vec![pin("sha256:22", None)];
+        assert_eq!(changed_component_names(Some(&current), &desired), ["web"]);
+    }
+
+    #[test]
+    fn duplicate_artifact_bindings_are_rejected() {
+        let requirement = ArtifactRequirement {
+            component: "web".to_owned(),
+            input: "workerArtifact".to_owned(),
+            kind: crate::WorkloadArtifactKind::CloudflareWorker,
+            path: "worker.ts".to_owned(),
+            source_path: PathBuf::from("component.ts"),
+            line: 1,
+            column: 1,
+        };
+        let binding = ArtifactBinding {
+            component: requirement.component.clone(),
+            input: requirement.input.clone(),
+            kind: requirement.kind,
+            digest: "sha256:11".to_owned(),
+            source: PathBuf::from("worker.ts"),
+            stored: PathBuf::from("artifacts/11"),
+        };
+        let error = validate_bindings(&[requirement], &[binding.clone(), binding]).unwrap_err();
+        assert!(matches!(error, OperationError::DuplicateArtifact { .. }));
+    }
+}
