@@ -344,6 +344,7 @@ pub enum ControllerPass {
     Acted,
     Converged(Option<ControllerReport>),
     Failed(ControllerReport),
+    Retryable(String),
 }
 
 pub trait Controller: Send + Sync {

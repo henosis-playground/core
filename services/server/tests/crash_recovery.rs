@@ -252,7 +252,23 @@ fn spawn_server(
         .env("S2_BASIN_ENDPOINT", basin_endpoint)
         .env("S2_BASIN", basin)
         .env("RUST_LOG", "henosis=error")
-        .env_remove("HENOSIS_CLOUDFLARE_LIVE")
+        .env("HENOSIS_CLOUDFLARE_LIVE", "1")
+        .env("HENOSIS_ARTIFACT_ROOT", bundle_root.join("artifacts"))
+        .env("HENOSIS_SUPABASE_LIVE", "1")
+        .env("HENOSIS_SUPABASE_HOST", "127.0.0.1")
+        .env("HENOSIS_SUPABASE_PORT", "5432")
+        .env("HENOSIS_SUPABASE_USER", "postgres")
+        .env("HENOSIS_SUPABASE_DATABASE", "postgres")
+        .env(
+            "HENOSIS_SUPABASE_PASSWORD_FILE",
+            bundle_root.join("unused-supabase-password"),
+        )
+        .env("HENOSIS_SUPABASE_API_URL", "http://127.0.0.1:4484")
+        .env(
+            "HENOSIS_SUPABASE_DATABASE_URL_REF",
+            "test://supabase/database",
+        )
+        .env("HENOSIS_SUPABASE_ANON_KEY_REF", "test://supabase/anon")
         .spawn()
         .expect("spawn real core server")
 }

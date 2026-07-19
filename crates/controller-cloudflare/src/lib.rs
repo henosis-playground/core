@@ -185,6 +185,9 @@ where
             )
             .map(|report| ControllerPass::Converged(Some(report)))
             .map_err(|error| ControllerError::new(error.to_string())),
+            Err(CloudflareError::Unavailable(message)) => {
+                Ok(ControllerPass::Retryable(message))
+            }
             Err(error) => failed_report(slice, error.to_string())
                 .map(ControllerPass::Failed)
                 .map_err(|report_error| ControllerError::new(report_error.to_string())),

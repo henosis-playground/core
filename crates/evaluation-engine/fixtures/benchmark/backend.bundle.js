@@ -563,7 +563,9 @@ var component = Object.freeze({
   ])
 });
 var evaluate = bundle.evaluate;
+var bundleContract = { declaredCapabilities: [], configFiles: [], artifactRequirements: [] };
 export {
+  bundleContract,
   component,
   evaluate,
   protocolVersion

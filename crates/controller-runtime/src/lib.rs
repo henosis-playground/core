@@ -238,17 +238,46 @@ impl ScheduledControllerPass {
     }
 }
 
-#[allow(clippy::large_enum_variant)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ScheduledControllerReport {
+    key: ControllerWorkKey,
+    revision: u64,
+    report: ControllerReport,
+}
+
+impl ScheduledControllerReport {
+    #[must_use]
+    pub const fn key(&self) -> &ControllerWorkKey {
+        &self.key
+    }
+
+    #[must_use]
+    pub const fn report(&self) -> &ControllerReport {
+        &self.report
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ControllerScheduleCompletion {
     Continue,
-    Complete(Option<ControllerReport>),
+    Report(ScheduledControllerReport),
+    Retry { attempt: u32, message: String },
+    Complete,
+}
+
+#[derive(Clone, Debug)]
+enum ScheduledControllerWorkState {
+    Ready,
+    InFlight,
+    Reporting(ControllerReport),
 }
 
 #[derive(Clone, Debug)]
 struct ScheduledControllerWork {
     revision: u64,
     command: ControllerCommand,
+    retry_attempt: u32,
+    state: ScheduledControllerWorkState,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -269,20 +298,35 @@ impl ControllerSchedule {
             controller,
         };
         self.next_revision = self.next_revision.wrapping_add(1);
-        let starts_lane = !self.work.contains_key(&key);
-        self.work.insert(
-            key.clone(),
-            ScheduledControllerWork {
-                revision: self.next_revision,
-                command,
-            },
-        );
-        starts_lane.then_some(key)
+        match self.work.get_mut(&key) {
+            Some(work) => {
+                work.revision = self.next_revision;
+                work.command = command;
+                work.retry_attempt = 0;
+                None
+            }
+            None => {
+                self.work.insert(
+                    key.clone(),
+                    ScheduledControllerWork {
+                        revision: self.next_revision,
+                        command,
+                        retry_attempt: 0,
+                        state: ScheduledControllerWorkState::Ready,
+                    },
+                );
+                Some(key)
+            }
+        }
     }
 
     #[must_use]
-    pub fn pass(&self, key: &ControllerWorkKey) -> Option<ScheduledControllerPass> {
-        let work = self.work.get(key)?;
+    pub fn pass(&mut self, key: &ControllerWorkKey) -> Option<ScheduledControllerPass> {
+        let work = self.work.get_mut(key)?;
+        if !matches!(work.state, ScheduledControllerWorkState::Ready) {
+            return None;
+        }
+        work.state = ScheduledControllerWorkState::InFlight;
         Some(ScheduledControllerPass {
             key: key.clone(),
             revision: work.revision,
@@ -295,27 +339,74 @@ impl ControllerSchedule {
         pass: &ScheduledControllerPass,
         outcome: ControllerPass,
     ) -> ControllerScheduleCompletion {
-        let Some(current) = self.work.get(&pass.key) else {
-            return ControllerScheduleCompletion::Complete(None);
+        let Some(current) = self.work.get_mut(&pass.key) else {
+            return ControllerScheduleCompletion::Complete;
         };
         if current.revision != pass.revision {
+            current.state = ScheduledControllerWorkState::Ready;
             return ControllerScheduleCompletion::Continue;
         }
         match outcome {
-            ControllerPass::Acted => ControllerScheduleCompletion::Continue,
-            ControllerPass::Converged(report) => {
-                self.work.remove(&pass.key);
-                ControllerScheduleCompletion::Complete(report)
+            ControllerPass::Acted => {
+                current.retry_attempt = 0;
+                current.state = ScheduledControllerWorkState::Ready;
+                ControllerScheduleCompletion::Continue
             }
-            ControllerPass::Failed(_) => ControllerScheduleCompletion::Continue,
+            ControllerPass::Converged(Some(report)) | ControllerPass::Failed(report) => {
+                current.retry_attempt = 0;
+                current.state = ScheduledControllerWorkState::Reporting(report.clone());
+                ControllerScheduleCompletion::Report(ScheduledControllerReport {
+                    key: pass.key.clone(),
+                    revision: pass.revision,
+                    report,
+                })
+            }
+            ControllerPass::Converged(None) => {
+                self.work.remove(&pass.key);
+                ControllerScheduleCompletion::Complete
+            }
+            ControllerPass::Retryable(message) => {
+                current.retry_attempt = current.retry_attempt.saturating_add(1);
+                current.state = ScheduledControllerWorkState::Ready;
+                ControllerScheduleCompletion::Retry {
+                    attempt: current.retry_attempt,
+                    message,
+                }
+            }
+        }
+    }
+
+    pub fn acknowledge_report(
+        &mut self,
+        delivered: &ScheduledControllerReport,
+    ) -> ControllerScheduleCompletion {
+        let Some(current) = self.work.get_mut(&delivered.key) else {
+            return ControllerScheduleCompletion::Complete;
+        };
+        let ScheduledControllerWorkState::Reporting(report) = &current.state else {
+            return ControllerScheduleCompletion::Complete;
+        };
+        if report != &delivered.report {
+            return ControllerScheduleCompletion::Complete;
+        }
+        if current.revision == delivered.revision {
+            self.work.remove(&delivered.key);
+            ControllerScheduleCompletion::Complete
+        } else {
+            current.state = ScheduledControllerWorkState::Ready;
+            ControllerScheduleCompletion::Continue
         }
     }
 
     pub fn passes(&self) -> impl Iterator<Item = ScheduledControllerPass> + '_ {
-        self.work.iter().map(|(key, work)| ScheduledControllerPass {
-            key: key.clone(),
-            revision: work.revision,
-            command: work.command.clone(),
+        self.work.iter().filter_map(|(key, work)| {
+            matches!(work.state, ScheduledControllerWorkState::Ready).then(|| {
+                ScheduledControllerPass {
+                    key: key.clone(),
+                    revision: work.revision,
+                    command: work.command.clone(),
+                }
+            })
         })
     }
 }
@@ -881,7 +972,7 @@ mod tests {
         );
         assert_eq!(
             schedule.complete(&current, ControllerPass::Converged(None)),
-            ControllerScheduleCompletion::Complete(None)
+            ControllerScheduleCompletion::Complete
         );
         assert!(schedule.pass(&key).is_none());
     }

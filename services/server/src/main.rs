@@ -10,9 +10,11 @@ use connectrpc::ServiceRequest;
 use connectrpc::ServiceResult;
 use connectrpc::ServiceStream;
 use faultline::Error as FaultlineError;
+use henosis_app::VerifiedBundle;
 use henosis_app::verify_bundle_directory;
 use henosis_evaluation_engine::EngineConfig;
-use henosis_evaluation_engine::inspect_bundle;
+use henosis_evaluation_engine::InspectedBundle;
+use henosis_evaluation_engine::inspect_bundle_contract;
 use henosis_journal::Journal;
 use henosis_journal::S2Storage;
 use henosis_orchestrator::Command;
@@ -88,7 +90,7 @@ async fn main() -> anyhow::Result<()> {
         service.dispatcher.dispatch(resume_effects);
     }
     let router = service.register(Router::new());
-    info!(%bind, "Henosis core demo server listening");
+    info!(%bind, "Henosis core server listening");
     connectrpc::server::Server::new(router)
         .serve(bind.parse()?)
         .await
@@ -141,10 +143,13 @@ impl CoreService {
             let bundle_id = hex(digest.as_bytes());
             let verified = verify_bundle_directory(&self.bundle_root.join(&bundle_id), &bundle_id)
                 .map_err(|error| invalid(error.to_string()))?;
-            let bundle_source = verified.module;
-            let intent =
-                inspect_bundle(BundleRef::new(digest), &bundle_source, &self.engine_config)
-                    .map_err(|error| invalid(error.to_string()))?;
+            let bundle_contract = inspect_bundle_contract(
+                BundleRef::new(digest),
+                &verified.module,
+                &self.engine_config,
+            )
+            .map_err(|error| invalid(error.to_string()))?;
+            let intent = verify_executable_contract(verified, bundle_contract)?;
             if intent.name().as_str() != name {
                 return Err(invalid(format!(
                     "submitted component {name:?} contains bundle for {:?}",
@@ -187,6 +192,132 @@ impl CoreService {
             .ok_or_else(|| ConnectError::new(ErrorCode::NotFound, "graph does not exist"))?;
         graph_status(&state, graph_id)
     }
+}
+
+fn verify_executable_contract(
+    verified: VerifiedBundle,
+    inspected: InspectedBundle,
+) -> Result<ComponentIntent, ConnectError> {
+    let intent = inspected.intent;
+    let manifest = verified.manifest;
+    if manifest.component != intent.name().as_str() {
+        return Err(invalid(format!(
+            "bundle manifest names component {:?}, but executable names {:?}",
+            manifest.component,
+            intent.name().as_str(),
+        )));
+    }
+    if manifest.component_revision != intent.revision().as_str() {
+        return Err(invalid(format!(
+            "bundle manifest revision {:?} disagrees with executable revision {:?}",
+            manifest.component_revision,
+            intent.revision().as_str(),
+        )));
+    }
+    let executable_dependencies = intent
+        .compiled_dependencies()
+        .map(|dependency| {
+            let outputs = dependency
+                .outputs()
+                .map(|(name, output)| {
+                    let availability = match output.availability() {
+                        OutputAvailability::Static => "static",
+                        OutputAvailability::Observed => "observed",
+                    };
+                    (
+                        name.as_str().to_owned(),
+                        serde_json::json!({
+                            "availability": availability,
+                            "optional": output.is_optional(),
+                            "schema": output.schema(),
+                        }),
+                    )
+                })
+                .collect();
+            henosis_app::CompiledDependencyManifest {
+                component: dependency.component().as_str().to_owned(),
+                revision: dependency.revision().as_str().to_owned(),
+                outputs,
+                consumed_outputs: dependency
+                    .consumed_outputs()
+                    .map(|name| name.as_str().to_owned())
+                    .collect(),
+            }
+        })
+        .collect::<Vec<_>>();
+    if manifest.compiled_dependencies != executable_dependencies {
+        return Err(invalid(
+            "bundle manifest compiled dependencies disagree with executable contract",
+        ));
+    }
+    if manifest.declared_capabilities != inspected.contract.declared_capabilities {
+        return Err(invalid(
+            "bundle manifest capabilities disagree with executable contract",
+        ));
+    }
+    let config_files = manifest
+        .config_files
+        .iter()
+        .map(|file| (file.path.as_str(), file.sha256.as_str()))
+        .collect::<Vec<_>>();
+    let executable_config_files = inspected
+        .contract
+        .config_files
+        .iter()
+        .map(|file| (file.path.as_str(), file.sha256.as_str()))
+        .collect::<Vec<_>>();
+    if config_files != executable_config_files {
+        return Err(invalid(
+            "bundle manifest configuration closure disagrees with executable contract",
+        ));
+    }
+    let artifact_requirements = manifest
+        .artifact_requirements
+        .iter()
+        .map(|requirement| {
+            (
+                requirement.component.as_str(),
+                requirement.input.as_str(),
+                requirement.kind.as_str(),
+                requirement.path.as_str(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let executable_artifacts = inspected
+        .contract
+        .artifact_requirements
+        .iter()
+        .map(|requirement| {
+            (
+                requirement.component.as_str(),
+                requirement.input.as_str(),
+                requirement.kind.as_str(),
+                requirement.path.as_str(),
+            )
+        })
+        .collect::<Vec<_>>();
+    if artifact_requirements != executable_artifacts {
+        return Err(invalid(
+            "bundle manifest artifact requirements disagree with executable contract",
+        ));
+    }
+    for requirement in &manifest.artifact_requirements {
+        let input = InputName::new(requirement.input.clone())
+            .map_err(|error| invalid(error.to_string()))?;
+        let Some(input) = intent.input(&input) else {
+            return Err(invalid(format!(
+                "artifact requirement {}.{} has no executable input",
+                requirement.component, requirement.input,
+            )));
+        };
+        if input.config_schema().is_none() {
+            return Err(invalid(format!(
+                "artifact requirement {}.{} is not a configuration input in the executable",
+                requirement.component, requirement.input,
+            )));
+        }
+    }
+    Ok(intent)
 }
 
 impl ControllerReports {

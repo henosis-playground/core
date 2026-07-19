@@ -242,14 +242,51 @@ impl henosis_types::Evaluator for EvaluationEngine {
     }
 }
 
-/// Read the pure component declaration exported by a bundle without invoking
-/// its desire function. Core uses this at graph admission so the CLI does not
-/// execute user TypeScript or duplicate the SDK's metadata grammar.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InspectedBundle {
+    pub intent: ComponentIntent,
+    pub contract: ExecutableBundleContract,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecutableBundleContract {
+    pub declared_capabilities: Vec<String>,
+    pub config_files: Vec<ExecutableConfigFile>,
+    pub artifact_requirements: Vec<ExecutableArtifactRequirement>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub struct ExecutableConfigFile {
+    pub path: String,
+    pub sha256: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub struct ExecutableArtifactRequirement {
+    pub component: String,
+    pub input: String,
+    pub kind: String,
+    pub path: String,
+}
+
+/// Read the pure component declaration and executable contract exported by a
+/// bundle without invoking its desire function. Core uses this at graph
+/// admission so the CLI does not execute user TypeScript or duplicate the
+/// SDK's metadata grammar.
 pub fn inspect_bundle(
     bundle: BundleRef,
     source: &[u8],
     config: &EngineConfig,
 ) -> Result<ComponentIntent, EvaluationError> {
+    inspect_bundle_contract(bundle, source, config).map(|inspected| inspected.intent)
+}
+
+pub fn inspect_bundle_contract(
+    bundle: BundleRef,
+    source: &[u8],
+    config: &EngineConfig,
+) -> Result<InspectedBundle, EvaluationError> {
     if source.len() > config.max_bundle_bytes {
         return Err(EvaluationError::new(format!(
             "bundle is {} bytes, exceeding the {} byte limit",
@@ -313,6 +350,7 @@ pub fn inspect_bundle(
             .get_module_namespace(module_id)
             .map_err(core_failure("reading component exports"))?;
         let metadata = read_metadata(&mut runtime, &namespace)?;
+        let contract = read_bundle_contract(&mut runtime, &namespace)?;
         verify_policy_guards(&mut runtime)?;
         if dynamic_import_attempted.get() {
             return Err(EvaluationError::new(
@@ -320,7 +358,10 @@ pub fn inspect_bundle(
                  evaluation",
             ));
         }
-        component_intent(bundle, metadata)
+        Ok(InspectedBundle {
+            intent: component_intent(bundle, metadata)?,
+            contract,
+        })
     })();
     let _ = cancel_timeout.send(());
     let _ = watchdog.join();
@@ -713,6 +754,20 @@ fn read_metadata(
     serde_v8::from_v8(scope, component).map_err(|error| {
         EvaluationError::new(format!(
             "bundle export `component` is not plain JSON-compatible metadata: {error}"
+        ))
+    })
+}
+
+fn read_bundle_contract(
+    runtime: &mut JsRuntime,
+    namespace: &v8::Global<v8::Object>,
+) -> Result<ExecutableBundleContract, EvaluationError> {
+    deno_core::scope!(scope, runtime);
+    let namespace = v8::Local::new(scope, namespace);
+    let contract = export(scope, namespace, "bundleContract")?;
+    serde_v8::from_v8(scope, contract).map_err(|error| {
+        EvaluationError::new(format!(
+            "bundle export `bundleContract` is not plain JSON-compatible metadata: {error}"
         ))
     })
 }

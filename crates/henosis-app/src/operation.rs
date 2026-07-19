@@ -5,6 +5,20 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use henosis_types::ArtifactDigest;
+use henosis_types::BundleRef;
+use henosis_types::ComponentName;
+use henosis_types::Generation;
+use henosis_types::GraphId;
+use henosis_types::GraphSourcePolicy;
+use henosis_types::InputName;
+use henosis_types::NativeValue;
+use henosis_types::OutputName;
+use henosis_types::OutputRef;
+use henosis_types::OutputSource;
+use henosis_types::ResourceDispositionKind;
+use henosis_types::ResourceId;
+use henosis_types::SourceProvenance;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -15,57 +29,36 @@ use crate::Bundler;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BundlePin {
-    pub component: String,
-    pub bundle_id: String,
+    pub component: ComponentName,
+    pub bundle: BundleRef,
     #[serde(default)]
-    pub input_bindings: BTreeMap<String, serde_json::Value>,
+    pub input_bindings: BTreeMap<InputName, NativeValue>,
     pub source: Option<SourceProvenance>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum SourceProvenance {
-    Local {
-        repository: Option<String>,
-        base_revision: Option<String>,
-        dirty: bool,
-    },
-    Vcs {
-        repository: String,
-        revision: String,
-        reference: Option<String>,
-    },
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum GraphSourcePolicy {
-    #[default]
-    AcceptLocal,
-    RequireVcs,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GraphIntent {
     Create {
-        graph: String,
+        graph: GraphId,
         bundles: Vec<BundlePin>,
         source_policy: GraphSourcePolicy,
     },
     Update {
-        graph: String,
-        expected_generation: u64,
+        graph: GraphId,
+        expected_generation: Generation,
         bundles: Vec<BundlePin>,
     },
     Retire {
-        graph: String,
+        graph: GraphId,
     },
 }
 
 impl GraphIntent {
     #[must_use]
-    pub fn graph(&self) -> &str {
+    pub const fn graph(&self) -> GraphId {
         match self {
             Self::Create { graph, .. } | Self::Update { graph, .. } | Self::Retire { graph } => {
-                graph
+                *graph
             }
         }
     }
@@ -83,8 +76,8 @@ pub enum GraphPhase {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GraphSummary {
-    pub graph: String,
-    pub generation: u64,
+    pub graph: GraphId,
+    pub generation: Generation,
     pub phase: GraphPhase,
     pub created: bool,
     pub retired: bool,
@@ -92,30 +85,29 @@ pub struct GraphSummary {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BlockedOn {
-    pub component: String,
-    pub input: String,
-    pub producer: Option<String>,
-    pub output: Option<String>,
+    pub component: ComponentName,
+    pub input: InputName,
+    pub producer: Option<ComponentName>,
+    pub output: Option<OutputName>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResourceDisposition {
-    pub resource: String,
-    pub state: String,
-    pub message: Option<String>,
+    pub resource: ResourceId,
+    pub kind: ResourceDispositionKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GraphOutput {
-    pub reference: String,
-    pub value: serde_json::Value,
-    pub source: String,
+    pub reference: OutputRef,
+    pub value: NativeValue,
+    pub source: OutputSource,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GraphStatus {
-    pub graph: String,
-    pub generation: u64,
+    pub graph: GraphId,
+    pub generation: Generation,
     pub phase: GraphPhase,
     pub blocked_on: Vec<BlockedOn>,
     pub outputs: Vec<GraphOutput>,
@@ -129,9 +121,9 @@ pub struct GraphStatus {
 
 impl GraphStatus {
     #[must_use]
-    pub fn planning(graph: impl Into<String>, generation: u64) -> Self {
+    pub fn planning(graph: GraphId, generation: Generation) -> Self {
         Self {
-            graph: graph.into(),
+            graph,
             generation,
             phase: GraphPhase::Planning,
             blocked_on: Vec::new(),
@@ -151,14 +143,14 @@ pub struct SourceRequest {
     pub repository: String,
     pub revision: Option<String>,
     pub reference: Option<String>,
-    pub component: Option<String>,
+    pub component: Option<ComponentName>,
 }
 
 #[derive(Clone)]
 pub struct PreparedSource {
     pub repository: PathBuf,
     pub provenance: SourceProvenance,
-    pub component: Option<String>,
+    pub component: Option<ComponentName>,
     pub lease: Option<Arc<dyn std::any::Any + Send + Sync>>,
 }
 
@@ -173,10 +165,10 @@ pub trait CheckoutService: Send + Sync {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArtifactBinding {
-    pub component: String,
-    pub input: String,
+    pub component: ComponentName,
+    pub input: InputName,
     pub kind: crate::WorkloadArtifactKind,
-    pub digest: String,
+    pub digest: ArtifactDigest,
     pub source: PathBuf,
     pub stored: PathBuf,
 }
@@ -196,7 +188,7 @@ pub trait CoreClient: Send + Sync {
 
     fn status(
         &self,
-        graph: &str,
+        graph: GraphId,
     ) -> impl Future<Output = Result<Option<GraphStatus>, Self::Error>> + Send;
 
     fn apply(
@@ -207,7 +199,7 @@ pub trait CoreClient: Send + Sync {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApplyGraph {
-    pub graph: String,
+    pub graph: GraphId,
     pub sources: Vec<SourceRequest>,
     pub create: bool,
     pub source_policy: GraphSourcePolicy,
@@ -218,7 +210,7 @@ pub struct ApplyGraph {
 pub struct ApplyOutcome {
     pub status: GraphStatus,
     pub changed: bool,
-    pub changed_components: Vec<String>,
+    pub changed_components: Vec<ComponentName>,
     pub pins: Vec<BundlePin>,
     pub dependencies: Vec<PathBuf>,
     pub artifacts: Vec<ArtifactBinding>,
@@ -234,25 +226,36 @@ pub enum OperationError {
     Artifact(String),
     #[error("cannot call Henosis core: {0}")]
     Core(String),
+    #[error("bundle produced an invalid domain value: {0}")]
+    InvalidBundleDomain(String),
     #[error("graph `{0}` does not exist; pass create intent explicitly")]
-    GraphMissing(String),
+    GraphMissing(GraphId),
     #[error("component `{0}` was produced by more than one source")]
-    DuplicateComponent(String),
+    DuplicateComponent(ComponentName),
     #[error("source did not produce requested component `{0}`")]
-    MissingComponent(String),
+    MissingComponent(ComponentName),
     #[error("artifact binding `{component}.{input}` has no matching bundle requirement")]
-    UnexpectedArtifact { component: String, input: String },
+    UnexpectedArtifact {
+        component: ComponentName,
+        input: InputName,
+    },
     #[error("bundle requirement `{component}.{input}` has no artifact binding")]
-    MissingArtifact { component: String, input: String },
+    MissingArtifact {
+        component: ComponentName,
+        input: InputName,
+    },
     #[error("artifact binding `{component}.{input}` was produced more than once")]
-    DuplicateArtifact { component: String, input: String },
+    DuplicateArtifact {
+        component: ComponentName,
+        input: InputName,
+    },
     #[error(
         "artifact binding `{component}.{input}` has kind {actual:?}, but the bundle requires \
          {expected:?}"
     )]
     IncompatibleArtifact {
-        component: String,
-        input: String,
+        component: ComponentName,
+        input: InputName,
         expected: crate::WorkloadArtifactKind,
         actual: crate::WorkloadArtifactKind,
     },
@@ -312,7 +315,7 @@ where
                     source
                         .component
                         .as_ref()
-                        .is_none_or(|component| component == &bundle.component)
+                        .is_none_or(|component| component.as_str() == bundle.component)
                 })
                 .collect::<Vec<_>>();
             if selected.is_empty()
@@ -330,20 +333,24 @@ where
                 .map_err(|error| OperationError::Artifact(error.to_string()))?;
             validate_bindings(&requirements, &bindings)?;
             for bundle in selected {
-                if !names.insert(bundle.component.clone()) {
-                    return Err(OperationError::DuplicateComponent(bundle.component));
+                let component = ComponentName::new(bundle.component)
+                    .map_err(|error| OperationError::InvalidBundleDomain(error.to_string()))?;
+                if !names.insert(component.clone()) {
+                    return Err(OperationError::DuplicateComponent(component));
                 }
+                let digest = parse_content_digest(&bundle.bundle_id)?;
                 dependencies.extend(bundle.dependencies);
                 pins.push(BundlePin {
-                    component: bundle.component.clone(),
-                    bundle_id: bundle.bundle_id,
+                    component: component.clone(),
+                    bundle: BundleRef::new(digest),
                     input_bindings: bindings
                         .iter()
-                        .filter(|binding| binding.component == bundle.component)
+                        .filter(|binding| binding.component == component)
                         .map(|binding| {
                             (
                                 binding.input.clone(),
-                                serde_json::Value::String(binding.digest.clone()),
+                                NativeValue::new(serde_json::json!(binding.digest.to_string()))
+                                    .expect("artifact digest is finite JSON"),
                             )
                         })
                         .collect(),
@@ -361,7 +368,7 @@ where
 
         let current = self
             .core
-            .status(&request.graph)
+            .status(request.graph)
             .await
             .map_err(|error| OperationError::Core(error.to_string()))?;
         let changed_components;
@@ -423,17 +430,30 @@ where
         })
     }
 
-    pub async fn retire(&self, graph: impl Into<String>) -> Result<GraphStatus, OperationError> {
+    pub async fn retire(&self, graph: GraphId) -> Result<GraphStatus, OperationError> {
         self.core
-            .apply(GraphIntent::Retire {
-                graph: graph.into(),
-            })
+            .apply(GraphIntent::Retire { graph })
             .await
             .map_err(|error| OperationError::Core(error.to_string()))
     }
 }
 
-fn changed_component_names(current: Option<&GraphStatus>, pins: &[BundlePin]) -> Vec<String> {
+fn parse_content_digest(value: &str) -> Result<henosis_types::ContentDigest, OperationError> {
+    let bytes = hex::decode(value)
+        .map_err(|error| OperationError::InvalidBundleDomain(error.to_string()))?;
+    let bytes: [u8; 32] = bytes.try_into().map_err(|bytes: Vec<u8>| {
+        OperationError::InvalidBundleDomain(format!(
+            "bundle digest must contain 32 bytes, got {}",
+            bytes.len()
+        ))
+    })?;
+    Ok(henosis_types::ContentDigest::from_bytes(bytes))
+}
+
+fn changed_component_names(
+    current: Option<&GraphStatus>,
+    pins: &[BundlePin],
+) -> Vec<ComponentName> {
     let current = current
         .into_iter()
         .flat_map(|status| &status.bundles)
@@ -456,7 +476,14 @@ fn changed_component_names(current: Option<&GraphStatus>, pins: &[BundlePin]) ->
                 _ => true,
             },
         )
-        .map(str::to_owned)
+        .map(|name| {
+            desired
+                .get(name)
+                .or_else(|| current.get(name))
+                .expect("name came from current or desired pins")
+                .component
+                .clone()
+        })
         .collect()
 }
 
@@ -470,7 +497,7 @@ fn same_deployable_pins(current: &[BundlePin], desired: &[BundlePin]) -> bool {
 
 fn same_deployable_pin(old: &BundlePin, new: &BundlePin) -> bool {
     old.component == new.component
-        && old.bundle_id == new.bundle_id
+        && old.bundle == new.bundle
         && old.input_bindings == new.input_bindings
 }
 
@@ -480,11 +507,23 @@ fn validate_bindings(
 ) -> Result<(), OperationError> {
     let expected = requirements
         .iter()
-        .map(|item| ((item.component.as_str(), item.input.as_str()), item.kind))
-        .collect::<BTreeMap<_, _>>();
+        .map(|item| {
+            Ok((
+                (
+                    ComponentName::new(item.component.clone()).map_err(|error| {
+                        OperationError::InvalidBundleDomain(error.to_string())
+                    })?,
+                    InputName::new(item.input.clone()).map_err(|error| {
+                        OperationError::InvalidBundleDomain(error.to_string())
+                    })?,
+                ),
+                item.kind,
+            ))
+        })
+        .collect::<Result<BTreeMap<_, _>, OperationError>>()?;
     let mut actual = BTreeMap::new();
     for binding in bindings {
-        let key = (binding.component.as_str(), binding.input.as_str());
+        let key = (binding.component.clone(), binding.input.clone());
         if actual.insert(key, binding.kind).is_some() {
             return Err(OperationError::DuplicateArtifact {
                 component: binding.component.clone(),
@@ -496,16 +535,16 @@ fn validate_bindings(
         actual.iter().find(|(key, _)| !expected.contains_key(*key))
     {
         return Err(OperationError::UnexpectedArtifact {
-            component: (*component).to_owned(),
-            input: (*input).to_owned(),
+            component: component.clone(),
+            input: input.clone(),
         });
     }
     if let Some(((component, input), _)) =
         expected.iter().find(|(key, _)| !actual.contains_key(*key))
     {
         return Err(OperationError::MissingArtifact {
-            component: (*component).to_owned(),
-            input: (*input).to_owned(),
+            component: component.clone(),
+            input: input.clone(),
         });
     }
     if let Some(((component, input), expected_kind)) = expected
@@ -513,10 +552,10 @@ fn validate_bindings(
         .find(|(key, kind)| actual.get(*key) != Some(kind))
     {
         return Err(OperationError::IncompatibleArtifact {
-            component: (*component).to_owned(),
-            input: (*input).to_owned(),
+            component: component.clone(),
+            input: input.clone(),
             expected: *expected_kind,
-            actual: actual[&(*component, *input)],
+            actual: actual[&(component.clone(), input.clone())],
         });
     }
     Ok(())
@@ -528,11 +567,11 @@ mod tests {
 
     fn pin(digest: &str, source: Option<SourceProvenance>) -> BundlePin {
         BundlePin {
-            component: "web".to_owned(),
-            bundle_id: "a".repeat(64),
+            component: ComponentName::new("web").unwrap(),
+            bundle: BundleRef::new(henosis_types::ContentDigest::from_bytes([0xaa; 32])),
             input_bindings: BTreeMap::from([(
-                "workerArtifact".to_owned(),
-                serde_json::json!(digest),
+                InputName::new("workerArtifact").unwrap(),
+                NativeValue::new(serde_json::json!(digest)).unwrap(),
             )]),
             source,
         }
@@ -554,10 +593,16 @@ mod tests {
 
     #[test]
     fn artifact_binding_change_is_deployable() {
-        let mut current = GraphStatus::planning("graph_test", 1);
+        let mut current = GraphStatus::planning(
+            GraphId::from_bytes([1; 16]),
+            Generation::new(1).unwrap(),
+        );
         current.bundles = vec![pin("sha256:11", None)];
         let desired = vec![pin("sha256:22", None)];
-        assert_eq!(changed_component_names(Some(&current), &desired), ["web"]);
+        assert_eq!(
+            changed_component_names(Some(&current), &desired),
+            [ComponentName::new("web").unwrap()]
+        );
     }
 
     #[test]
@@ -572,10 +617,12 @@ mod tests {
             column: 1,
         };
         let binding = ArtifactBinding {
-            component: requirement.component.clone(),
-            input: requirement.input.clone(),
+            component: ComponentName::new(requirement.component.clone()).unwrap(),
+            input: InputName::new(requirement.input.clone()).unwrap(),
             kind: requirement.kind,
-            digest: "sha256:11".to_owned(),
+            digest: "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+                .parse()
+                .unwrap(),
             source: PathBuf::from("worker.ts"),
             stored: PathBuf::from("artifacts/11"),
         };

@@ -259,6 +259,8 @@ pub struct CompiledDependencyManifest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BundleManifestV1 {
     pub format_version: u32,
+    pub component: String,
+    pub component_revision: String,
     pub module_format: String,
     pub entrypoint: String,
     pub executable_sha256: String,
@@ -604,6 +606,8 @@ fn bundle_component(
     let config_hash = sha256(ESBUILD_CONFIG.as_bytes());
     let manifest = BundleManifestV1 {
         format_version: BUNDLE_FORMAT_VERSION,
+        component: component.name.clone(),
+        component_revision,
         module_format: "esm".to_owned(),
         entrypoint: "henosis:component".to_owned(),
         executable_sha256: executable_sha256.clone(),
@@ -950,16 +954,31 @@ fn generated_entry_source(
             )
         })
         .collect::<Vec<_>>();
+    let artifact_contract = derived_inputs
+        .iter()
+        .filter_map(|input| match input {
+            DerivedInputDeclaration::Artifact(requirement) => Some(serde_json::json!({
+                "component": requirement.component,
+                "input": requirement.input,
+                "kind": requirement.kind,
+                "path": requirement.path,
+            })),
+            DerivedInputDeclaration::Output(_) => None,
+        })
+        .collect::<Vec<_>>();
     format!(
         "import componentDefinition from {};\n{imports}import {{ createBundle }} from \
          \"@henosis/core\";\nconst bundle = createBundle(componentDefinition, {}, {{ {} }}, [{}], \
          {});\nexport const protocolVersion = bundle.protocolVersion;\nexport const component = \
-         bundle.component;\nexport const evaluate = bundle.evaluate;\n",
+         bundle.component;\nexport const bundleContract = {{ declaredCapabilities: [], configFiles: {}, \
+         artifactRequirements: {} }};\nexport const evaluate = bundle.evaluate;\n",
         serde_json::to_string(import_path).expect("path string is JSON encodable"),
         serde_json::to_string(closure_wire).expect("closure manifest is JSON encodable"),
         entries.join(", "),
         contracts.join(", "),
         serde_json::to_string(component_revision).expect("revision is JSON encodable"),
+        serde_json::to_string(closure_wire).expect("closure manifest is JSON encodable"),
+        serde_json::to_string(&artifact_contract).expect("artifact contract is JSON encodable"),
     )
 }
 
@@ -1293,7 +1312,7 @@ fn dependency_lock_hash(repository: &Path) -> Result<Option<String>, BundleError
 fn bundle_id(manifest: &BundleManifestV1) -> Result<String, BundleError> {
     let mut bytes = Vec::new();
     let mut encoder = Encoder::new(&mut bytes);
-    encoder.map(12).map_err(BundleError::EncodeIdentity)?;
+    encoder.map(14).map_err(BundleError::EncodeIdentity)?;
     encoder.u8(0).map_err(BundleError::EncodeIdentity)?;
     encoder
         .u32(manifest.format_version)
@@ -1411,6 +1430,14 @@ fn bundle_id(manifest: &BundleManifestV1) -> Result<String, BundleError> {
             .str(&requirement.path)
             .map_err(BundleError::EncodeIdentity)?;
     }
+    encoder.u8(12).map_err(BundleError::EncodeIdentity)?;
+    encoder
+        .str(&manifest.component)
+        .map_err(BundleError::EncodeIdentity)?;
+    encoder.u8(13).map_err(BundleError::EncodeIdentity)?;
+    encoder
+        .str(&manifest.component_revision)
+        .map_err(BundleError::EncodeIdentity)?;
     Ok(sha256(&bytes))
 }
 
@@ -1599,6 +1626,8 @@ mod tests {
     fn bundle_identity_is_stable() {
         let manifest = BundleManifestV1 {
             format_version: 1,
+            component: "test".to_owned(),
+            component_revision: "d".repeat(64),
             module_format: "esm".to_owned(),
             entrypoint: "henosis:component".to_owned(),
             executable_sha256: "a".repeat(64),

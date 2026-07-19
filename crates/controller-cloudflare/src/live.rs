@@ -1343,6 +1343,7 @@ mod tests {
                 ControllerPass::Acted => {}
                 ControllerPass::Converged(report) => return report,
                 ControllerPass::Failed(report) => return Some(report),
+                ControllerPass::Retryable(message) => panic!("unexpected retryable pass: {message}"),
             }
         }
     }

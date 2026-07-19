@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -24,6 +25,7 @@ use henosis_controller_runtime::ControllerScheduleCompletion;
 use henosis_controller_runtime::DirectoryArtifactStore;
 use henosis_controller_runtime::GitRepository;
 use henosis_controller_runtime::ScheduledControllerPass;
+use henosis_controller_runtime::ScheduledControllerReport;
 use henosis_controller_runtime::controller_name;
 use henosis_controller_runtime::output;
 use henosis_controller_runtime::publication_id;
@@ -73,75 +75,85 @@ impl ControllerDispatcher {
         reports: Arc<dyn ControllerReportHandler>,
     ) -> Self {
         let (effects, mut effect_receiver) = mpsc::unbounded_channel::<Vec<ControllerEffect>>();
-        let (completions, mut completion_receiver) =
-            mpsc::unbounded_channel::<(ScheduledControllerPass, anyhow::Result<ControllerPass>)>();
+        let (pass_completions, mut pass_completion_receiver) =
+            mpsc::unbounded_channel::<(ScheduledControllerPass, ControllerPass)>();
+        let (report_completions, mut report_completion_receiver) =
+            mpsc::unbounded_channel::<ReportCompletion>();
         tokio::spawn(async move {
             let controllers = Arc::new(controllers);
             let mut schedule = ControllerSchedule::default();
             loop {
                 tokio::select! {
                     Some(incoming) = effect_receiver.recv() => {
-                        for effect in incoming {
-                            if let Some(key) = schedule.submit(
-                                effect.controller().clone(),
-                                effect.command().clone(),
-                            ) {
-                                spawn_controller_pass(
-                                    Arc::clone(&controllers),
-                                    schedule.pass(&key).expect("submitted lane has a pass"),
-                                    completions.clone(),
-                                );
-                            }
-                        }
+                        submit_effects(
+                            incoming,
+                            &mut schedule,
+                            &controllers,
+                            &pass_completions,
+                        );
                     }
-                    Some((pass, outcome)) = completion_receiver.recv() => {
-                        let outcome = match outcome {
-                            Ok(outcome) => outcome,
-                            Err(error) => {
-                                error!(%error, "controller dispatch failed; retrying lane");
-                                if let Some(next) = schedule.pass(pass.key()) {
-                                    spawn_controller_pass(
-                                        Arc::clone(&controllers),
-                                        next,
-                                        completions.clone(),
-                                    );
-                                }
-                                continue;
-                            }
-                        };
+                    Some((pass, outcome)) = pass_completion_receiver.recv() => {
                         match schedule.complete(&pass, outcome) {
                             ControllerScheduleCompletion::Continue => {
-                                if let Some(next) = schedule.pass(pass.key()) {
-                                    spawn_controller_pass(
-                                        Arc::clone(&controllers),
-                                        next,
-                                        completions.clone(),
-                                    );
-                                }
+                                spawn_next_pass(
+                                    &mut schedule,
+                                    pass.key(),
+                                    &controllers,
+                                    &pass_completions,
+                                    Duration::ZERO,
+                                );
                             }
-                            ControllerScheduleCompletion::Complete(None) => {}
-                            ControllerScheduleCompletion::Complete(Some(report)) => {
-                                match reports.report(report).await {
-                                    Ok(follow_up) => {
-                                        for effect in follow_up {
-                                            if let Some(key) = schedule.submit(
-                                                effect.controller().clone(),
-                                                effect.command().clone(),
-                                            ) {
-                                                spawn_controller_pass(
-                                                    Arc::clone(&controllers),
-                                                    schedule.pass(&key).expect(
-                                                        "submitted follow-up lane has a pass",
-                                                    ),
-                                                    completions.clone(),
-                                                );
-                                            }
-                                        }
-                                    }
-                                    Err(error) => error!(%error, "controller report failed"),
-                                }
+                            ControllerScheduleCompletion::Report(pending) => {
+                                spawn_report_delivery(
+                                    Arc::clone(&reports),
+                                    pending,
+                                    report_completions.clone(),
+                                );
+                            }
+                            ControllerScheduleCompletion::Retry { attempt, message } => {
+                                let delay = retry_delay(attempt);
+                                error!(
+                                    controller = %pass.key().controller(),
+                                    graph = %pass.key().graph_id(),
+                                    %message,
+                                    ?delay,
+                                    "controller pass failed; retrying from fresh observation",
+                                );
+                                spawn_next_pass(
+                                    &mut schedule,
+                                    pass.key(),
+                                    &controllers,
+                                    &pass_completions,
+                                    delay,
+                                );
+                            }
+                            ControllerScheduleCompletion::Complete => {}
+                        }
+                    }
+                    Some(delivery) = report_completion_receiver.recv() => {
+                        let key = delivery.pending.key().clone();
+                        match schedule.acknowledge_report(&delivery.pending) {
+                            ControllerScheduleCompletion::Continue => {
+                                spawn_next_pass(
+                                    &mut schedule,
+                                    &key,
+                                    &controllers,
+                                    &pass_completions,
+                                    Duration::ZERO,
+                                );
+                            }
+                            ControllerScheduleCompletion::Complete => {}
+                            ControllerScheduleCompletion::Report(_)
+                            | ControllerScheduleCompletion::Retry { .. } => {
+                                unreachable!("report acknowledgement cannot produce work")
                             }
                         }
+                        submit_effects(
+                            delivery.follow_up,
+                            &mut schedule,
+                            &controllers,
+                            &pass_completions,
+                        );
                     }
                     else => break,
                 }
@@ -157,30 +169,100 @@ impl ControllerDispatcher {
     }
 }
 
+struct ReportCompletion {
+    pending: ScheduledControllerReport,
+    follow_up: Vec<ControllerEffect>,
+}
+
+fn submit_effects(
+    effects: Vec<ControllerEffect>,
+    schedule: &mut ControllerSchedule,
+    controllers: &Arc<BTreeMap<ControllerName, Arc<dyn Controller>>>,
+    completions: &mpsc::UnboundedSender<(ScheduledControllerPass, ControllerPass)>,
+) {
+    for effect in effects {
+        if let Some(key) = schedule.submit(
+            effect.controller().clone(),
+            effect.command().clone(),
+        ) {
+            spawn_next_pass(schedule, &key, controllers, completions, Duration::ZERO);
+        }
+    }
+}
+
+fn spawn_next_pass(
+    schedule: &mut ControllerSchedule,
+    key: &henosis_controller_runtime::ControllerWorkKey,
+    controllers: &Arc<BTreeMap<ControllerName, Arc<dyn Controller>>>,
+    completions: &mpsc::UnboundedSender<(ScheduledControllerPass, ControllerPass)>,
+    delay: Duration,
+) {
+    if let Some(pass) = schedule.pass(key) {
+        spawn_controller_pass(Arc::clone(controllers), pass, completions.clone(), delay);
+    }
+}
+
 fn spawn_controller_pass(
     controllers: Arc<BTreeMap<ControllerName, Arc<dyn Controller>>>,
     pass: ScheduledControllerPass,
-    completions: mpsc::UnboundedSender<(ScheduledControllerPass, anyhow::Result<ControllerPass>)>,
+    completions: mpsc::UnboundedSender<(ScheduledControllerPass, ControllerPass)>,
+    delay: Duration,
 ) {
     tokio::spawn(async move {
-        let outcome = async {
-            let controller = controllers.get(pass.key().controller()).ok_or_else(|| {
-                anyhow::anyhow!("no controller named {}", pass.key().controller())
-            })?;
-            if pass.key().controller().as_str() == "cloudflare" {
-                tokio::time::sleep(Duration::from_millis(1_500)).await;
+        if !delay.is_zero() {
+            tokio::time::sleep(delay).await;
+        }
+        let outcome = AssertUnwindSafe(async {
+            let Some(controller) = controllers.get(pass.key().controller()) else {
+                return ControllerPass::Retryable(format!(
+                    "no controller named {}",
+                    pass.key().controller()
+                ));
+            };
+            match controller.execute(pass.command()).await {
+                Ok(outcome) => outcome,
+                Err(error) => ControllerPass::Retryable(error.to_string()),
             }
-            controller
-                .execute(pass.command())
-                .await
-                .map_err(|error| anyhow::anyhow!(error.to_string()))
-        }
-        .await;
-        if outcome.is_err() {
-            tokio::time::sleep(Duration::from_secs(1)).await;
-        }
+        })
+        .catch_unwind()
+        .await
+        .unwrap_or_else(|_| ControllerPass::Retryable("controller pass panicked".to_owned()));
         let _ = completions.send((pass, outcome));
     });
+}
+
+fn spawn_report_delivery(
+    reports: Arc<dyn ControllerReportHandler>,
+    pending: ScheduledControllerReport,
+    completions: mpsc::UnboundedSender<ReportCompletion>,
+) {
+    tokio::spawn(async move {
+        let mut attempt = 0;
+        loop {
+            match reports.report(pending.report().clone()).await {
+                Ok(follow_up) => {
+                    let _ = completions.send(ReportCompletion { pending, follow_up });
+                    break;
+                }
+                Err(error) => {
+                    attempt += 1;
+                    let delay = retry_delay(attempt);
+                    error!(
+                        graph = %pending.key().graph_id(),
+                        controller = %pending.key().controller(),
+                        %error,
+                        ?delay,
+                        "controller report was not acknowledged; retaining and retrying",
+                    );
+                    tokio::time::sleep(delay).await;
+                }
+            }
+        }
+    });
+}
+
+fn retry_delay(attempt: u32) -> Duration {
+    Duration::from_secs(1_u64.checked_shl(attempt.saturating_sub(1).min(5)).unwrap_or(32).min(30))
 }
 
 pub struct ServerAssembly {
@@ -192,6 +274,24 @@ pub struct ServerAssembly {
 }
 
 pub fn from_environment() -> anyhow::Result<ServerAssembly> {
+    require_live_target("HENOSIS_CLOUDFLARE_LIVE", "Cloudflare")?;
+    require_live_target("HENOSIS_SUPABASE_LIVE", "Supabase")?;
+    assemble_from_environment(TargetAssembly::Live)
+}
+
+/// Explicit fake composition for tests and local demonstrations. The server
+/// binary never selects this assembly implicitly.
+pub fn demo_from_environment() -> anyhow::Result<ServerAssembly> {
+    assemble_from_environment(TargetAssembly::Demo)
+}
+
+#[derive(Clone, Copy)]
+enum TargetAssembly {
+    Live,
+    Demo,
+}
+
+fn assemble_from_environment(targets: TargetAssembly) -> anyhow::Result<ServerAssembly> {
     let bind = std::env::var("HENOSIS_BIND").unwrap_or_else(|_| "127.0.0.1:4481".into());
     let bundle_root = PathBuf::from(
         std::env::var("HENOSIS_BUNDLE_ROOT").unwrap_or_else(|_| ".henosis/bundles".into()),
@@ -213,56 +313,45 @@ pub fn from_environment() -> anyhow::Result<ServerAssembly> {
     let mut controllers: BTreeMap<ControllerName, Arc<dyn Controller>> = BTreeMap::new();
     let k8s: Arc<dyn Controller> = Arc::new(K8sController::new(GitRepository::new(deploy_remote)));
     controllers.insert(k8s.name().clone(), k8s);
-    let cloudflare: Arc<dyn Controller> = if std::env::var("HENOSIS_CLOUDFLARE_LIVE").as_deref()
-        == Ok("1")
-    {
-        let artifact_root = std::env::var("HENOSIS_ARTIFACT_ROOT").map_err(|_| {
-            anyhow::anyhow!("HENOSIS_ARTIFACT_ROOT is required for live Cloudflare")
-        })?;
-        let transport = LiveCloudflareTransport::connect(
-            &LiveCloudflareConfig::default(),
-            Arc::new(DirectoryArtifactStore::new(artifact_root)),
-        )?;
-        info!("Cloudflare controller uses LIVE transport (metadata/identity safety rail enforced)");
-        Arc::new(henosis_controller_cloudflare::CloudflareController::new(
-            transport,
-        ))
-    } else {
-        Arc::new(henosis_controller_cloudflare::CloudflareController::new(
-            RecordedCloudflareTransport::default(),
-        ))
+    let cloudflare: Arc<dyn Controller> = match targets {
+        TargetAssembly::Live => {
+            let artifact_root = std::env::var("HENOSIS_ARTIFACT_ROOT").map_err(|_| {
+                anyhow::anyhow!("HENOSIS_ARTIFACT_ROOT is required for live Cloudflare")
+            })?;
+            let transport = LiveCloudflareTransport::connect(
+                &LiveCloudflareConfig::default(),
+                Arc::new(DirectoryArtifactStore::new(artifact_root)),
+            )?;
+            info!("Cloudflare controller uses live transport");
+            Arc::new(henosis_controller_cloudflare::CloudflareController::new(
+                transport,
+            ))
+        }
+        TargetAssembly::Demo => Arc::new(
+            henosis_controller_cloudflare::CloudflareController::new(
+                RecordedCloudflareTransport::default(),
+            ),
+        ),
     };
     controllers.insert(cloudflare.name().clone(), cloudflare);
-    let supabase: Arc<dyn Controller> = if std::env::var("HENOSIS_SUPABASE_LIVE").as_deref()
-        == Ok("1")
-    {
-        let target = LocalSupabaseTarget::new(LocalSupabaseConfig {
-            host: string_env("HENOSIS_SUPABASE_HOST", "supabase-db"),
-            port: string_env("HENOSIS_SUPABASE_PORT", "5432").parse()?,
-            user: string_env("HENOSIS_SUPABASE_USER", "postgres"),
-            database: string_env("HENOSIS_SUPABASE_DATABASE", "postgres"),
-            password_file: PathBuf::from(string_env(
-                "HENOSIS_SUPABASE_PASSWORD_FILE",
-                "/run/secrets/supabase-postgres-password",
-            )),
-            api_url: string_env("HENOSIS_SUPABASE_API_URL", "http://127.0.0.1:4484"),
-            database_url_ref: string_env(
-                "HENOSIS_SUPABASE_DATABASE_URL_REF",
-                "docker-secret://supabase-connection-url",
-            ),
-            anon_key_ref: string_env(
-                "HENOSIS_SUPABASE_ANON_KEY_REF",
-                "docker-secret://supabase-anon-key",
-            ),
-        });
-        info!("Supabase controller uses LIVE local Postgres/PostgREST target");
-        Arc::new(SupabaseController::new(target, bundles))
-    } else {
-        // LOUD PROTOTYPE FALLBACK: tests and setups without a local Supabase target
-        // retain the recorded controller. Set HENOSIS_SUPABASE_LIVE=1 to use
-        // the real target above.
-        info!("Supabase controller uses RECORDED fallback; set HENOSIS_SUPABASE_LIVE=1 for live");
-        Arc::new(DemoSupabaseController::new())
+    let supabase: Arc<dyn Controller> = match targets {
+        TargetAssembly::Live => {
+            let target = LocalSupabaseTarget::new(LocalSupabaseConfig {
+                host: required_string_env("HENOSIS_SUPABASE_HOST")?,
+                port: required_string_env("HENOSIS_SUPABASE_PORT")?.parse()?,
+                user: required_string_env("HENOSIS_SUPABASE_USER")?,
+                database: required_string_env("HENOSIS_SUPABASE_DATABASE")?,
+                password_file: PathBuf::from(required_string_env(
+                    "HENOSIS_SUPABASE_PASSWORD_FILE",
+                )?),
+                api_url: required_string_env("HENOSIS_SUPABASE_API_URL")?,
+                database_url_ref: required_string_env("HENOSIS_SUPABASE_DATABASE_URL_REF")?,
+                anon_key_ref: required_string_env("HENOSIS_SUPABASE_ANON_KEY_REF")?,
+            });
+            info!("Supabase controller uses live local Postgres/PostgREST target");
+            Arc::new(SupabaseController::new(target, bundles))
+        }
+        TargetAssembly::Demo => Arc::new(DemoSupabaseController::new()),
     };
     controllers.insert(supabase.name().clone(), supabase);
 
@@ -275,8 +364,19 @@ pub fn from_environment() -> anyhow::Result<ServerAssembly> {
     })
 }
 
-fn string_env(name: &str, default: &str) -> String {
-    std::env::var(name).unwrap_or_else(|_| default.to_owned())
+fn require_live_target(variable: &str, target: &str) -> anyhow::Result<()> {
+    if std::env::var(variable).as_deref() == Ok("1") {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(
+            "{variable}=1 is required for the normal server assembly; use the explicit demo \
+             assembly for fake {target} wiring"
+        ))
+    }
+}
+
+fn required_string_env(name: &str) -> anyhow::Result<String> {
+    std::env::var(name).map_err(|_| anyhow::anyhow!("{name} is required for the live assembly"))
 }
 
 struct FileBundleSource {
