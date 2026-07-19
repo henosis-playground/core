@@ -970,8 +970,8 @@ fn generated_entry_source(
         "import componentDefinition from {};\n{imports}import {{ createBundle }} from \
          \"@henosis/core\";\nconst bundle = createBundle(componentDefinition, {}, {{ {} }}, [{}], \
          {});\nexport const protocolVersion = bundle.protocolVersion;\nexport const component = \
-         bundle.component;\nexport const bundleContract = {{ declaredCapabilities: [], configFiles: {}, \
-         artifactRequirements: {} }};\nexport const evaluate = bundle.evaluate;\n",
+         bundle.component;\nexport const bundleContract = {{ declaredCapabilities: [], \
+         configFiles: {}, artifactRequirements: {} }};\nexport const evaluate = bundle.evaluate;\n",
         serde_json::to_string(import_path).expect("path string is JSON encodable"),
         serde_json::to_string(closure_wire).expect("closure manifest is JSON encodable"),
         entries.join(", "),

@@ -1,8 +1,8 @@
 //! Composition root for the Henosis server process.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 use std::panic::AssertUnwindSafe;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -106,7 +106,7 @@ impl ControllerDispatcher {
                             ControllerScheduleCompletion::Report(pending) => {
                                 spawn_report_delivery(
                                     Arc::clone(&reports),
-                                    pending,
+                                    *pending,
                                     report_completions.clone(),
                                 );
                             }
@@ -181,10 +181,7 @@ fn submit_effects(
     completions: &mpsc::UnboundedSender<(ScheduledControllerPass, ControllerPass)>,
 ) {
     for effect in effects {
-        if let Some(key) = schedule.submit(
-            effect.controller().clone(),
-            effect.command().clone(),
-        ) {
+        if let Some(key) = schedule.submit(effect.controller().clone(), effect.command().clone()) {
             spawn_next_pass(schedule, &key, controllers, completions, Duration::ZERO);
         }
     }
@@ -262,7 +259,12 @@ fn spawn_report_delivery(
 }
 
 fn retry_delay(attempt: u32) -> Duration {
-    Duration::from_secs(1_u64.checked_shl(attempt.saturating_sub(1).min(5)).unwrap_or(32).min(30))
+    Duration::from_secs(
+        1_u64
+            .checked_shl(attempt.saturating_sub(1).min(5))
+            .unwrap_or(32)
+            .min(30),
+    )
 }
 
 pub struct ServerAssembly {
@@ -327,11 +329,9 @@ fn assemble_from_environment(targets: TargetAssembly) -> anyhow::Result<ServerAs
                 transport,
             ))
         }
-        TargetAssembly::Demo => Arc::new(
-            henosis_controller_cloudflare::CloudflareController::new(
-                RecordedCloudflareTransport::default(),
-            ),
-        ),
+        TargetAssembly::Demo => Arc::new(henosis_controller_cloudflare::CloudflareController::new(
+            RecordedCloudflareTransport::default(),
+        )),
     };
     controllers.insert(cloudflare.name().clone(), cloudflare);
     let supabase: Arc<dyn Controller> = match targets {

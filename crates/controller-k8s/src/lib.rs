@@ -32,6 +32,7 @@ use henosis_types::GraphId;
 use henosis_types::Resource;
 use serde_json::Map;
 use serde_json::Value;
+use thiserror::Error;
 
 const CONTROLLER_NAME: &str = "k8s";
 const KIND: &str = "k8s/object";
@@ -67,6 +68,14 @@ pub enum K8sObservation {
     Foreign,
 }
 
+#[derive(Clone, Debug, Error, Eq, PartialEq)]
+pub enum K8sError {
+    #[error("Kubernetes publication contract: {0}")]
+    Contract(String),
+    #[error("Kubernetes publication unavailable: {0}")]
+    Unavailable(String),
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct K8sPublishAction {
     files: BTreeMap<String, Vec<u8>>,
@@ -94,7 +103,8 @@ where
             )
             .map(|report| ControllerPass::Converged(Some(report)))
             .map_err(|error| ControllerError::new(error.to_string())),
-            Err(error) => failed_report(slice, error)
+            Err(K8sError::Unavailable(message)) => Ok(ControllerPass::Retryable(message)),
+            Err(error) => failed_report(slice, error.to_string())
                 .map(ControllerPass::Failed)
                 .map_err(|report_error| ControllerError::new(report_error.to_string())),
         }
@@ -105,22 +115,15 @@ where
         graph_id: GraphId,
         resources: &[Resource],
     ) -> Result<ControllerPass, ControllerError> {
-        match reconcile_absent(self, graph_id, resources)
-            .await
-            .map_err(ControllerError::new)?
-        {
-            SlicePass::Acted => Ok(ControllerPass::Acted),
-            SlicePass::Converged(_) => self
-                .target
-                .remove_graph_if_empty(graph_id)
-                .map(|acted| {
-                    if acted {
-                        ControllerPass::Acted
-                    } else {
-                        ControllerPass::Converged(None)
-                    }
-                })
-                .map_err(ControllerError::new),
+        match reconcile_absent(self, graph_id, resources).await {
+            Ok(SlicePass::Acted) => Ok(ControllerPass::Acted),
+            Ok(SlicePass::Converged(_)) => Ok(match self.target.remove_graph_if_empty(graph_id) {
+                Ok(true) => ControllerPass::Acted,
+                Ok(false) => ControllerPass::Converged(None),
+                Err(error) => ControllerPass::Retryable(error),
+            }),
+            Err(K8sError::Unavailable(message)) => Ok(ControllerPass::Retryable(message)),
+            Err(K8sError::Contract(message)) => Err(ControllerError::new(message)),
         }
     }
 }
@@ -130,7 +133,7 @@ where
     T: K8sTarget,
 {
     type Action = K8sPublishAction;
-    type Error = String;
+    type Error = K8sError;
     type Observation = K8sObservation;
 
     fn observe<'a>(
@@ -139,7 +142,10 @@ where
         resource: &'a Resource,
     ) -> BoxFuture<'a, Result<Self::Observation, Self::Error>> {
         async move {
-            let files = self.target.read_resource(graph_id, resource)?;
+            let files = self
+                .target
+                .read_resource(graph_id, resource)
+                .map_err(K8sError::Unavailable)?;
             if files.is_empty() {
                 return Ok(K8sObservation::Missing);
             }
@@ -160,13 +166,13 @@ where
         observed: &Self::Observation,
     ) -> Result<ReconcileDecision<Self::Action>, Self::Error> {
         if observed == &K8sObservation::Foreign {
-            return Err(format!(
+            return Err(K8sError::Contract(format!(
                 "refusing to mutate Kubernetes publication for {} because its ownership labels do \
                  not match graph {} and resource {}",
                 resource.path(),
                 graph_id,
                 resource.id()
-            ));
+            )));
         }
         match goal {
             ResourceGoal::Absent if observed == &K8sObservation::Missing => {
@@ -176,7 +182,7 @@ where
                 files: BTreeMap::new(),
             })),
             ResourceGoal::Present => {
-                let desired = render_resource(graph_id, resource)?;
+                let desired = render_resource(graph_id, resource).map_err(K8sError::Contract)?;
                 if observed == &K8sObservation::Owned(desired.clone()) {
                     Ok(ReconcileDecision::Converged(ResourceConvergence {
                         outputs: Vec::new(),
@@ -201,6 +207,7 @@ where
         async move {
             self.target
                 .write_resource(graph_id, resource, &action.files)
+                .map_err(K8sError::Unavailable)
         }
         .boxed()
     }
@@ -459,7 +466,7 @@ mod tests {
         let error = reconcile_slice(&K8sController::new(repository), &slice)
             .await
             .unwrap_err();
-        assert!(error.contains("ownership labels do not match"));
+        assert!(error.to_string().contains("ownership labels do not match"));
         assert_eq!(revision(remote.path(), &branch(slice.graph_id())), before);
     }
 

@@ -510,12 +510,10 @@ fn validate_bindings(
         .map(|item| {
             Ok((
                 (
-                    ComponentName::new(item.component.clone()).map_err(|error| {
-                        OperationError::InvalidBundleDomain(error.to_string())
-                    })?,
-                    InputName::new(item.input.clone()).map_err(|error| {
-                        OperationError::InvalidBundleDomain(error.to_string())
-                    })?,
+                    ComponentName::new(item.component.clone())
+                        .map_err(|error| OperationError::InvalidBundleDomain(error.to_string()))?,
+                    InputName::new(item.input.clone())
+                        .map_err(|error| OperationError::InvalidBundleDomain(error.to_string()))?,
                 ),
                 item.kind,
             ))
@@ -593,10 +591,8 @@ mod tests {
 
     #[test]
     fn artifact_binding_change_is_deployable() {
-        let mut current = GraphStatus::planning(
-            GraphId::from_bytes([1; 16]),
-            Generation::new(1).unwrap(),
-        );
+        let mut current =
+            GraphStatus::planning(GraphId::from_bytes([1; 16]), Generation::new(1).unwrap());
         current.bundles = vec![pin("sha256:11", None)];
         let desired = vec![pin("sha256:22", None)];
         assert_eq!(

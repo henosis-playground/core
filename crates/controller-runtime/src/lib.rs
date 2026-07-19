@@ -260,7 +260,7 @@ impl ScheduledControllerReport {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ControllerScheduleCompletion {
     Continue,
-    Report(ScheduledControllerReport),
+    Report(Box<ScheduledControllerReport>),
     Retry { attempt: u32, message: String },
     Complete,
 }
@@ -269,7 +269,7 @@ pub enum ControllerScheduleCompletion {
 enum ScheduledControllerWorkState {
     Ready,
     InFlight,
-    Reporting(ControllerReport),
+    Reporting(Box<ControllerReport>),
 }
 
 #[derive(Clone, Debug)]
@@ -303,7 +303,12 @@ impl ControllerSchedule {
                 work.revision = self.next_revision;
                 work.command = command;
                 work.retry_attempt = 0;
-                None
+                if matches!(work.state, ScheduledControllerWorkState::Reporting(_)) {
+                    work.state = ScheduledControllerWorkState::Ready;
+                    Some(key)
+                } else {
+                    None
+                }
             }
             None => {
                 self.work.insert(
@@ -354,12 +359,12 @@ impl ControllerSchedule {
             }
             ControllerPass::Converged(Some(report)) | ControllerPass::Failed(report) => {
                 current.retry_attempt = 0;
-                current.state = ScheduledControllerWorkState::Reporting(report.clone());
-                ControllerScheduleCompletion::Report(ScheduledControllerReport {
+                current.state = ScheduledControllerWorkState::Reporting(Box::new(report.clone()));
+                ControllerScheduleCompletion::Report(Box::new(ScheduledControllerReport {
                     key: pass.key.clone(),
                     revision: pass.revision,
                     report,
-                })
+                }))
             }
             ControllerPass::Converged(None) => {
                 self.work.remove(&pass.key);
@@ -386,7 +391,7 @@ impl ControllerSchedule {
         let ScheduledControllerWorkState::Reporting(report) = &current.state else {
             return ControllerScheduleCompletion::Complete;
         };
-        if report != &delivered.report {
+        if report.as_ref() != &delivered.report {
             return ControllerScheduleCompletion::Complete;
         }
         if current.revision == delivered.revision {
@@ -399,15 +404,14 @@ impl ControllerSchedule {
     }
 
     pub fn passes(&self) -> impl Iterator<Item = ScheduledControllerPass> + '_ {
-        self.work.iter().filter_map(|(key, work)| {
-            matches!(work.state, ScheduledControllerWorkState::Ready).then(|| {
-                ScheduledControllerPass {
-                    key: key.clone(),
-                    revision: work.revision,
-                    command: work.command.clone(),
-                }
+        self.work
+            .iter()
+            .filter(|(_, work)| matches!(work.state, ScheduledControllerWorkState::Ready))
+            .map(|(key, work)| ScheduledControllerPass {
+                key: key.clone(),
+                revision: work.revision,
+                command: work.command.clone(),
             })
-        })
     }
 }
 
@@ -993,7 +997,10 @@ mod tests {
         let report = ready_report(&slice, None, Vec::new()).unwrap();
         let mut schedule = ControllerSchedule::default();
         let key = schedule
-            .submit(controller.clone(), ControllerCommand::Reconcile(slice.clone()))
+            .submit(
+                controller.clone(),
+                ControllerCommand::Reconcile(slice.clone()),
+            )
             .unwrap();
         let pass = schedule.pass(&key).unwrap();
         let ControllerScheduleCompletion::Report(pending) =
@@ -1014,11 +1021,11 @@ mod tests {
         );
         assert_eq!(
             schedule.submit(controller, ControllerCommand::Reconcile(newer)),
-            None
+            Some(key.clone())
         );
         assert_eq!(
             schedule.acknowledge_report(&pending),
-            ControllerScheduleCompletion::Continue
+            ControllerScheduleCompletion::Complete
         );
         assert!(matches!(
             schedule.pass(&key).unwrap().command(),

@@ -10,6 +10,7 @@ use henosis_controller_cloudflare::CloudflareController;
 use henosis_controller_k8s::K8sController;
 use henosis_controller_runtime::ControllerSchedule;
 use henosis_controller_runtime::ControllerScheduleCompletion;
+use henosis_controller_runtime::ScheduledControllerReport;
 use henosis_controller_supabase::SupabaseController;
 use henosis_orchestrator::Command;
 use henosis_orchestrator::Core;
@@ -95,7 +96,7 @@ pub struct RealControllerWorld {
     graph_id: GraphId,
     component: ComponentName,
     controller_schedule: ControllerSchedule,
-    ready: BTreeMap<(ControllerName, Generation), ControllerReport>,
+    ready: BTreeMap<(ControllerName, Generation), ScheduledControllerReport>,
     delivered: BTreeMap<(ControllerName, Generation), ControllerReport>,
     events: Vec<henosis_types::CoreEvent>,
     trace: TraceRecorder,
@@ -421,11 +422,15 @@ impl RealControllerWorld {
         };
         match self.controller_schedule.complete(&pass, outcome) {
             ControllerScheduleCompletion::Continue => "acted or superseded".to_owned(),
-            ControllerScheduleCompletion::Complete(None) => "converged".to_owned(),
-            ControllerScheduleCompletion::Complete(Some(report)) => {
-                let generation = report.generation();
-                self.ready.insert((controller.clone(), generation), report);
+            ControllerScheduleCompletion::Complete => "converged".to_owned(),
+            ControllerScheduleCompletion::Report(pending) => {
+                let generation = pending.report().generation();
+                self.ready
+                    .insert((controller.clone(), generation), *pending);
                 "converged".to_owned()
+            }
+            ControllerScheduleCompletion::Retry { message, .. } => {
+                format!("retryable failure: {message}")
             }
         }
     }
@@ -437,26 +442,49 @@ impl RealControllerWorld {
         duplicate: bool,
     ) -> String {
         let key = (controller.clone(), generation);
-        let report = if duplicate {
+        let pending = (!duplicate).then(|| {
+            self.ready
+                .remove(&key)
+                .expect("enabled report delivery exists")
+        });
+        let report = if let Some(pending) = &pending {
+            pending.report().clone()
+        } else {
             self.delivered
                 .get(&key)
                 .expect("enabled duplicate report exists")
                 .clone()
-        } else {
-            let report = self
-                .ready
-                .remove(&key)
-                .expect("enabled report delivery exists");
-            self.delivered.insert(key, report.clone());
-            report
         };
-        match self.core.handle(Command::ReportController(report)).await {
+        match self
+            .core
+            .handle(Command::ReportController(report.clone()))
+            .await
+        {
             Ok(transition) => {
+                if let Some(pending) = &pending {
+                    let completion = self.controller_schedule.acknowledge_report(pending);
+                    assert!(matches!(
+                        completion,
+                        ControllerScheduleCompletion::Complete
+                            | ControllerScheduleCompletion::Continue
+                    ));
+                    self.delivered.insert(key, report);
+                }
                 self.accept_transition(transition);
                 "accepted".to_owned()
             }
-            Err(Error::Domain(error)) => format!("rejected: {error}"),
-            Err(error) => format!("failed: {error}"),
+            Err(Error::Domain(error)) => {
+                if let Some(pending) = pending {
+                    self.ready.insert(key, pending);
+                }
+                format!("rejected: {error}")
+            }
+            Err(error) => {
+                if let Some(pending) = pending {
+                    self.ready.insert(key, pending);
+                }
+                format!("failed: {error}")
+            }
         }
     }
 
