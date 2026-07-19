@@ -489,8 +489,10 @@ fn supabase_identity(operation: &SupabaseOperation) -> Option<(GraphId, Resource
         }
         | SupabaseOperation::DropSchema {
             graph, resource, ..
+        }
+        | SupabaseOperation::ConfigureApi {
+            graph, resource, ..
         } => Some((*graph, *resource)),
-        SupabaseOperation::ConfigureApi { .. } => None,
     }
 }
 
@@ -522,7 +524,9 @@ fn apply_supabase_operation(
                 .migrations
                 .insert(id.clone(), checksum.clone());
         }
-        SupabaseOperation::ConfigureApi { exposed, anon_read } => {
+        SupabaseOperation::ConfigureApi {
+            exposed, anon_read, ..
+        } => {
             for observation in resources.values_mut() {
                 observation.exposed = exposed.clone();
                 observation.anon_read = anon_read.clone();

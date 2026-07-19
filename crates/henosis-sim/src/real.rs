@@ -8,13 +8,8 @@ use faultline::Error;
 use futures::future::BoxFuture;
 use henosis_controller_cloudflare::CloudflareController;
 use henosis_controller_k8s::K8sController;
-use henosis_controller_runtime::PerResourceReconciler;
-use henosis_controller_runtime::ResourceConvergence;
-use henosis_controller_runtime::ResourceGoal;
-use henosis_controller_runtime::ResourcePass;
-use henosis_controller_runtime::publication_id;
-use henosis_controller_runtime::ready_report;
-use henosis_controller_runtime::reconcile_resource_once;
+use henosis_controller_runtime::ControllerSchedule;
+use henosis_controller_runtime::ControllerScheduleCompletion;
 use henosis_controller_supabase::ComponentBundleResolver;
 use henosis_controller_supabase::SupabaseController;
 use henosis_controller_supabase::SupabaseError;
@@ -40,10 +35,10 @@ use henosis_types::ComponentRevision;
 use henosis_types::ConfigClosureError;
 use henosis_types::ConfigClosureReader;
 use henosis_types::ContentDigest;
+use henosis_types::Controller;
 use henosis_types::ControllerCommand;
 use henosis_types::ControllerName;
 use henosis_types::ControllerReport;
-use henosis_types::ControllerSlice;
 use henosis_types::EvaluationAttempt;
 use henosis_types::EvaluationError;
 use henosis_types::EvaluationRequest;
@@ -64,7 +59,6 @@ use henosis_types::ObservedOutputBinding;
 use henosis_types::OutputAvailability;
 use henosis_types::OutputDeclaration;
 use henosis_types::OutputName;
-use henosis_types::Resource;
 use henosis_types::ResourceAddress;
 use henosis_types::ResourceId;
 use henosis_types::ResourceName;
@@ -77,7 +71,6 @@ const GRAPH_BYTES: [u8; 16] = [81; 16];
 pub enum RealControllerAction {
     ControllerPass {
         controller: ControllerName,
-        resource: ResourceId,
     },
     DeliverReport {
         controller: ControllerName,
@@ -97,155 +90,13 @@ pub struct RealControllerRun {
     pub target_actions: usize,
 }
 
-#[derive(Clone, Debug)]
-struct ResourceWork {
-    resource: Resource,
-    goal: ResourceGoal,
-    convergence: Option<ResourceConvergence>,
-}
-
-#[derive(Clone, Debug)]
-struct ControllerWork {
-    graph_id: GraphId,
-    desired: Vec<Resource>,
-    resources: BTreeMap<ResourceId, ResourceWork>,
-    report_slice: Option<ControllerSlice>,
-}
-
-impl ControllerWork {
-    fn from_command(command: &ControllerCommand) -> Self {
-        match command {
-            ControllerCommand::Reconcile(slice) => {
-                let resources = slice
-                    .resources()
-                    .iter()
-                    .cloned()
-                    .map(|resource| {
-                        (
-                            resource.id(),
-                            ResourceWork {
-                                resource,
-                                goal: ResourceGoal::Present,
-                                convergence: None,
-                            },
-                        )
-                    })
-                    .chain(slice.superseded().iter().cloned().map(|resource| {
-                        (
-                            resource.id(),
-                            ResourceWork {
-                                resource,
-                                goal: ResourceGoal::Absent,
-                                convergence: None,
-                            },
-                        )
-                    }))
-                    .collect();
-                Self {
-                    graph_id: slice.graph_id(),
-                    desired: slice.resources().to_vec(),
-                    resources,
-                    report_slice: Some(slice.clone()),
-                }
-            }
-            ControllerCommand::Supersede(supersession) => Self {
-                graph_id: supersession.graph_id,
-                desired: Vec::new(),
-                resources: supersession
-                    .resources
-                    .iter()
-                    .cloned()
-                    .map(|resource| {
-                        (
-                            resource.id(),
-                            ResourceWork {
-                                resource,
-                                goal: ResourceGoal::Absent,
-                                convergence: None,
-                            },
-                        )
-                    })
-                    .collect(),
-                report_slice: None,
-            },
-            ControllerCommand::Retire(retirement) => Self {
-                graph_id: retirement.graph_id,
-                desired: Vec::new(),
-                resources: retirement
-                    .resources
-                    .iter()
-                    .cloned()
-                    .map(|resource| {
-                        (
-                            resource.id(),
-                            ResourceWork {
-                                resource,
-                                goal: ResourceGoal::Absent,
-                                convergence: None,
-                            },
-                        )
-                    })
-                    .collect(),
-                report_slice: None,
-            },
-        }
-    }
-
-    fn is_complete(&self) -> bool {
-        self.resources
-            .values()
-            .all(|resource| resource.convergence.is_some())
-    }
-
-    fn report(&self) -> Option<ControllerReport> {
-        let slice = self.report_slice.as_ref()?;
-        if !self.is_complete() {
-            return None;
-        }
-        let outputs = self
-            .resources
-            .values()
-            .filter(|work| work.goal == ResourceGoal::Present)
-            .flat_map(|work| {
-                work.convergence
-                    .as_ref()
-                    .expect("complete work has convergence")
-                    .outputs
-                    .clone()
-            })
-            .collect::<Vec<_>>();
-        let evidence = self
-            .resources
-            .values()
-            .filter(|work| work.goal == ResourceGoal::Present)
-            .flat_map(|work| {
-                let mut evidence = work.resource.id().to_string().into_bytes();
-                evidence.push(b'=');
-                evidence.extend_from_slice(
-                    &work
-                        .convergence
-                        .as_ref()
-                        .expect("complete work has convergence")
-                        .evidence,
-                );
-                evidence.push(b';');
-                evidence
-            })
-            .collect::<Vec<_>>();
-        Some(
-            ready_report(slice, Some(publication_id(&evidence)), outputs)
-                .expect("real controller convergence builds a holistic report"),
-        )
-    }
-}
-
 pub struct RealControllerWorld {
     scheduler: NamedRng,
     evaluator: Arc<RealControllerEvaluator>,
     core: Core,
     graph_id: GraphId,
     component: ComponentName,
-    work: BTreeMap<ControllerName, ControllerWork>,
+    controller_schedule: ControllerSchedule,
     ready: BTreeMap<(ControllerName, Generation), ControllerReport>,
     delivered: BTreeMap<(ControllerName, Generation), ControllerReport>,
     events: Vec<henosis_types::CoreEvent>,
@@ -287,7 +138,7 @@ impl RealControllerWorld {
             core,
             graph_id,
             component,
-            work: BTreeMap::new(),
+            controller_schedule: ControllerSchedule::default(),
             ready: BTreeMap::new(),
             delivered: BTreeMap::new(),
             events: Vec::new(),
@@ -332,17 +183,11 @@ impl RealControllerWorld {
     #[must_use]
     pub fn enabled_actions(&self) -> Vec<RealControllerAction> {
         let mut actions = Vec::new();
-        for (controller, work) in &self.work {
-            actions.extend(
-                work.resources
-                    .values()
-                    .filter(|resource| resource.convergence.is_none())
-                    .map(|resource| RealControllerAction::ControllerPass {
-                        controller: controller.clone(),
-                        resource: resource.resource.id(),
-                    }),
-            );
-        }
+        actions.extend(self.controller_schedule.passes().map(|pass| {
+            RealControllerAction::ControllerPass {
+                controller: pass.key().controller().clone(),
+            }
+        }));
         actions.extend(self.ready.keys().cloned().map(|(controller, generation)| {
             RealControllerAction::DeliverReport {
                 controller,
@@ -368,10 +213,9 @@ impl RealControllerWorld {
         let before_actions = self.target_action_count();
         let action_text = format!("{action:?}");
         let outcome = match action {
-            RealControllerAction::ControllerPass {
-                controller,
-                resource,
-            } => self.apply_controller_pass(&controller, resource).await,
+            RealControllerAction::ControllerPass { controller } => {
+                self.apply_controller_pass(&controller).await
+            }
             RealControllerAction::DeliverReport {
                 controller,
                 generation,
@@ -566,62 +410,33 @@ impl RealControllerWorld {
         .expect("canonical real-controller state serializes")
     }
 
-    async fn apply_controller_pass(
-        &mut self,
-        controller: &ControllerName,
-        resource_id: ResourceId,
-    ) -> String {
-        let Some(work) = self.work.get(controller) else {
+    async fn apply_controller_pass(&mut self, controller: &ControllerName) -> String {
+        let Some(pass) = self
+            .controller_schedule
+            .passes()
+            .find(|pass| pass.key().controller() == controller)
+        else {
             return "cancelled stale work".to_owned();
         };
-        let graph_id = work.graph_id;
-        let desired = work.desired.clone();
-        let resource = work
-            .resources
-            .get(&resource_id)
-            .expect("enabled resource work exists")
-            .resource
-            .clone();
-        let goal = work
-            .resources
-            .get(&resource_id)
-            .expect("enabled resource work exists")
-            .goal;
         let result = match controller.as_str() {
-            "k8s" => pass(&self.k8s, graph_id, &desired, &resource, goal).await,
-            "cloudflare" => pass(&self.cloudflare, graph_id, &desired, &resource, goal).await,
-            "supabase" => pass(&self.supabase, graph_id, &desired, &resource, goal).await,
-            _ => Err(format!("unknown controller {controller}")),
+            "k8s" => self.k8s.execute(pass.command()).await,
+            "cloudflare" => self.cloudflare.execute(pass.command()).await,
+            "supabase" => self.supabase.execute(pass.command()).await,
+            _ => return format!("unknown controller {controller}"),
         };
-        match result {
-            Ok(ResourcePass::Acted) => "acted".to_owned(),
-            Ok(ResourcePass::Converged(convergence)) => {
-                self.work
-                    .get_mut(controller)
-                    .expect("work remains while pass executes")
-                    .resources
-                    .get_mut(&resource_id)
-                    .expect("resource work remains while pass executes")
-                    .convergence = Some(convergence);
-                self.promote_report(controller);
+        let outcome = match result {
+            Ok(outcome) => outcome,
+            Err(error) => return format!("retryable failure: {error}"),
+        };
+        match self.controller_schedule.complete(&pass, outcome) {
+            ControllerScheduleCompletion::Continue => "acted or superseded".to_owned(),
+            ControllerScheduleCompletion::Complete(None) => "converged".to_owned(),
+            ControllerScheduleCompletion::Complete(Some(report)) => {
+                let generation = report.generation();
+                self.ready.insert((controller.clone(), generation), report);
                 "converged".to_owned()
             }
-            Err(error) => format!("retryable failure: {error}"),
         }
-    }
-
-    fn promote_report(&mut self, controller: &ControllerName) {
-        let Some(work) = self.work.get(controller) else {
-            return;
-        };
-        if !work.is_complete() {
-            return;
-        }
-        if let Some(report) = work.report() {
-            self.ready
-                .insert((controller.clone(), report.generation()), report);
-        }
-        self.work.remove(controller);
     }
 
     async fn deliver_report(
@@ -657,9 +472,9 @@ impl RealControllerWorld {
     fn accept_transition(&mut self, transition: Transition) {
         self.events.extend(transition.events().iter().cloned());
         for effect in transition.effects() {
-            let controller = effect.controller().clone();
-            self.work
-                .insert(controller, ControllerWork::from_command(effect.command()));
+            let _ = self
+                .controller_schedule
+                .submit(effect.controller().clone(), effect.command().clone());
         }
         self.assert_invariants();
     }
@@ -672,30 +487,17 @@ impl RealControllerWorld {
         );
         let generation = self.generation();
         assert!(
-            self.work.values().all(|work| {
-                work.report_slice
-                    .as_ref()
-                    .is_none_or(|slice| slice.generation() == generation)
-            }),
+            self.controller_schedule
+                .passes()
+                .all(|pass| match pass.command() {
+                    ControllerCommand::Reconcile(slice) => slice.generation() == generation,
+                    ControllerCommand::Supersede(supersession) =>
+                        supersession.generation == generation,
+                    ControllerCommand::Retire(_) => true,
+                }),
             "superseding a generation cancels unfinished stale controller work"
         );
     }
-}
-
-async fn pass<R>(
-    reconciler: &R,
-    graph_id: GraphId,
-    desired: &[Resource],
-    resource: &Resource,
-    goal: ResourceGoal,
-) -> Result<ResourcePass, String>
-where
-    R: PerResourceReconciler,
-    R::Error: std::fmt::Display,
-{
-    reconcile_resource_once(reconciler, graph_id, desired, resource, goal)
-        .await
-        .map_err(|error| error.to_string())
 }
 
 #[derive(Clone, Debug)]

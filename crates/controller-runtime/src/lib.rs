@@ -14,7 +14,9 @@ use henosis_types::ArtifactStoreError;
 use henosis_types::BundleRef;
 use henosis_types::ConfigClosureError;
 use henosis_types::ConfigClosureReader;
+use henosis_types::ControllerCommand;
 use henosis_types::ControllerName;
+use henosis_types::ControllerPass;
 use henosis_types::ControllerReport;
 use henosis_types::ControllerReportError;
 use henosis_types::ControllerSlice;
@@ -35,8 +37,6 @@ use thiserror::Error;
 
 // === PER-RESOURCE RECONCILIATION ===
 
-const MAX_ACTIONS_PER_RESOURCE: usize = 1_024;
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ResourceGoal {
     Present,
@@ -56,17 +56,15 @@ pub struct ResourceConvergence {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ResourcePass {
+pub enum SlicePass {
     Acted,
-    Converged(ResourceConvergence),
+    Converged(SliceConvergence),
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SliceConvergence {
     pub outputs: Vec<ObservedOutput>,
     pub evidence: Vec<u8>,
-    pub actions: usize,
-    pub passes: usize,
 }
 
 pub trait PerResourceReconciler: Send + Sync {
@@ -87,7 +85,6 @@ pub trait PerResourceReconciler: Send + Sync {
     fn diff(
         &self,
         graph_id: GraphId,
-        desired: &[Resource],
         resource: &Resource,
         goal: ResourceGoal,
         observed: &Self::Observation,
@@ -101,30 +98,10 @@ pub trait PerResourceReconciler: Send + Sync {
     ) -> BoxFuture<'a, Result<(), Self::Error>>;
 }
 
-pub async fn reconcile_resource_once<R>(
-    reconciler: &R,
-    graph_id: GraphId,
-    desired: &[Resource],
-    resource: &Resource,
-    goal: ResourceGoal,
-) -> Result<ResourcePass, R::Error>
-where
-    R: PerResourceReconciler,
-{
-    let observed = reconciler.observe(graph_id, resource).await?;
-    match reconciler.diff(graph_id, desired, resource, goal, &observed)? {
-        ReconcileDecision::Converged(convergence) => Ok(ResourcePass::Converged(convergence)),
-        ReconcileDecision::Act(action) => {
-            reconciler.act(graph_id, resource, action).await?;
-            Ok(ResourcePass::Acted)
-        }
-    }
-}
-
 pub async fn reconcile_slice<R>(
     reconciler: &R,
     slice: &ControllerSlice,
-) -> Result<SliceConvergence, ReconcileLoopError<R::Error>>
+) -> Result<SlicePass, R::Error>
 where
     R: PerResourceReconciler,
 {
@@ -137,24 +114,27 @@ where
         )
     });
     for resource in desired {
-        let resource_convergence = reconcile_resource(
+        match reconcile_resource(
             reconciler,
             slice.graph_id(),
-            slice.resources(),
             resource,
             ResourceGoal::Present,
-            &mut convergence,
         )
-        .await?;
-        convergence.outputs.extend(resource_convergence.outputs);
-        convergence
-            .evidence
-            .extend_from_slice(resource.id().to_string().as_bytes());
-        convergence.evidence.push(b'=');
-        convergence
-            .evidence
-            .extend_from_slice(&resource_convergence.evidence);
-        convergence.evidence.push(b';');
+        .await?
+        {
+            ResourcePass::Acted => return Ok(SlicePass::Acted),
+            ResourcePass::Converged(resource_convergence) => {
+                convergence.outputs.extend(resource_convergence.outputs);
+                convergence
+                    .evidence
+                    .extend_from_slice(resource.id().to_string().as_bytes());
+                convergence.evidence.push(b'=');
+                convergence
+                    .evidence
+                    .extend_from_slice(&resource_convergence.evidence);
+                convergence.evidence.push(b';');
+            }
+        }
     }
     let mut superseded = slice.superseded().iter().collect::<Vec<_>>();
     superseded.sort_by_key(|resource| {
@@ -164,28 +144,23 @@ where
         )
     });
     for resource in superseded {
-        reconcile_resource(
-            reconciler,
-            slice.graph_id(),
-            slice.resources(),
-            resource,
-            ResourceGoal::Absent,
-            &mut convergence,
-        )
-        .await?;
+        if reconcile_resource(reconciler, slice.graph_id(), resource, ResourceGoal::Absent).await?
+            == ResourcePass::Acted
+        {
+            return Ok(SlicePass::Acted);
+        }
     }
-    Ok(convergence)
+    Ok(SlicePass::Converged(convergence))
 }
 
 pub async fn reconcile_absent<R>(
     reconciler: &R,
     graph_id: GraphId,
     resources: &[Resource],
-) -> Result<SliceConvergence, ReconcileLoopError<R::Error>>
+) -> Result<SlicePass, R::Error>
 where
     R: PerResourceReconciler,
 {
-    let mut convergence = SliceConvergence::default();
     let mut resources = resources.iter().collect::<Vec<_>>();
     resources.sort_by_key(|resource| {
         (
@@ -194,57 +169,158 @@ where
         )
     });
     for resource in resources {
-        reconcile_resource(
-            reconciler,
-            graph_id,
-            &[],
-            resource,
-            ResourceGoal::Absent,
-            &mut convergence,
-        )
-        .await?;
+        if reconcile_resource(reconciler, graph_id, resource, ResourceGoal::Absent).await?
+            == ResourcePass::Acted
+        {
+            return Ok(SlicePass::Acted);
+        }
     }
-    Ok(convergence)
+    Ok(SlicePass::Converged(SliceConvergence::default()))
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ResourcePass {
+    Acted,
+    Converged(ResourceConvergence),
 }
 
 async fn reconcile_resource<R>(
     reconciler: &R,
     graph_id: GraphId,
-    desired: &[Resource],
     resource: &Resource,
     goal: ResourceGoal,
-    totals: &mut SliceConvergence,
-) -> Result<ResourceConvergence, ReconcileLoopError<R::Error>>
+) -> Result<ResourcePass, R::Error>
 where
     R: PerResourceReconciler,
 {
-    let mut resource_actions = 0;
-    loop {
-        totals.passes += 1;
-        match reconcile_resource_once(reconciler, graph_id, desired, resource, goal)
-            .await
-            .map_err(ReconcileLoopError::Target)?
-        {
-            ResourcePass::Converged(convergence) => return Ok(convergence),
-            ResourcePass::Acted => {
-                if resource_actions == MAX_ACTIONS_PER_RESOURCE {
-                    return Err(ReconcileLoopError::DidNotConverge {
-                        resource: resource.id().to_string(),
-                    });
-                }
-                resource_actions += 1;
-                totals.actions += 1;
-            }
+    let observed = reconciler.observe(graph_id, resource).await?;
+    match reconciler.diff(graph_id, resource, goal, &observed)? {
+        ReconcileDecision::Converged(convergence) => Ok(ResourcePass::Converged(convergence)),
+        ReconcileDecision::Act(action) => {
+            reconciler.act(graph_id, resource, action).await?;
+            Ok(ResourcePass::Acted)
         }
     }
 }
 
-#[derive(Debug, Error)]
-pub enum ReconcileLoopError<E> {
-    #[error("target reconciliation failed: {0}")]
-    Target(E),
-    #[error("resource {resource} did not converge after {MAX_ACTIONS_PER_RESOURCE} actions")]
-    DidNotConverge { resource: String },
+// === CONTROLLER SCHEDULING ===
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct ControllerWorkKey {
+    graph_id: GraphId,
+    controller: ControllerName,
+}
+
+impl ControllerWorkKey {
+    #[must_use]
+    pub const fn graph_id(&self) -> GraphId {
+        self.graph_id
+    }
+
+    #[must_use]
+    pub const fn controller(&self) -> &ControllerName {
+        &self.controller
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ScheduledControllerPass {
+    key: ControllerWorkKey,
+    revision: u64,
+    command: ControllerCommand,
+}
+
+impl ScheduledControllerPass {
+    #[must_use]
+    pub const fn key(&self) -> &ControllerWorkKey {
+        &self.key
+    }
+
+    #[must_use]
+    pub const fn command(&self) -> &ControllerCommand {
+        &self.command
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ControllerScheduleCompletion {
+    Continue,
+    Complete(Option<ControllerReport>),
+}
+
+#[derive(Clone, Debug)]
+struct ScheduledControllerWork {
+    revision: u64,
+    command: ControllerCommand,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ControllerSchedule {
+    next_revision: u64,
+    work: BTreeMap<ControllerWorkKey, ScheduledControllerWork>,
+}
+
+impl ControllerSchedule {
+    #[must_use]
+    pub fn submit(
+        &mut self,
+        controller: ControllerName,
+        command: ControllerCommand,
+    ) -> Option<ControllerWorkKey> {
+        let key = ControllerWorkKey {
+            graph_id: command.graph_id(),
+            controller,
+        };
+        self.next_revision = self.next_revision.wrapping_add(1);
+        let starts_lane = !self.work.contains_key(&key);
+        self.work.insert(
+            key.clone(),
+            ScheduledControllerWork {
+                revision: self.next_revision,
+                command,
+            },
+        );
+        starts_lane.then_some(key)
+    }
+
+    #[must_use]
+    pub fn pass(&self, key: &ControllerWorkKey) -> Option<ScheduledControllerPass> {
+        let work = self.work.get(key)?;
+        Some(ScheduledControllerPass {
+            key: key.clone(),
+            revision: work.revision,
+            command: work.command.clone(),
+        })
+    }
+
+    pub fn complete(
+        &mut self,
+        pass: &ScheduledControllerPass,
+        outcome: ControllerPass,
+    ) -> ControllerScheduleCompletion {
+        let Some(current) = self.work.get(&pass.key) else {
+            return ControllerScheduleCompletion::Complete(None);
+        };
+        if current.revision != pass.revision {
+            return ControllerScheduleCompletion::Continue;
+        }
+        match outcome {
+            ControllerPass::Acted => ControllerScheduleCompletion::Continue,
+            ControllerPass::Converged(report) => {
+                self.work.remove(&pass.key);
+                ControllerScheduleCompletion::Complete(report)
+            }
+            ControllerPass::Failed(_) => ControllerScheduleCompletion::Continue,
+        }
+    }
+
+    pub fn passes(&self) -> impl Iterator<Item = ScheduledControllerPass> + '_ {
+        self.work.iter().map(|(key, work)| ScheduledControllerPass {
+            key: key.clone(),
+            revision: work.revision,
+            command: work.command.clone(),
+        })
+    }
 }
 
 // === ATOMIC REPORTS ===
@@ -518,6 +594,17 @@ impl GitRepository {
         files: &BTreeMap<String, Vec<u8>>,
         message: &str,
     ) -> Result<GitPublication, GitError> {
+        self.publish_with_before_push(branch, mode, files, message, || {})
+    }
+
+    fn publish_with_before_push(
+        &self,
+        branch: &str,
+        mode: PublicationMode<'_>,
+        files: &BTreeMap<String, Vec<u8>>,
+        message: &str,
+        before_push: impl FnOnce(),
+    ) -> Result<GitPublication, GitError> {
         let directory = tempfile::tempdir().map_err(GitError::Io)?;
         run_git(
             None,
@@ -538,7 +625,7 @@ impl GitRepository {
                 &format!("refs/remotes/origin/{branch}"),
             ],
         )?;
-        if exists {
+        let expected_revision = if exists {
             run_git(
                 Some(directory.path()),
                 [
@@ -549,13 +636,18 @@ impl GitRepository {
                     &format!("origin/{branch}"),
                 ],
             )?;
+            git_output(
+                Some(directory.path()),
+                ["rev-parse", &format!("origin/{branch}")],
+            )?
         } else {
             run_git(
                 Some(directory.path()),
                 ["checkout", "--quiet", "--orphan", branch],
             )?;
             clear_worktree(directory.path(), None)?;
-        }
+            String::new()
+        };
         match mode {
             PublicationMode::ReplaceBranch => clear_worktree(directory.path(), None)?,
             PublicationMode::ReplaceDirectory(prefix) => {
@@ -579,12 +671,14 @@ impl GitRepository {
             });
         }
         run_git(Some(directory.path()), ["commit", "--quiet", "-m", message])?;
+        before_push();
+        let lease = format!("--force-with-lease=refs/heads/{branch}:{expected_revision}");
         run_git(
             Some(directory.path()),
             [
                 "push",
                 "--quiet",
-                "--force",
+                &lease,
                 "origin",
                 &format!("HEAD:refs/heads/{branch}"),
             ],
@@ -804,8 +898,12 @@ pub enum GitError {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::sync::Barrier;
+
     use futures::executor::block_on;
     use henosis_types::ContentDigest;
+    use henosis_types::Generation;
 
     use super::*;
 
@@ -829,6 +927,99 @@ mod tests {
             block_on(store.fetch(digest)),
             Err(ArtifactStoreError::DigestMismatch { .. })
         ));
+    }
+
+    #[test]
+    fn scheduler_supersedes_in_flight_generation_and_keeps_the_lane_running() {
+        let graph = GraphId::from_bytes([3; 16]);
+        let controller = controller_name("test");
+        let command = |generation| {
+            ControllerCommand::Reconcile(ControllerSlice::new(
+                graph,
+                Generation::new(generation).unwrap(),
+                ContentDigest::digest(&[generation as u8]),
+                controller.clone(),
+                Vec::new(),
+                Vec::new(),
+            ))
+        };
+        let mut schedule = ControllerSchedule::default();
+        let key = schedule
+            .submit(controller.clone(), command(1))
+            .expect("new lane starts a driver");
+        let stale = schedule.pass(&key).unwrap();
+        assert_eq!(schedule.submit(controller.clone(), command(2)), None);
+        assert_eq!(
+            schedule.complete(&stale, ControllerPass::Converged(None)),
+            ControllerScheduleCompletion::Continue
+        );
+        let current = schedule.pass(&key).unwrap();
+        assert!(matches!(
+            current.command(),
+            ControllerCommand::Reconcile(slice) if slice.generation() == Generation::new(2).unwrap()
+        ));
+        assert_eq!(
+            schedule.complete(&current, ControllerPass::Acted),
+            ControllerScheduleCompletion::Continue
+        );
+        assert_eq!(
+            schedule.complete(&current, ControllerPass::Converged(None)),
+            ControllerScheduleCompletion::Complete(None)
+        );
+        assert!(schedule.pass(&key).is_none());
+    }
+
+    #[test]
+    fn stale_git_publication_cannot_overwrite_newer_branch_head() {
+        let remote = tempfile::tempdir().unwrap();
+        run_git(
+            None,
+            ["init", "--bare", "--quiet", remote.path().to_str().unwrap()],
+        )
+        .unwrap();
+        let repository = GitRepository::new(remote.path());
+        repository
+            .publish(
+                "env/test",
+                PublicationMode::ReplaceBranch,
+                &BTreeMap::from([("resource/state".into(), b"base".to_vec())]),
+                "base",
+            )
+            .unwrap();
+
+        let ready = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+        let stale_repository = repository.clone();
+        let stale_ready = Arc::clone(&ready);
+        let stale_release = Arc::clone(&release);
+        let stale = std::thread::spawn(move || {
+            stale_repository.publish_with_before_push(
+                "env/test",
+                PublicationMode::ReplaceBranch,
+                &BTreeMap::from([("resource/state".into(), b"stale".to_vec())]),
+                "stale",
+                || {
+                    stale_ready.wait();
+                    stale_release.wait();
+                },
+            )
+        });
+        ready.wait();
+        repository
+            .publish(
+                "env/test",
+                PublicationMode::ReplaceBranch,
+                &BTreeMap::from([("resource/state".into(), b"new".to_vec())]),
+                "new",
+            )
+            .unwrap();
+        release.wait();
+
+        assert!(matches!(stale.join().unwrap(), Err(GitError::Command(_))));
+        assert_eq!(
+            repository.read_directory("env/test", "resource").unwrap(),
+            BTreeMap::from([("state".into(), b"new".to_vec())])
+        );
     }
 
     #[test]

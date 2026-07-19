@@ -16,6 +16,7 @@ use henosis_controller_runtime::PerResourceReconciler;
 use henosis_controller_runtime::ReconcileDecision;
 use henosis_controller_runtime::ResourceConvergence;
 use henosis_controller_runtime::ResourceGoal;
+use henosis_controller_runtime::SlicePass;
 use henosis_controller_runtime::controller_name;
 use henosis_controller_runtime::failed_report;
 use henosis_controller_runtime::output;
@@ -30,7 +31,7 @@ use henosis_types::Controller;
 use henosis_types::ControllerCommand;
 use henosis_types::ControllerError;
 use henosis_types::ControllerName;
-use henosis_types::ControllerReport;
+use henosis_types::ControllerPass;
 use henosis_types::ControllerSlice;
 use henosis_types::GraphId;
 use henosis_types::Resource;
@@ -42,6 +43,7 @@ use sha2::Sha256;
 use thiserror::Error;
 
 const CONTROLLER_NAME: &str = "supabase";
+const POSTGREST_CONFIG_LOCK: i64 = 0x4845_4e4f_5349_5301;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -100,6 +102,10 @@ pub enum SupabaseOperation {
         sql: String,
     },
     ConfigureApi {
+        graph: GraphId,
+        resource: ResourceId,
+        schema: String,
+        observed_digest: String,
         exposed: BTreeSet<String>,
         anon_read: BTreeSet<String>,
     },
@@ -170,23 +176,20 @@ where
         }
     }
 
-    async fn reconcile(
-        &self,
-        slice: &ControllerSlice,
-    ) -> Result<ControllerReport, ControllerError> {
-        let convergence = match reconcile_slice(self, slice).await {
-            Ok(convergence) => convergence,
-            Err(error) => {
-                return failed_report(slice, error.to_string())
-                    .map_err(|report_error| ControllerError::new(report_error.to_string()));
-            }
-        };
-        ready_report(
-            slice,
-            Some(publication_id(&convergence.evidence)),
-            convergence.outputs,
-        )
-        .map_err(|error| ControllerError::new(error.to_string()))
+    async fn reconcile(&self, slice: &ControllerSlice) -> Result<ControllerPass, ControllerError> {
+        match reconcile_slice(self, slice).await {
+            Ok(SlicePass::Acted) => Ok(ControllerPass::Acted),
+            Ok(SlicePass::Converged(convergence)) => ready_report(
+                slice,
+                Some(publication_id(&convergence.evidence)),
+                convergence.outputs,
+            )
+            .map(|report| ControllerPass::Converged(Some(report)))
+            .map_err(|error| ControllerError::new(error.to_string())),
+            Err(error) => failed_report(slice, error.to_string())
+                .map(ControllerPass::Failed)
+                .map_err(|report_error| ControllerError::new(report_error.to_string())),
+        }
     }
 }
 
@@ -252,7 +255,6 @@ where
     fn diff(
         &self,
         graph_id: GraphId,
-        _desired: &[Resource],
         resource: &Resource,
         goal: ResourceGoal,
         observed: &Self::Observation,
@@ -273,6 +275,10 @@ where
                     || observed.target.anon_read != desired_anon
                 {
                     return Ok(ReconcileDecision::Act(SupabaseOperation::ConfigureApi {
+                        graph: graph_id,
+                        resource: resource.id(),
+                        schema: observed.body.schema.clone(),
+                        observed_digest: observation_digest(&observed.target),
                         exposed: desired_exposed,
                         anon_read: desired_anon,
                     }));
@@ -322,6 +328,10 @@ where
                     || observed.target.anon_read != desired_anon
                 {
                     return Ok(ReconcileDecision::Act(SupabaseOperation::ConfigureApi {
+                        graph: graph_id,
+                        resource: resource.id(),
+                        schema: observed.body.schema.clone(),
+                        observed_digest: observation_digest(&observed.target),
                         exposed: desired_exposed,
                         anon_read: desired_anon,
                     }));
@@ -358,7 +368,9 @@ where
                     resource,
                     schema,
                 } => observation_digest(&self.target.observe(*graph, *resource, schema)?),
-                SupabaseOperation::ConfigureApi { .. } => String::new(),
+                SupabaseOperation::ConfigureApi {
+                    observed_digest, ..
+                } => observed_digest.clone(),
             };
             self.target.apply(&observed_digest, &action)?;
             Ok(())
@@ -378,21 +390,27 @@ where
     fn execute<'a>(
         &'a self,
         command: &'a ControllerCommand,
-    ) -> BoxFuture<'a, Result<Option<ControllerReport>, ControllerError>> {
+    ) -> BoxFuture<'a, Result<ControllerPass, ControllerError>> {
         async move {
             match command {
-                ControllerCommand::Reconcile(slice) => self.reconcile(slice).await.map(Some),
+                ControllerCommand::Reconcile(slice) => self.reconcile(slice).await,
                 ControllerCommand::Supersede(supersession) => {
                     reconcile_absent(self, supersession.graph_id, &supersession.resources)
                         .await
-                        .map_err(|error| ControllerError::new(error.to_string()))?;
-                    Ok(None)
+                        .map(|pass| match pass {
+                            SlicePass::Acted => ControllerPass::Acted,
+                            SlicePass::Converged(_) => ControllerPass::Converged(None),
+                        })
+                        .map_err(|error| ControllerError::new(error.to_string()))
                 }
                 ControllerCommand::Retire(retirement) => {
                     reconcile_absent(self, retirement.graph_id, &retirement.resources)
                         .await
-                        .map_err(|error| ControllerError::new(error.to_string()))?;
-                    Ok(None)
+                        .map(|pass| match pass {
+                            SlicePass::Acted => ControllerPass::Acted,
+                            SlicePass::Converged(_) => ControllerPass::Converged(None),
+                        })
+                        .map_err(|error| ControllerError::new(error.to_string()))
                 }
             }
         }
@@ -579,6 +597,14 @@ impl SupabaseTarget for LocalSupabaseTarget {
     ) -> Result<String, SupabaseError> {
         let mut client = self.connect()?;
         let mut transaction = client.transaction().map_err(database_error)?;
+        if matches!(operation, SupabaseOperation::ConfigureApi { .. }) {
+            transaction
+                .query_one(
+                    "select pg_advisory_xact_lock($1)",
+                    &[&POSTGREST_CONFIG_LOCK],
+                )
+                .map_err(database_error)?;
+        }
         if let Some((graph, resource, schema)) = operation_identity(operation) {
             let fresh = observe_database(&mut transaction, graph, resource, schema)?;
             if observation_digest(&fresh) != observed_digest {
@@ -633,7 +659,9 @@ impl SupabaseTarget for LocalSupabaseTarget {
                     )
                     .map_err(database_error)?;
             }
-            SupabaseOperation::ConfigureApi { exposed, anon_read } => {
+            SupabaseOperation::ConfigureApi {
+                exposed, anon_read, ..
+            } => {
                 configure_api(&mut transaction, exposed, anon_read)?;
             }
             SupabaseOperation::DropSchema {
@@ -697,8 +725,13 @@ fn operation_identity(operation: &SupabaseOperation) -> Option<(GraphId, Resourc
             graph,
             resource,
             schema,
+        }
+        | SupabaseOperation::ConfigureApi {
+            graph,
+            resource,
+            schema,
+            ..
         } => Some((*graph, *resource, schema)),
-        SupabaseOperation::ConfigureApi { .. } => None,
     }
 }
 
@@ -951,11 +984,30 @@ mod tests {
 
         fn apply(
             &self,
-            _observed_digest: &str,
+            observed_digest: &str,
             operation: &SupabaseOperation,
         ) -> Result<String, SupabaseError> {
-            self.actions.lock().unwrap().push(operation.clone());
             let mut state = self.state.lock().unwrap();
+            if let Some((graph, resource, schema)) = operation_identity(operation) {
+                let fresh = SupabaseObservation {
+                    schema_exists: state.schemas.values().any(|value| value == schema),
+                    owned_schema: state.schemas.get(&(graph, resource)).cloned(),
+                    migrations: state
+                        .migrations
+                        .iter()
+                        .filter(|((g, r, _), _)| *g == graph && *r == resource)
+                        .map(|((_, _, id), checksum)| (id.clone(), checksum.clone()))
+                        .collect(),
+                    exposed: state.exposed.clone(),
+                    anon_read: state.anon_read.clone(),
+                };
+                if observation_digest(&fresh) != observed_digest {
+                    return Err(SupabaseError::Unavailable(
+                        "target changed after observation; retry from fresh state".into(),
+                    ));
+                }
+            }
+            self.actions.lock().unwrap().push(operation.clone());
             match operation {
                 SupabaseOperation::EnsureSchema {
                     graph,
@@ -975,7 +1027,9 @@ mod tests {
                         .migrations
                         .insert((*graph, *resource, id.clone()), checksum.clone());
                 }
-                SupabaseOperation::ConfigureApi { exposed, anon_read } => {
+                SupabaseOperation::ConfigureApi {
+                    exposed, anon_read, ..
+                } => {
                     state.exposed = exposed.clone();
                     state.anon_read = anon_read.clone();
                 }
@@ -1008,8 +1062,13 @@ mod tests {
     async fn converges_one_operation_per_pass_without_flapping() {
         let (controller, actions) = controller();
         let slice = slice();
-        let convergence = reconcile_slice(&controller, &slice).await.unwrap();
-        assert_eq!((convergence.actions, convergence.passes), (3, 4));
+        for expected in ["ensure schema", "apply migration", "configure API"] {
+            assert_eq!(
+                reconcile_slice(&controller, &slice).await.unwrap(),
+                SlicePass::Acted,
+                "{expected} is the sole action in its pass"
+            );
+        }
         assert!(matches!(
             actions.lock().unwrap()[0],
             SupabaseOperation::EnsureSchema { .. }
@@ -1022,8 +1081,53 @@ mod tests {
             actions.lock().unwrap()[2],
             SupabaseOperation::ConfigureApi { .. }
         ));
-        let again = reconcile_slice(&controller, &slice).await.unwrap();
-        assert_eq!((again.actions, again.passes), (0, 1));
+        assert!(matches!(
+            reconcile_slice(&controller, &slice).await.unwrap(),
+            SlicePass::Converged(_)
+        ));
+        assert_eq!(actions.lock().unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn stale_postgrest_configuration_is_fenced() {
+        let (controller, actions) = controller();
+        let slice = slice();
+        assert_eq!(
+            reconcile_slice(&controller, &slice).await.unwrap(),
+            SlicePass::Acted
+        );
+        assert_eq!(
+            reconcile_slice(&controller, &slice).await.unwrap(),
+            SlicePass::Acted
+        );
+        let resource = &slice.resources()[0];
+        let observed = controller
+            .observe(slice.graph_id(), resource)
+            .await
+            .unwrap();
+        let ReconcileDecision::Act(action) = controller
+            .diff(slice.graph_id(), resource, ResourceGoal::Present, &observed)
+            .unwrap()
+        else {
+            panic!("API exposure still needs one action");
+        };
+        controller
+            .target
+            .state
+            .lock()
+            .unwrap()
+            .exposed
+            .insert("other_graph".into());
+        let error = controller
+            .act(slice.graph_id(), resource, action)
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("target changed after observation")
+        );
+        assert_eq!(actions.lock().unwrap().len(), 2);
     }
 
     #[tokio::test]
@@ -1035,20 +1139,36 @@ mod tests {
         let actions = Arc::new(Mutex::new(Vec::new()));
         let slice = slice();
         let first = make_controller(Arc::clone(&state), Arc::clone(&actions));
-        first
-            .execute(&ControllerCommand::Reconcile(slice.clone()))
-            .await
-            .unwrap();
+        let reconcile = ControllerCommand::Reconcile(slice.clone());
+        for _ in 0..3 {
+            assert_eq!(
+                first.execute(&reconcile).await.unwrap(),
+                ControllerPass::Acted
+            );
+        }
+        assert!(matches!(
+            first.execute(&reconcile).await.unwrap(),
+            ControllerPass::Converged(Some(_))
+        ));
         let restarted = make_controller(Arc::clone(&state), actions);
-        restarted
-            .execute(&ControllerCommand::Retire(Retirement {
-                graph_id: slice.graph_id(),
-                last_generation: slice.generation(),
-                controller: restarted.name().clone(),
-                resources: slice.resources().to_vec(),
-            }))
-            .await
-            .unwrap();
+        let retire = ControllerCommand::Retire(Retirement {
+            graph_id: slice.graph_id(),
+            last_generation: slice.generation(),
+            controller: restarted.name().clone(),
+            resources: slice.resources().to_vec(),
+        });
+        assert_eq!(
+            restarted.execute(&retire).await.unwrap(),
+            ControllerPass::Acted
+        );
+        assert_eq!(
+            restarted.execute(&retire).await.unwrap(),
+            ControllerPass::Acted
+        );
+        assert_eq!(
+            restarted.execute(&retire).await.unwrap(),
+            ControllerPass::Converged(None)
+        );
         assert!(state.lock().unwrap().schemas.is_empty());
     }
 

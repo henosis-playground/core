@@ -14,6 +14,7 @@ use henosis_controller_runtime::PerResourceReconciler;
 use henosis_controller_runtime::ReconcileDecision;
 use henosis_controller_runtime::ResourceConvergence;
 use henosis_controller_runtime::ResourceGoal;
+use henosis_controller_runtime::SlicePass;
 use henosis_controller_runtime::controller_name;
 use henosis_controller_runtime::failed_report;
 use henosis_controller_runtime::output;
@@ -27,7 +28,7 @@ use henosis_types::Controller;
 use henosis_types::ControllerCommand;
 use henosis_types::ControllerError;
 use henosis_types::ControllerName;
-use henosis_types::ControllerReport;
+use henosis_types::ControllerPass;
 use henosis_types::ControllerSlice;
 use henosis_types::GraphId;
 use henosis_types::ObservedOutput;
@@ -174,23 +175,20 @@ where
         }
     }
 
-    async fn reconcile(
-        &self,
-        slice: &ControllerSlice,
-    ) -> Result<ControllerReport, ControllerError> {
-        let convergence = match reconcile_slice(self, slice).await {
-            Ok(convergence) => convergence,
-            Err(error) => {
-                return failed_report(slice, error.to_string())
-                    .map_err(|report_error| ControllerError::new(report_error.to_string()));
-            }
-        };
-        ready_report(
-            slice,
-            Some(publication_id(&convergence.evidence)),
-            convergence.outputs,
-        )
-        .map_err(|error| ControllerError::new(error.to_string()))
+    async fn reconcile(&self, slice: &ControllerSlice) -> Result<ControllerPass, ControllerError> {
+        match reconcile_slice(self, slice).await {
+            Ok(SlicePass::Acted) => Ok(ControllerPass::Acted),
+            Ok(SlicePass::Converged(convergence)) => ready_report(
+                slice,
+                Some(publication_id(&convergence.evidence)),
+                convergence.outputs,
+            )
+            .map(|report| ControllerPass::Converged(Some(report)))
+            .map_err(|error| ControllerError::new(error.to_string())),
+            Err(error) => failed_report(slice, error.to_string())
+                .map(ControllerPass::Failed)
+                .map_err(|report_error| ControllerError::new(report_error.to_string())),
+        }
     }
 }
 
@@ -217,7 +215,6 @@ where
     fn diff(
         &self,
         _graph_id: GraphId,
-        _desired: &[Resource],
         resource: &Resource,
         goal: ResourceGoal,
         observed: &Self::Observation,
@@ -316,21 +313,27 @@ where
     fn execute<'a>(
         &'a self,
         command: &'a ControllerCommand,
-    ) -> BoxFuture<'a, Result<Option<ControllerReport>, ControllerError>> {
+    ) -> BoxFuture<'a, Result<ControllerPass, ControllerError>> {
         async move {
             match command {
-                ControllerCommand::Reconcile(slice) => self.reconcile(slice).await.map(Some),
+                ControllerCommand::Reconcile(slice) => self.reconcile(slice).await,
                 ControllerCommand::Supersede(supersession) => {
                     reconcile_absent(self, supersession.graph_id, &supersession.resources)
                         .await
-                        .map_err(|error| ControllerError::new(error.to_string()))?;
-                    Ok(None)
+                        .map(|pass| match pass {
+                            SlicePass::Acted => ControllerPass::Acted,
+                            SlicePass::Converged(_) => ControllerPass::Converged(None),
+                        })
+                        .map_err(|error| ControllerError::new(error.to_string()))
                 }
                 ControllerCommand::Retire(retirement) => {
                     reconcile_absent(self, retirement.graph_id, &retirement.resources)
                         .await
-                        .map_err(|error| ControllerError::new(error.to_string()))?;
-                    Ok(None)
+                        .map(|pass| match pass {
+                            SlicePass::Acted => ControllerPass::Acted,
+                            SlicePass::Converged(_) => ControllerPass::Converged(None),
+                        })
+                        .map_err(|error| ControllerError::new(error.to_string()))
                 }
             }
         }
@@ -572,42 +575,64 @@ mod tests {
     async fn converges_one_action_per_pass_without_flapping() {
         let fixture = fixture();
         let slice = slice();
-        let first = reconcile_slice(&fixture.controller, &slice).await.unwrap();
-        assert_eq!((first.actions, first.passes), (2, 3));
+        assert_eq!(
+            reconcile_slice(&fixture.controller, &slice).await.unwrap(),
+            SlicePass::Acted
+        );
         assert!(matches!(
             fixture.actions.lock().unwrap()[0],
             CloudflareAction::UploadWorker(_)
         ));
         assert_eq!(
+            reconcile_slice(&fixture.controller, &slice).await.unwrap(),
+            SlicePass::Acted
+        );
+        assert_eq!(
             fixture.actions.lock().unwrap()[1],
             CloudflareAction::EnableWorkerSubdomain
         );
-        let second = reconcile_slice(&fixture.controller, &slice).await.unwrap();
-        assert_eq!((second.actions, second.passes), (0, 1));
+        assert!(matches!(
+            reconcile_slice(&fixture.controller, &slice).await.unwrap(),
+            SlicePass::Converged(_)
+        ));
+        assert_eq!(fixture.actions.lock().unwrap().len(), 2);
     }
 
     #[tokio::test]
     async fn fresh_controller_retires_from_target_observation() {
         let fixture = fixture();
         let slice = slice();
-        fixture
-            .controller
-            .execute(&ControllerCommand::Reconcile(slice.clone()))
-            .await
-            .unwrap();
+        let reconcile = ControllerCommand::Reconcile(slice.clone());
+        assert_eq!(
+            fixture.controller.execute(&reconcile).await.unwrap(),
+            ControllerPass::Acted
+        );
+        assert_eq!(
+            fixture.controller.execute(&reconcile).await.unwrap(),
+            ControllerPass::Acted
+        );
+        assert!(matches!(
+            fixture.controller.execute(&reconcile).await.unwrap(),
+            ControllerPass::Converged(Some(_))
+        ));
         let restarted = CloudflareController::new(RecordedTransport {
             state: Arc::clone(&fixture.state),
             actions: fixture.actions,
         });
-        restarted
-            .execute(&ControllerCommand::Retire(Retirement {
-                graph_id: slice.graph_id(),
-                last_generation: slice.generation(),
-                controller: restarted.name().clone(),
-                resources: slice.resources().to_vec(),
-            }))
-            .await
-            .unwrap();
+        let retire = ControllerCommand::Retire(Retirement {
+            graph_id: slice.graph_id(),
+            last_generation: slice.generation(),
+            controller: restarted.name().clone(),
+            resources: slice.resources().to_vec(),
+        });
+        assert_eq!(
+            restarted.execute(&retire).await.unwrap(),
+            ControllerPass::Acted
+        );
+        assert_eq!(
+            restarted.execute(&retire).await.unwrap(),
+            ControllerPass::Converged(None)
+        );
         assert!(fixture.state.lock().unwrap().resources.is_empty());
     }
 

@@ -15,6 +15,7 @@ use henosis_controller_runtime::PublicationMode;
 use henosis_controller_runtime::ReconcileDecision;
 use henosis_controller_runtime::ResourceConvergence;
 use henosis_controller_runtime::ResourceGoal;
+use henosis_controller_runtime::SlicePass;
 use henosis_controller_runtime::controller_name;
 use henosis_controller_runtime::failed_report;
 use henosis_controller_runtime::publication_id;
@@ -25,7 +26,7 @@ use henosis_types::Controller;
 use henosis_types::ControllerCommand;
 use henosis_types::ControllerError;
 use henosis_types::ControllerName;
-use henosis_types::ControllerReport;
+use henosis_types::ControllerPass;
 use henosis_types::ControllerSlice;
 use henosis_types::GraphId;
 use henosis_types::Resource;
@@ -83,36 +84,39 @@ where
         }
     }
 
-    async fn reconcile(
-        &self,
-        slice: &ControllerSlice,
-    ) -> Result<ControllerReport, ControllerError> {
-        let convergence = match reconcile_slice(self, slice).await {
-            Ok(convergence) => convergence,
-            Err(error) => {
-                return failed_report(slice, error.to_string())
-                    .map_err(|report_error| ControllerError::new(report_error.to_string()));
-            }
-        };
-        ready_report(
-            slice,
-            Some(publication_id(&convergence.evidence)),
-            convergence.outputs,
-        )
-        .map_err(|error| ControllerError::new(error.to_string()))
+    async fn reconcile(&self, slice: &ControllerSlice) -> Result<ControllerPass, ControllerError> {
+        match reconcile_slice(self, slice).await {
+            Ok(SlicePass::Acted) => Ok(ControllerPass::Acted),
+            Ok(SlicePass::Converged(convergence)) => ready_report(
+                slice,
+                Some(publication_id(&convergence.evidence)),
+                convergence.outputs,
+            )
+            .map(|report| ControllerPass::Converged(Some(report)))
+            .map_err(|error| ControllerError::new(error.to_string())),
+            Err(error) => failed_report(slice, error.to_string())
+                .map(ControllerPass::Failed)
+                .map_err(|report_error| ControllerError::new(report_error.to_string())),
+        }
     }
 
     async fn remove(
         &self,
         graph_id: GraphId,
         resources: &[Resource],
-    ) -> Result<(), ControllerError> {
-        reconcile_absent(self, graph_id, resources)
+    ) -> Result<ControllerPass, ControllerError> {
+        match reconcile_absent(self, graph_id, resources)
             .await
-            .map_err(|error| ControllerError::new(error.to_string()))?;
-        self.target
-            .remove_graph_if_empty(graph_id)
-            .map_err(ControllerError::new)
+            .map_err(|error| ControllerError::new(error.to_string()))?
+        {
+            SlicePass::Acted => Ok(ControllerPass::Acted),
+            SlicePass::Converged(_) => {
+                self.target
+                    .remove_graph_if_empty(graph_id)
+                    .map_err(ControllerError::new)?;
+                Ok(ControllerPass::Converged(None))
+            }
+        }
     }
 }
 
@@ -146,7 +150,6 @@ where
     fn diff(
         &self,
         graph_id: GraphId,
-        _desired: &[Resource],
         resource: &Resource,
         goal: ResourceGoal,
         observed: &Self::Observation,
@@ -209,19 +212,17 @@ where
     fn execute<'a>(
         &'a self,
         command: &'a ControllerCommand,
-    ) -> BoxFuture<'a, Result<Option<ControllerReport>, ControllerError>> {
+    ) -> BoxFuture<'a, Result<ControllerPass, ControllerError>> {
         async move {
             match command {
-                ControllerCommand::Reconcile(slice) => self.reconcile(slice).await.map(Some),
+                ControllerCommand::Reconcile(slice) => self.reconcile(slice).await,
                 ControllerCommand::Supersede(supersession) => {
                     self.remove(supersession.graph_id, &supersession.resources)
-                        .await?;
-                    Ok(None)
+                        .await
                 }
                 ControllerCommand::Retire(retirement) => {
                     self.remove(retirement.graph_id, &retirement.resources)
-                        .await?;
-                    Ok(None)
+                        .await
                 }
             }
         }
@@ -385,30 +386,46 @@ mod tests {
         let remote = bare_repository();
         let controller = K8sController::new(GitRepository::new(remote.path()));
         let slice = slice();
-        let first = reconcile_slice(&controller, &slice).await.unwrap();
-        assert_eq!((first.actions, first.passes), (1, 2));
-        let second = reconcile_slice(&controller, &slice).await.unwrap();
-        assert_eq!((second.actions, second.passes), (0, 1));
+        assert_eq!(
+            reconcile_slice(&controller, &slice).await.unwrap(),
+            SlicePass::Acted
+        );
+        assert!(branch_exists(remote.path(), &branch(slice.graph_id())));
+        assert!(matches!(
+            reconcile_slice(&controller, &slice).await.unwrap(),
+            SlicePass::Converged(_)
+        ));
     }
 
     #[tokio::test]
     async fn fresh_controller_retires_from_target_observation() {
         let remote = bare_repository();
         let slice = slice();
-        K8sController::new(GitRepository::new(remote.path()))
-            .execute(&ControllerCommand::Reconcile(slice.clone()))
-            .await
-            .unwrap();
+        let first = K8sController::new(GitRepository::new(remote.path()));
+        let reconcile = ControllerCommand::Reconcile(slice.clone());
+        assert_eq!(
+            first.execute(&reconcile).await.unwrap(),
+            ControllerPass::Acted
+        );
+        assert!(matches!(
+            first.execute(&reconcile).await.unwrap(),
+            ControllerPass::Converged(Some(_))
+        ));
         let restarted = K8sController::new(GitRepository::new(remote.path()));
-        restarted
-            .execute(&ControllerCommand::Retire(Retirement {
-                graph_id: slice.graph_id(),
-                last_generation: slice.generation(),
-                controller: restarted.name().clone(),
-                resources: slice.resources().to_vec(),
-            }))
-            .await
-            .unwrap();
+        let retire = ControllerCommand::Retire(Retirement {
+            graph_id: slice.graph_id(),
+            last_generation: slice.generation(),
+            controller: restarted.name().clone(),
+            resources: slice.resources().to_vec(),
+        });
+        assert_eq!(
+            restarted.execute(&retire).await.unwrap(),
+            ControllerPass::Acted
+        );
+        assert_eq!(
+            restarted.execute(&retire).await.unwrap(),
+            ControllerPass::Converged(None)
+        );
         assert!(!branch_exists(remote.path(), &branch(slice.graph_id())));
     }
 

@@ -103,6 +103,17 @@ pub enum ControllerCommand {
     Retire(Retirement),
 }
 
+impl ControllerCommand {
+    #[must_use]
+    pub const fn graph_id(&self) -> GraphId {
+        match self {
+            Self::Reconcile(slice) => slice.graph_id(),
+            Self::Supersede(supersession) => supersession.graph_id,
+            Self::Retire(retirement) => retirement.graph_id,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum ResourceDispositionKind {
     Ready,
@@ -316,11 +327,18 @@ impl ControllerError {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ControllerPass {
+    Acted,
+    Converged(Option<ControllerReport>),
+    Failed(ControllerReport),
+}
+
 pub trait Controller: Send + Sync {
     fn name(&self) -> &ControllerName;
 
     fn execute<'a>(
         &'a self,
         command: &'a ControllerCommand,
-    ) -> BoxFuture<'a, Result<Option<ControllerReport>, ControllerError>>;
+    ) -> BoxFuture<'a, Result<ControllerPass, ControllerError>>;
 }

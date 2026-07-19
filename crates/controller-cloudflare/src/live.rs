@@ -638,10 +638,8 @@ impl LiveCloudflareTransport {
 
     async fn observe_route(
         &self,
-        graph: GraphId,
         body: &RouteBody,
     ) -> Result<CloudflareObservation, CloudflareError> {
-        self.require_owned_worker(graph, &body.worker_name).await?;
         let zone = self.session.resolve_zone(&body.zone).await?;
         let routes: Vec<WorkerRoute> = self
             .session
@@ -653,21 +651,7 @@ impl LiveCloudflareTransport {
                 "Worker route observation",
             )
             .await?;
-        let Some(route) = routes
-            .into_iter()
-            .find(|route| route.pattern == body.pattern)
-        else {
-            return Ok(CloudflareObservation::Missing);
-        };
-        if route.script != body.worker_name {
-            return Ok(CloudflareObservation::Foreign);
-        }
-        Ok(CloudflareObservation::Route {
-            matches: true,
-            observation: RouteObservation {
-                hostname: hostname_from_pattern(&body.pattern),
-            },
-        })
+        observe_worker_route(&routes, body)
     }
 
     async fn write_route(&self, graph: GraphId, body: &RouteBody) -> Result<(), CloudflareError> {
@@ -799,7 +783,6 @@ impl LiveCloudflareTransport {
             "cloudflare/route" => {
                 let body: RouteBody = serde_json::from_value(resource.body().as_json().clone())
                     .map_err(|error| CloudflareError::Contract(error.to_string()))?;
-                self.require_owned_worker(graph, &body.worker_name).await?;
                 let zone = self.session.resolve_zone(&body.zone).await?;
                 let routes: Vec<WorkerRoute> = self
                     .session
@@ -812,7 +795,8 @@ impl LiveCloudflareTransport {
                     )
                     .await?;
                 let Some(route) = routes.into_iter().find(|route| {
-                    route.pattern == body.pattern && route.script == body.worker_name
+                    route.pattern == body.pattern
+                        && (route.script.is_empty() || route.script == body.worker_name)
                 }) else {
                     return Ok(());
                 };
@@ -852,7 +836,7 @@ impl CloudflareTransport for LiveCloudflareTransport {
                 "cloudflare/route" => {
                     let body: RouteBody = serde_json::from_value(resource.body().as_json().clone())
                         .map_err(|error| CloudflareError::Contract(error.to_string()))?;
-                    self.observe_route(graph, &body).await
+                    self.observe_route(&body).await
                 }
                 _ => Err(CloudflareError::Contract(format!(
                     "unsupported Cloudflare resource kind {}",
@@ -1224,6 +1208,24 @@ fn uuid_pair_base64() -> String {
     base64::engine::general_purpose::STANDARD.encode(value)
 }
 
+fn observe_worker_route(
+    routes: &[WorkerRoute],
+    body: &RouteBody,
+) -> Result<CloudflareObservation, CloudflareError> {
+    let Some(route) = routes.iter().find(|route| route.pattern == body.pattern) else {
+        return Ok(CloudflareObservation::Missing);
+    };
+    if !route.script.is_empty() && route.script != body.worker_name {
+        return Ok(CloudflareObservation::Foreign);
+    }
+    Ok(CloudflareObservation::Route {
+        matches: route.script == body.worker_name,
+        observation: RouteObservation {
+            hostname: hostname_from_pattern(&body.pattern),
+        },
+    })
+}
+
 fn hostname_from_pattern(pattern: &str) -> String {
     pattern
         .trim_start_matches("http://")
@@ -1314,6 +1316,8 @@ mod tests {
     use henosis_types::ContentDigest;
     use henosis_types::Controller;
     use henosis_types::ControllerCommand;
+    use henosis_types::ControllerPass;
+    use henosis_types::ControllerReport;
     use henosis_types::ControllerSlice;
     use henosis_types::Generation;
     use henosis_types::KindName;
@@ -1329,6 +1333,19 @@ mod tests {
     use henosis_types::Retirement;
 
     use super::*;
+
+    async fn drive(
+        controller: &crate::CloudflareController<LiveCloudflareTransport>,
+        command: &ControllerCommand,
+    ) -> Option<ControllerReport> {
+        loop {
+            match controller.execute(command).await.unwrap() {
+                ControllerPass::Acted => {}
+                ControllerPass::Converged(report) => return report,
+                ControllerPass::Failed(report) => return Some(report),
+            }
+        }
+    }
 
     #[test]
     fn live_transport_requires_explicit_opt_in() {
@@ -1354,6 +1371,40 @@ mod tests {
         assert_eq!(identity.len(), 32);
         assert!(identity.bytes().all(|byte| byte.is_ascii_hexdigit()));
         assert!(!identity.starts_with("henosis-"));
+    }
+
+    #[test]
+    fn route_retirement_does_not_require_the_worker_to_exist() {
+        let body = RouteBody {
+            pattern: "example.com/*".into(),
+            zone: "example.com".into(),
+            worker_name: "worker".into(),
+        };
+        let observation = observe_worker_route(
+            &[WorkerRoute {
+                id: "route-id".into(),
+                pattern: body.pattern.clone(),
+                script: String::new(),
+            }],
+            &body,
+        )
+        .unwrap();
+        assert!(matches!(
+            observation,
+            CloudflareObservation::Route { matches: false, .. }
+        ));
+        assert_eq!(
+            observe_worker_route(
+                &[WorkerRoute {
+                    id: "route-id".into(),
+                    pattern: body.pattern.clone(),
+                    script: "another-worker".into(),
+                }],
+                &body,
+            )
+            .unwrap(),
+            CloudflareObservation::Foreign
+        );
     }
 
     #[test]
@@ -1444,22 +1495,21 @@ mod tests {
             LiveCloudflareTransport::connect(&LiveCloudflareConfig::default(), artifacts)
                 .expect("Wrangler login must be valid; run `wrangler login`"),
         );
-        let report = controller
-            .execute(&ControllerCommand::Reconcile(slice.clone()))
+        let report = drive(&controller, &ControllerCommand::Reconcile(slice.clone()))
             .await
-            .unwrap()
             .expect("reconcile publishes a report");
         if report.outputs().len() == 0 {
             let failure = format!("{:?}", report.dispositions().collect::<Vec<_>>());
-            controller
-                .execute(&ControllerCommand::Retire(Retirement {
+            drive(
+                &controller,
+                &ControllerCommand::Retire(Retirement {
                     graph_id: graph,
                     last_generation: slice.generation(),
                     controller: controller.name().clone(),
                     resources: slice.resources().to_vec(),
-                }))
-                .await
-                .expect("partial live reconciliation must clean up");
+                }),
+            )
+            .await;
             panic!("live Cloudflare reconciliation failed: {failure}");
         }
         let frontend_url = report
@@ -1526,15 +1576,16 @@ mod tests {
             Err(last)
         }
         .await;
-        controller
-            .execute(&ControllerCommand::Retire(Retirement {
+        drive(
+            &controller,
+            &ControllerCommand::Retire(Retirement {
                 graph_id: graph,
                 last_generation: slice.generation(),
                 controller: controller.name().clone(),
                 resources: slice.resources().to_vec(),
-            }))
-            .await
-            .unwrap();
+            }),
+        )
+        .await;
         let served = served.expect("deployed benchmark frontend must answer successfully");
         println!("LIVE curl url={frontend_url} response={served:?}");
         assert!(served.contains("Henosis benchmark frontend"));
