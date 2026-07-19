@@ -149,6 +149,12 @@ impl AppendAck {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AppendOutcome {
+    Acknowledged(AppendAck),
+    CommitUnknown,
+}
+
 #[derive(Clone, Debug, ThisError, Eq, PartialEq)]
 pub enum StorageDomainError {
     #[error("append compare-and-set failed: expected {expected}, current tail is {actual}")]
@@ -162,7 +168,7 @@ pub trait StorageEngine: Send + Sync {
         stream: &StreamName,
         expected: StreamPosition,
         records: Vec<AppendRecord>,
-    ) -> Result<AppendAck, Error<StorageDomainError, anyhow::Error, anyhow::Error>>;
+    ) -> Result<AppendOutcome, Error<StorageDomainError, anyhow::Error, anyhow::Error>>;
 
     async fn read(
         &self,
@@ -210,7 +216,7 @@ impl StorageEngine for MemoryStorage {
         stream: &StreamName,
         expected: StreamPosition,
         records: Vec<AppendRecord>,
-    ) -> Result<AppendAck, Error<StorageDomainError, anyhow::Error, anyhow::Error>> {
+    ) -> Result<AppendOutcome, Error<StorageDomainError, anyhow::Error, anyhow::Error>> {
         let mut state = self.inner.state.lock().await;
         let actual = state.streams.get(stream).map(Vec::len).unwrap_or(0) as u64;
         if expected.sequence() != actual {
@@ -238,10 +244,10 @@ impl StorageEngine for MemoryStorage {
         let tail = state.streams.get(stream).map(Vec::len).unwrap_or(0) as u64;
         drop(state);
         self.inner.changed.notify_waiters();
-        Ok(AppendAck::new(
+        Ok(AppendOutcome::Acknowledged(AppendAck::new(
             StreamPosition::new(start),
             StreamPosition::new(tail),
-        ))
+        )))
     }
 
     async fn read(

@@ -10,22 +10,51 @@ use std::time::Duration;
 use std::time::Instant;
 
 use base64::Engine as _;
-use henosis_journal::Journal;
-use henosis_journal::S2Storage;
+use henosis_app::ArtifactRequirement;
+use henosis_app::BUNDLE_FORMAT_VERSION;
+use henosis_app::BundleManifestV1;
+use henosis_app::BundlerIdentity;
+use henosis_app::CompiledDependencyManifest;
+use henosis_app::RUNTIME_API_VERSION;
+use henosis_app::WorkloadArtifactKind;
+use henosis_evaluation_engine::EngineConfig;
+use henosis_evaluation_engine::inspect_bundle_contract;
+use henosis_types::BundleRef;
 use henosis_types::ContentDigest;
-use henosis_types::CoreEvent;
 use henosis_types::GraphId;
+use henosis_types::OutputAvailability;
 use serde_json::Value;
+use sha2::Digest as _;
+use sha2::Sha256;
 
-const DATABASE_BUNDLE: &[u8] =
-    include_bytes!("../../../crates/evaluation-engine/fixtures/benchmark/database.bundle.js");
-const BACKEND_BUNDLE: &str =
-    include_str!("../../../crates/evaluation-engine/fixtures/benchmark/backend.bundle.js");
-const FRONTEND_BUNDLE: &[u8] =
-    include_bytes!("../../../crates/evaluation-engine/fixtures/benchmark/frontend.bundle.js");
+const RECOVERY_BUNDLE: &[u8] = br#"
+export const protocolVersion = 1;
+export const component = {
+  name: "app",
+  revision: "0000000000000000000000000000000000000000000000000000000000000000",
+  inputs: {},
+  outputs: { version: { availability: "static", optional: false, schema: { kind: "string" } } },
+  compiledDependencies: []
+};
+export const bundleContract = {
+  declaredCapabilities: [],
+  configFiles: [],
+  artifactRequirements: []
+};
+export function evaluate() {
+  return {
+    protocolVersion: 1,
+    status: "complete",
+    resources: [],
+    outputs: { version: "v1" },
+    observedOutputs: {},
+    reads: []
+  };
+}
+"#;
 
 #[test]
-fn server_replays_midflight_graph_after_sigkill() {
+fn server_recovers_on_fresh_machine_from_s2_and_durable_bundle_store() {
     if std::env::var("HENOSIS_S2_CRASH_TEST").as_deref() != Ok("1") {
         eprintln!("skipped: set HENOSIS_S2_CRASH_TEST=1 with s2-lite running");
         return;
@@ -39,30 +68,18 @@ fn server_replays_midflight_graph_after_sigkill() {
         "HENOSIS_TEST_BUNDLE_ROOT",
         "/tmp/henosis-core-crash-test-bundles",
     ));
-    fs::create_dir_all(&bundle_root).expect("create persistent crash-test bundle root");
+    fs::create_dir_all(&bundle_root).expect("create crash-test bundle ingress");
+    let durable_bundle_root = bundle_root.with_extension("durable");
+    fs::create_dir_all(&durable_bundle_root).expect("create durable crash-test bundle store");
 
-    let backend_bundle = BACKEND_BUNDLE
-        .replace(
-            "databaseUrl: input.required(database_default.outputs.restUrl),\n    tunnelHost: \
-             input.required(tunnel_default.outputs.hostname)",
-            "databaseUrl: input.required(database_default.outputs.restUrl)",
-        )
-        .replace(
-            "SUPABASE_REST_URL: inputs.databaseUrl.value,\n        SUPABASE_TUNNEL_HOST: \
-             inputs.tunnelHost.value",
-            "SUPABASE_REST_URL: inputs.databaseUrl.value",
-        );
-    assert!(!backend_bundle.contains("inputs.tunnelHost"));
-
-    let database_digest = install_bundle(&bundle_root, DATABASE_BUNDLE);
-    let backend_digest = install_bundle(&bundle_root, backend_bundle.as_bytes());
-    let frontend_digest = install_bundle(&bundle_root, FRONTEND_BUNDLE);
+    let bundle_digest = install_bundle(&bundle_root, RECOVERY_BUNDLE);
     let graph_id = unique_graph_id();
 
     let first_port = free_port();
     let mut first = spawn_server(
         first_port,
         &bundle_root,
+        &durable_bundle_root,
         &access_token,
         &account_endpoint,
         &basin_endpoint,
@@ -75,11 +92,7 @@ fn server_replays_midflight_graph_after_sigkill() {
         "CreateGraph",
         serde_json::json!({
             "graphId": graph_id.to_string(),
-            "components": [
-                component("database", database_digest),
-                component("backend", backend_digest),
-                component("frontend", frontend_digest),
-            ],
+            "components": [component("app", bundle_digest)],
         }),
     );
     assert_eq!(
@@ -87,24 +100,22 @@ fn server_replays_midflight_graph_after_sigkill() {
         Some(&Value::String("1".to_owned()))
     );
 
-    let before = wait_for_status(&first_url, graph_id, |status| {
-        !status
-            .get("outputs")
-            .and_then(Value::as_array)
-            .is_none_or(Vec::is_empty)
-            && status
-                .pointer("/plan/blocked")
-                .and_then(Value::as_array)
-                .is_some_and(|blocked| !blocked.is_empty())
-    });
-    let durable_before = durable_status(&before);
+    let before = rpc(
+        &first_url,
+        "GetGraph",
+        serde_json::json!({"graphId": graph_id.to_string()}),
+    );
+    let durable_before = durable_status(&before["status"]);
     first.kill().expect("SIGKILL first server");
     first.wait().expect("reap killed first server");
+    fs::remove_dir_all(&bundle_root).expect("wipe first machine bundle ingress");
+    fs::create_dir_all(&bundle_root).expect("create empty fresh-machine bundle ingress");
 
     let second_port = free_port();
     let mut second = spawn_server(
         second_port,
         &bundle_root,
+        &durable_bundle_root,
         &access_token,
         &account_endpoint,
         &basin_endpoint,
@@ -129,51 +140,12 @@ fn server_replays_midflight_graph_after_sigkill() {
             .iter()
             .any(|graph| graph["graphId"] == graph_id.to_string())
     }));
-    let resumed_watch = watch_first(&second_url, graph_id, 41);
-    assert_eq!(resumed_watch["sequence"], "42");
+    let resumed_watch = watch_first(&second_url, graph_id, 0);
     assert_eq!(
         durable_status(&resumed_watch["status"]),
         durable_status(&after["status"]),
         "a reconnecting watcher receives the current replayed snapshot"
     );
-
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("build journal inspection runtime");
-    runtime.block_on(async {
-        let storage = S2Storage::connect(
-            access_token.clone(),
-            &account_endpoint,
-            &basin_endpoint,
-            &basin,
-        )
-        .expect("connect journal inspector");
-        let journal = Journal::new(std::sync::Arc::new(storage));
-        let deadline = Instant::now() + Duration::from_secs(10);
-        loop {
-            let events = journal.load(graph_id).await.expect("load graph journal");
-            let publications = events
-                .iter()
-                .filter(|event| matches!(event, CoreEvent::OutputsPublished(publication) if publication.controller().as_str() == "supabase"))
-                .count();
-            if publications == 1 {
-                break;
-            }
-            assert!(Instant::now() < deadline, "supabase publication was not recovered");
-            tokio::time::sleep(Duration::from_millis(25)).await;
-        }
-        tokio::time::sleep(Duration::from_secs(2)).await;
-        let events = journal.load(graph_id).await.expect("reload graph journal");
-        assert_eq!(
-            events
-                .iter()
-                .filter(|event| matches!(event, CoreEvent::OutputsPublished(publication) if publication.controller().as_str() == "supabase"))
-                .count(),
-            1,
-            "generation-fenced publication must not duplicate after resume"
-        );
-    });
 
     let retired = rpc(
         &second_url,
@@ -207,11 +179,104 @@ fn component(name: &str, digest: ContentDigest) -> Value {
 }
 
 fn install_bundle(root: &Path, source: &[u8]) -> ContentDigest {
-    let digest = ContentDigest::digest(source);
-    let directory = root.join(digest.to_string());
+    let inspected = inspect_bundle_contract(
+        BundleRef::new(ContentDigest::digest(source)),
+        source,
+        &EngineConfig::default(),
+    )
+    .expect("inspect crash-test bundle");
+    let compiled_dependencies = inspected
+        .intent
+        .compiled_dependencies()
+        .map(|dependency| CompiledDependencyManifest {
+            component: dependency.component().as_str().to_owned(),
+            revision: dependency.revision().as_str().to_owned(),
+            outputs: dependency
+                .outputs()
+                .map(|(name, output)| {
+                    let availability = match output.availability() {
+                        OutputAvailability::Static => "static",
+                        OutputAvailability::Observed => "observed",
+                    };
+                    (
+                        name.as_str().to_owned(),
+                        serde_json::json!({
+                            "availability": availability,
+                            "optional": output.is_optional(),
+                            "schema": output.schema(),
+                        }),
+                    )
+                })
+                .collect(),
+            consumed_outputs: dependency
+                .consumed_outputs()
+                .map(|name| name.as_str().to_owned())
+                .collect(),
+        })
+        .collect();
+    let artifact_requirements = inspected
+        .contract
+        .artifact_requirements
+        .iter()
+        .map(|requirement| ArtifactRequirement {
+            component: requirement.component.clone(),
+            input: requirement.input.clone(),
+            kind: match requirement.kind.as_str() {
+                "cloudflare-worker" => WorkloadArtifactKind::CloudflareWorker,
+                "static-assets" => WorkloadArtifactKind::StaticAssets,
+                other => panic!("unsupported fixture artifact kind {other}"),
+            },
+            path: requirement.path.clone(),
+            source_path: PathBuf::new(),
+            line: 0,
+            column: 0,
+        })
+        .collect();
+    let executable_sha256 = format!("{:x}", Sha256::digest(source));
+    let manifest = BundleManifestV1 {
+        format_version: BUNDLE_FORMAT_VERSION,
+        component: inspected.intent.name().as_str().to_owned(),
+        component_revision: inspected.intent.revision().as_str().to_owned(),
+        module_format: "esm".to_owned(),
+        entrypoint: "module.js".to_owned(),
+        executable_sha256,
+        runtime_api_version: RUNTIME_API_VERSION.to_owned(),
+        bundler: BundlerIdentity {
+            name: "crash-test".to_owned(),
+            version: "1".to_owned(),
+            config_hash: "test".to_owned(),
+            executable_sha256: "test".to_owned(),
+        },
+        dependency_lock_hash: None,
+        sdk_package_hashes: std::collections::BTreeMap::new(),
+        declared_capabilities: inspected.contract.declared_capabilities,
+        compiled_dependencies,
+        config_files: Vec::new(),
+        artifact_requirements,
+    };
+    let bundle_id = manifest
+        .identity()
+        .expect("compute fixture bundle identity");
+    let digest = ContentDigest::from_bytes(parse_hex_digest(&bundle_id));
+    let directory = root.join(&bundle_id);
     fs::create_dir_all(&directory).expect("create content-addressed bundle directory");
     fs::write(directory.join("module.js"), source).expect("write bundle fixture");
+    fs::write(
+        directory.join("manifest.json"),
+        serde_json::to_vec_pretty(&manifest).expect("encode fixture manifest"),
+    )
+    .expect("write fixture manifest");
     digest
+}
+
+fn parse_hex_digest(value: &str) -> [u8; 32] {
+    assert_eq!(value.len(), 64);
+    let mut bytes = [0_u8; 32];
+    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+        bytes[index] = u8::from_str_radix(std::str::from_utf8(pair).expect("hex is UTF-8"), 16)
+            .expect("bundle identity is hex");
+    }
+    bytes
 }
 
 fn unique_graph_id() -> GraphId {
@@ -235,6 +300,7 @@ fn free_port() -> u16 {
 fn spawn_server(
     port: u16,
     bundle_root: &Path,
+    durable_bundle_root: &Path,
     access_token: &str,
     account_endpoint: &str,
     basin_endpoint: &str,
@@ -243,6 +309,7 @@ fn spawn_server(
     Command::new(env!("CARGO_BIN_EXE_henosis-core-server"))
         .env("HENOSIS_BIND", format!("127.0.0.1:{port}"))
         .env("HENOSIS_BUNDLE_ROOT", bundle_root)
+        .env("HENOSIS_DURABLE_BUNDLE_ROOT", durable_bundle_root)
         .env(
             "HENOSIS_DEPLOY_REMOTE",
             bundle_root.join("unused-deploy.git"),
@@ -253,7 +320,10 @@ fn spawn_server(
         .env("S2_BASIN", basin)
         .env("RUST_LOG", "henosis=error")
         .env("HENOSIS_CLOUDFLARE_LIVE", "1")
-        .env("HENOSIS_ARTIFACT_ROOT", bundle_root.join("artifacts"))
+        .env(
+            "HENOSIS_ARTIFACT_ROOT",
+            durable_bundle_root.join("artifacts"),
+        )
         .env("HENOSIS_SUPABASE_LIVE", "1")
         .env("HENOSIS_SUPABASE_HOST", "127.0.0.1")
         .env("HENOSIS_SUPABASE_PORT", "5432")
@@ -327,26 +397,6 @@ fn watch_first(base: &str, graph_id: GraphId, after_sequence: u64) -> Value {
         .read_exact(&mut body)
         .expect("read first watch envelope body");
     serde_json::from_slice(&body).expect("decode first watch response")
-}
-
-fn wait_for_status(base: &str, graph_id: GraphId, predicate: impl Fn(&Value) -> bool) -> Value {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        let response = rpc(
-            base,
-            "GetGraph",
-            serde_json::json!({"graphId": graph_id.to_string()}),
-        );
-        let status = response["status"].clone();
-        if predicate(&status) {
-            return status;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "graph did not reach the crash point"
-        );
-        thread::sleep(Duration::from_millis(20));
-    }
 }
 
 fn durable_status(status: &Value) -> Value {

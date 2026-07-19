@@ -218,6 +218,18 @@ pub enum BundleError {
     UnsupportedFormat(u32),
     #[error("unsupported bundle runtime API `{0}`")]
     UnsupportedRuntime(String),
+    #[error("bundle config file `{path}` digest mismatch: expected {expected}, got {actual}")]
+    ConfigFileDigestMismatch {
+        path: String,
+        expected: String,
+        actual: String,
+    },
+    #[error("bundle config file `{path}` size mismatch: expected {expected}, got {actual}")]
+    ConfigFileSizeMismatch {
+        path: String,
+        expected: u64,
+        actual: u64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -272,6 +284,12 @@ pub struct BundleManifestV1 {
     pub compiled_dependencies: Vec<CompiledDependencyManifest>,
     pub config_files: Vec<ConfigFileEntry>,
     pub artifact_requirements: Vec<ArtifactRequirement>,
+}
+
+impl BundleManifestV1 {
+    pub fn identity(&self) -> Result<String, BundleError> {
+        bundle_id(self)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1441,6 +1459,19 @@ fn bundle_id(manifest: &BundleManifestV1) -> Result<String, BundleError> {
     Ok(sha256(&bytes))
 }
 
+pub trait BundleStore: henosis_types::ConfigClosureReader + Send + Sync {
+    fn load_verified(
+        &self,
+        bundle: henosis_types::BundleRef,
+    ) -> Result<VerifiedBundle, BundleError>;
+
+    fn persist_verified(
+        &self,
+        source: &Path,
+        bundle: henosis_types::BundleRef,
+    ) -> Result<VerifiedBundle, BundleError>;
+}
+
 #[derive(Clone, Debug)]
 pub struct VerifiedBundleDirectory {
     root: PathBuf,
@@ -1455,6 +1486,84 @@ impl VerifiedBundleDirectory {
     pub fn verify(&self, bundle: henosis_types::BundleRef) -> Result<VerifiedBundle, BundleError> {
         let bundle_id = bundle.digest().to_string();
         verify_bundle_directory(&self.root.join(&bundle_id), &bundle_id)
+    }
+}
+
+impl BundleStore for VerifiedBundleDirectory {
+    fn load_verified(
+        &self,
+        bundle: henosis_types::BundleRef,
+    ) -> Result<VerifiedBundle, BundleError> {
+        self.verify(bundle)
+    }
+
+    fn persist_verified(
+        &self,
+        source: &Path,
+        bundle: henosis_types::BundleRef,
+    ) -> Result<VerifiedBundle, BundleError> {
+        let bundle_id = bundle.digest().to_string();
+        let verified = verify_bundle_directory(source, &bundle_id)?;
+        let destination = self.root.join(&bundle_id);
+        if destination.exists() {
+            if let Ok(stored) = self.verify(bundle) {
+                return Ok(stored);
+            }
+            fs::remove_dir_all(&destination).map_err(|source| BundleError::WriteOutput {
+                path: destination.clone(),
+                source,
+            })?;
+        }
+        fs::create_dir_all(destination.join("files")).map_err(|source| {
+            BundleError::WriteOutput {
+                path: destination.clone(),
+                source,
+            }
+        })?;
+        let manifest =
+            serde_json::to_vec_pretty(&verified.manifest).map_err(BundleError::EncodeManifest)?;
+        fs::write(destination.join("manifest.json"), manifest).map_err(|source| {
+            BundleError::WriteOutput {
+                path: destination.join("manifest.json"),
+                source,
+            }
+        })?;
+        fs::write(destination.join("module.js"), &verified.module).map_err(|source| {
+            BundleError::WriteOutput {
+                path: destination.join("module.js"),
+                source,
+            }
+        })?;
+        for entry in &verified.manifest.config_files {
+            let from = source.join("files").join(&entry.path);
+            let to = destination.join("files").join(&entry.path);
+            if let Some(parent) = to.parent() {
+                fs::create_dir_all(parent).map_err(|source| BundleError::WriteOutput {
+                    path: parent.to_path_buf(),
+                    source,
+                })?;
+            }
+            let bytes =
+                fs::read(&from).map_err(|source| BundleError::ReadSource { path: from, source })?;
+            let actual_digest = format!("sha256:{}", sha256(&bytes));
+            if actual_digest != entry.sha256 {
+                return Err(BundleError::ConfigFileDigestMismatch {
+                    path: entry.path.clone(),
+                    expected: entry.sha256.clone(),
+                    actual: actual_digest,
+                });
+            }
+            if bytes.len() as u64 != entry.size {
+                return Err(BundleError::ConfigFileSizeMismatch {
+                    path: entry.path.clone(),
+                    expected: entry.size,
+                    actual: bytes.len() as u64,
+                });
+            }
+            fs::write(&to, bytes)
+                .map_err(|source| BundleError::WriteOutput { path: to, source })?;
+        }
+        self.verify(bundle)
     }
 }
 

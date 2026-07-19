@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
+use henosis_journal::Journal;
 use henosis_sim::RealControllerAction;
 use henosis_sim::RealControllerWorld;
 use henosis_sim::RunStatus;
@@ -179,33 +181,26 @@ fn late_generation_output_is_rejected_without_contamination() {
 }
 
 #[test]
-fn timeout_after_commit_is_observable_and_cas_safe() {
-    let stream = StreamName::new("graph/test").expect("stream name is valid");
-    let mut storage = MemS2::default();
-    storage.script([AppendFault::CommitThenTimeout]);
-    let error = storage
-        .append(
-            &stream,
-            StreamPosition::default(),
-            vec![AppendRecord::new(b"durable".to_vec())],
-        )
-        .expect_err("caller sees timeout ambiguity");
-    assert_eq!(
-        error.to_string(),
-        "append timed out after commit; durability is ambiguous to the caller"
-    );
-    assert_eq!(storage.tail(&stream).sequence(), 1);
-    let before = storage.read(&stream, StreamPosition::default(), 10);
-    assert!(
-        storage
-            .append(
-                &stream,
-                StreamPosition::default(),
-                vec![AppendRecord::new(b"stale".to_vec())],
-            )
-            .is_err()
-    );
-    assert_eq!(storage.read(&stream, StreamPosition::default(), 10), before);
+fn timeout_after_commit_is_resolved_through_the_product_journal() {
+    runtime().block_on(async {
+        let run = run_seed(Seed::from_u64(19), &Scenario::bounded(1), 32).await;
+        let event = run.events.first().expect("simulation emits a graph event");
+        let storage = MemS2::default();
+        storage.script([AppendFault::CommitThenTimeout]);
+        let journal = Journal::new(Arc::new(storage.clone()));
+        let graph_id = GraphId::from_bytes([7; 16]);
+
+        let ack = journal
+            .append(graph_id, StreamPosition::default(), event)
+            .await
+            .expect("journal resolves a committed append after timeout");
+        assert_eq!(ack.start().sequence(), 0);
+        assert_eq!(ack.tail().sequence(), 1);
+        assert_eq!(
+            journal.load(graph_id).await.expect("replay succeeds"),
+            vec![event.clone()]
+        );
+    });
 }
 
 #[test]
@@ -324,7 +319,7 @@ impl StateMachineTest for StorageSut {
         }
     }
 
-    fn apply(mut state: Self, reference: &StorageModel, transition: StorageTransition) -> Self {
+    fn apply(state: Self, reference: &StorageModel, transition: StorageTransition) -> Self {
         match transition {
             StorageTransition::Append(value) => {
                 state
@@ -557,6 +552,18 @@ fn output_publication_racing_retirement_is_fenced_and_cleanup_converges() {
         let retired = world.canonical_state();
         world.apply(stale_publication).await;
         assert_eq!(world.canonical_state(), retired);
+        assert!(world.no_resources_exist());
+    });
+}
+
+#[test]
+fn crash_mid_retirement_replays_cleanup_until_targets_are_empty() {
+    runtime().block_on(async {
+        let mut world = RealControllerWorld::new(Seed::from_u64(0x5eed_2605), 2).await;
+        drive_real_controller_passes(&mut world, 128).await;
+        world.retire().await;
+        world.crash_restart_core().await;
+        drive_real_controller_passes(&mut world, 128).await;
         assert!(world.no_resources_exist());
     });
 }

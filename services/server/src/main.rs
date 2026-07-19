@@ -10,6 +10,7 @@ use connectrpc::ServiceRequest;
 use connectrpc::ServiceResult;
 use connectrpc::ServiceStream;
 use faultline::Error as FaultlineError;
+use henosis_app::BundleStore;
 use henosis_app::VerifiedBundle;
 use henosis_app::verify_bundle_directory;
 use henosis_evaluation_engine::EngineConfig;
@@ -60,6 +61,7 @@ async fn main() -> anyhow::Result<()> {
     let assembly = henosis_server_assembly::from_environment()?;
     let bind = assembly.bind;
     let bundle_root = assembly.bundle_root;
+    let bundle_store = assembly.bundle_store;
     let config = assembly.engine_config;
     let evaluator = assembly.evaluator;
     let controllers = assembly.controllers;
@@ -83,6 +85,7 @@ async fn main() -> anyhow::Result<()> {
     let service = Arc::new(CoreService {
         reports,
         bundle_root,
+        bundle_store,
         engine_config: config,
         dispatcher,
     });
@@ -102,6 +105,7 @@ async fn main() -> anyhow::Result<()> {
 struct CoreService {
     reports: Arc<ControllerReports>,
     bundle_root: PathBuf,
+    bundle_store: Arc<dyn BundleStore>,
     engine_config: EngineConfig,
     dispatcher: henosis_server_assembly::ControllerDispatcher,
 }
@@ -141,7 +145,12 @@ impl CoreService {
                 .collect::<Result<Vec<_>, ConnectError>>()?;
             let digest = digest(component.bundle_digest.as_deref().unwrap_or_default())?;
             let bundle_id = hex(digest.as_bytes());
-            let verified = verify_bundle_directory(&self.bundle_root.join(&bundle_id), &bundle_id)
+            let source = self.bundle_root.join(&bundle_id);
+            verify_bundle_directory(&source, &bundle_id)
+                .map_err(|error| invalid(error.to_string()))?;
+            let verified = self
+                .bundle_store
+                .persist_verified(&source, BundleRef::new(digest))
                 .map_err(|error| invalid(error.to_string()))?;
             let bundle_contract = inspect_bundle_contract(
                 BundleRef::new(digest),

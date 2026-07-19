@@ -10,6 +10,7 @@ pub use bundle::BundleError;
 pub use bundle::BundleManifestV1;
 pub use bundle::BundleRequest;
 pub use bundle::BundleSetManifest;
+pub use bundle::BundleStore;
 pub use bundle::Bundler;
 pub use bundle::BundlerIdentity;
 pub use bundle::CompiledDependencyManifest;

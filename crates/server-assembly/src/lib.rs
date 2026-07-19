@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use futures::FutureExt as _;
 use futures::future::BoxFuture;
+use henosis_app::BundleStore;
 use henosis_app::VerifiedBundleDirectory;
 use henosis_controller_cloudflare::CloudflareAction;
 use henosis_controller_cloudflare::CloudflareError;
@@ -302,6 +303,7 @@ fn retry_delay(attempt: u32) -> Duration {
 pub struct ServerAssembly {
     pub bind: String,
     pub bundle_root: PathBuf,
+    pub bundle_store: Arc<dyn BundleStore>,
     pub engine_config: EngineConfig,
     pub evaluator: Arc<dyn henosis_types::Evaluator>,
     pub controllers: BTreeMap<ControllerName, Arc<dyn Controller>>,
@@ -330,12 +332,16 @@ fn assemble_from_environment(targets: TargetAssembly) -> anyhow::Result<ServerAs
     let bundle_root = PathBuf::from(
         std::env::var("HENOSIS_BUNDLE_ROOT").unwrap_or_else(|_| ".henosis/bundles".into()),
     );
+    let durable_bundle_root = PathBuf::from(
+        std::env::var("HENOSIS_DURABLE_BUNDLE_ROOT")
+            .map_err(|_| anyhow::anyhow!("HENOSIS_DURABLE_BUNDLE_ROOT is required"))?,
+    );
     let deploy_remote = PathBuf::from(
         std::env::var("HENOSIS_DEPLOY_REMOTE")
             .map_err(|_| anyhow::anyhow!("HENOSIS_DEPLOY_REMOTE is required"))?,
     );
     let engine_config = EngineConfig::default();
-    let bundles = Arc::new(VerifiedBundleDirectory::new(bundle_root.clone()));
+    let bundles = Arc::new(VerifiedBundleDirectory::new(durable_bundle_root));
     let evaluator: Arc<dyn henosis_types::Evaluator> = Arc::new(EvaluationEngine::new(
         Arc::new(FileBundleSource {
             bundles: Arc::clone(&bundles),
@@ -381,7 +387,7 @@ fn assemble_from_environment(targets: TargetAssembly) -> anyhow::Result<ServerAs
                 anon_key_ref: required_string_env("HENOSIS_SUPABASE_ANON_KEY_REF")?,
             });
             info!("Supabase controller uses live local Postgres/PostgREST target");
-            Arc::new(SupabaseController::new(target, bundles))
+            Arc::new(SupabaseController::new(target, bundles.clone()))
         }
         TargetAssembly::Demo => Arc::new(DemoSupabaseController::new()),
     };
@@ -390,6 +396,7 @@ fn assemble_from_environment(targets: TargetAssembly) -> anyhow::Result<ServerAs
     Ok(ServerAssembly {
         bind,
         bundle_root,
+        bundle_store: bundles,
         engine_config,
         evaluator,
         controllers,

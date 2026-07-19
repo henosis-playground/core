@@ -214,8 +214,12 @@ impl Core {
         &mut self,
         graph_id: GraphId,
     ) -> Result<Transition, Error<CommandError, Never, anyhow::Error>> {
+        let cleanup_effects = self.graph(graph_id)?.recovery_cleanup_effects();
         if self.graph(graph_id)?.retired {
-            return Ok(Transition::default());
+            return Ok(Transition {
+                events: Vec::new(),
+                effects: cleanup_effects,
+            });
         }
         self.runtime.insert(graph_id, GraphRuntime::default());
         let mut transition = self.evaluate_graph(graph_id).await?;
@@ -244,6 +248,7 @@ impl Core {
                 })
                 .collect();
         }
+        transition.effects.extend(cleanup_effects);
         Ok(transition)
     }
 
@@ -482,7 +487,10 @@ impl Core {
             ));
         }
         if graph.retired {
-            return Ok(Transition::default());
+            return Ok(Transition {
+                events: Vec::new(),
+                effects: graph.recovery_cleanup_effects(),
+            });
         }
         let resources = graph
             .plan
@@ -499,7 +507,7 @@ impl Core {
                     grouped
                 },
             );
-        let effects = resources
+        let effects: Vec<ControllerEffect> = resources
             .into_iter()
             .map(|(controller, resources)| {
                 ControllerEffect::new(
@@ -513,14 +521,27 @@ impl Core {
                 )
             })
             .collect();
-        self.graph_mut(graph_id)?.retired = true;
-        Ok(Transition {
-            events: vec![CoreEvent::GraphRetired {
-                graph_id,
-                last_generation: expected_generation,
-            }],
-            effects,
-        })
+        let cleanup_commands = effects
+            .iter()
+            .map(|effect| effect.command().clone())
+            .collect::<Vec<_>>();
+        {
+            let mut graph = self.graph_mut(graph_id)?;
+            graph.retired = true;
+            graph
+                .pending_cleanup
+                .extend(cleanup_commands.iter().cloned());
+        }
+        let mut events = vec![CoreEvent::GraphRetired {
+            graph_id,
+            last_generation: expected_generation,
+        }];
+        events.extend(
+            cleanup_commands
+                .into_iter()
+                .map(CoreEvent::CleanupRequested),
+        );
+        Ok(Transition { events, effects })
     }
 
     async fn evaluate_graph(
@@ -604,8 +625,39 @@ impl Core {
             .get_mut(&graph_id)
             .expect("runtime exists for every graph")
             .pending = pending;
-        self.graph_mut(graph_id)?.accept_plan(plan.clone());
+        let cleanup_commands = effects
+            .iter()
+            .filter_map(|effect| match effect.command() {
+                ControllerCommand::Reconcile(slice) if slice.superseded().is_empty() => None,
+                ControllerCommand::Reconcile(slice) => {
+                    Some(ControllerCommand::Supersede(Supersession {
+                        graph_id: slice.graph_id(),
+                        generation: slice.generation(),
+                        controller: slice.controller().clone(),
+                        resources: slice.superseded().to_vec(),
+                    }))
+                }
+                ControllerCommand::Supersede(command) => {
+                    Some(ControllerCommand::Supersede(command.clone()))
+                }
+                ControllerCommand::Retire(command) => {
+                    Some(ControllerCommand::Retire(command.clone()))
+                }
+            })
+            .collect::<Vec<_>>();
+        {
+            let mut graph = self.graph_mut(graph_id)?;
+            graph.accept_plan(plan.clone());
+            graph
+                .pending_cleanup
+                .extend(cleanup_commands.iter().cloned());
+        }
         evaluation_events.push(CoreEvent::PlanAccepted { graph_id, plan });
+        evaluation_events.extend(
+            cleanup_commands
+                .into_iter()
+                .map(CoreEvent::CleanupRequested),
+        );
         let mut transition = Transition {
             events: evaluation_events,
             effects,
@@ -1104,6 +1156,13 @@ impl MaterializedCore {
                 );
                 graph.accept_plan(plan.clone());
             }
+            CoreEvent::CleanupRequested(command) => {
+                self.graphs
+                    .get_mut(&command.graph_id())
+                    .expect("cleanup graph must already exist")
+                    .pending_cleanup
+                    .push(command.clone());
+            }
             CoreEvent::ControllerReported(report) => {
                 self.graphs
                     .get_mut(&report.graph_id())
@@ -1187,6 +1246,7 @@ pub struct GraphState {
     outputs: IdOrdMap<OutputRecord>,
     reports: IdOrdMap<LatestControllerReport>,
     publications: BTreeSet<(Generation, PublicationId)>,
+    pending_cleanup: Vec<ControllerCommand>,
     stall: Option<Stall>,
     retired: bool,
 }
@@ -1199,6 +1259,7 @@ impl GraphState {
             outputs: IdOrdMap::new(),
             reports: IdOrdMap::new(),
             publications: BTreeSet::new(),
+            pending_cleanup: Vec::new(),
             stall: None,
             retired: false,
         }
@@ -1222,6 +1283,67 @@ impl GraphState {
     #[must_use]
     pub const fn plan(&self) -> Option<&Plan> {
         self.plan.as_ref()
+    }
+
+    fn recovery_cleanup_effects(&self) -> Vec<ControllerEffect> {
+        let current = if self.retired {
+            BTreeSet::new()
+        } else {
+            self.plan
+                .as_ref()
+                .into_iter()
+                .flat_map(Plan::resources)
+                .map(Resource::id)
+                .collect()
+        };
+        self.pending_cleanup
+            .iter()
+            .filter_map(|command| {
+                let command = match command {
+                    ControllerCommand::Supersede(cleanup) => {
+                        let resources = cleanup
+                            .resources
+                            .iter()
+                            .filter(|resource| !current.contains(&resource.id()))
+                            .cloned()
+                            .collect::<Vec<_>>();
+                        if resources.is_empty() {
+                            return None;
+                        }
+                        ControllerCommand::Supersede(Supersession {
+                            graph_id: cleanup.graph_id,
+                            generation: cleanup.generation,
+                            controller: cleanup.controller.clone(),
+                            resources,
+                        })
+                    }
+                    ControllerCommand::Retire(cleanup) => {
+                        let resources = cleanup
+                            .resources
+                            .iter()
+                            .filter(|resource| !current.contains(&resource.id()))
+                            .cloned()
+                            .collect::<Vec<_>>();
+                        if resources.is_empty() {
+                            return None;
+                        }
+                        ControllerCommand::Retire(Retirement {
+                            graph_id: cleanup.graph_id,
+                            last_generation: cleanup.last_generation,
+                            controller: cleanup.controller.clone(),
+                            resources,
+                        })
+                    }
+                    ControllerCommand::Reconcile(_) => return None,
+                };
+                let controller = match &command {
+                    ControllerCommand::Supersede(cleanup) => cleanup.controller.clone(),
+                    ControllerCommand::Retire(cleanup) => cleanup.controller.clone(),
+                    ControllerCommand::Reconcile(_) => unreachable!(),
+                };
+                Some(ControllerEffect::new(controller, command))
+            })
+            .collect()
     }
 
     pub fn outputs(&self) -> impl ExactSizeIterator<Item = &OutputRecord> {

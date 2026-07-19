@@ -49,13 +49,27 @@ impl MaterializedGraphs {
 
         let mut effects = Vec::new();
         for registration in registered {
-            let (actor, resumed) = materialized.load_actor(registration.intent.clone()).await?;
+            let Some((actor, resumed)) =
+                materialized.load_actor(registration.intent.clone()).await?
+            else {
+                continue;
+            };
             effects.extend(resumed);
+            let state = actor.snapshot().await;
+            let retired_generation = state
+                .graph(registration.intent.id())
+                .filter(|graph| graph.is_retired())
+                .map(|graph| graph.intent().generation());
             materialized
                 .actors
                 .write()
                 .await
                 .insert(registration.intent.id(), Arc::new(actor));
+            if let Some(generation) = retired_generation {
+                materialized
+                    .record_retirement(registration.intent.id(), generation)
+                    .await?;
+            }
         }
         Ok((materialized, effects))
     }
@@ -161,19 +175,20 @@ impl MaterializedGraphs {
 
         {
             let mut registry = self.registry.lock().await;
-            if registry.graphs.contains_key(&graph_id) {
+            if let Some(registration) = registry.graphs.get(&graph_id).cloned() {
+                if registration.intent != intent {
+                    return Err(anyhow::anyhow!(
+                        "graph registration exists with different initial intent"
+                    ));
+                }
                 drop(registry);
-                let registration = self
-                    .registry
-                    .lock()
-                    .await
-                    .graphs
-                    .get(&graph_id)
-                    .cloned()
-                    .expect("registration still exists");
-                let (loaded, _) = self.load_actor(registration.intent).await?;
-                self.actors.write().await.insert(graph_id, Arc::new(loaded));
-                return Err(anyhow::anyhow!("graph already exists"));
+                if let Some((loaded, _)) = self.load_actor(registration.intent).await? {
+                    self.actors.write().await.insert(graph_id, Arc::new(loaded));
+                    return Err(anyhow::anyhow!("graph already exists"));
+                }
+                let result = actor.commit(prepared).await?;
+                self.actors.write().await.insert(graph_id, Arc::new(actor));
+                return Ok(result);
             }
             let event = RegistryEvent::GraphRegistered(intent.clone());
             let ack = self
@@ -244,22 +259,15 @@ impl MaterializedGraphs {
     async fn load_actor(
         &self,
         registered_intent: GraphIntent,
-    ) -> anyhow::Result<(GraphActor, Vec<ControllerEffect>)> {
+    ) -> anyhow::Result<Option<(GraphActor, Vec<ControllerEffect>)>> {
         let graph_id = registered_intent.id();
-        let (mut events, mut tail) = self
+        let (events, tail) = self
             .journal
             .load_with_tail(graph_id)
             .await
             .map_err(storage_error)?;
         if events.is_empty() {
-            let created = CoreEvent::GraphCreated(registered_intent);
-            let ack = self
-                .journal
-                .append(graph_id, tail, &created)
-                .await
-                .map_err(storage_error)?;
-            tail = ack.tail();
-            events.push(created);
+            return Ok(None);
         }
         let state = MaterializedCore::fold(&events);
         let actor = GraphActor::new(
@@ -269,7 +277,7 @@ impl MaterializedGraphs {
             tail,
         );
         let effects = actor.resume().await?;
-        Ok((actor, effects))
+        Ok(Some((actor, effects)))
     }
 }
 

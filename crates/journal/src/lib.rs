@@ -17,6 +17,7 @@ use faultline::Error;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use henosis_storage::AppendAck;
+use henosis_storage::AppendOutcome;
 use henosis_storage::AppendRecord;
 use henosis_storage::StorageDomainError;
 use henosis_storage::StorageEngine;
@@ -34,6 +35,7 @@ use s2_sdk::types::AppendConditionFailed;
 use s2_sdk::types::AppendInput;
 use s2_sdk::types::AppendRecord as S2AppendRecord;
 use s2_sdk::types::AppendRecordBatch;
+use s2_sdk::types::AppendRetryPolicy;
 use s2_sdk::types::BasinEndpoint;
 use s2_sdk::types::BasinName;
 use s2_sdk::types::ReadFrom;
@@ -41,6 +43,7 @@ use s2_sdk::types::ReadInput;
 use s2_sdk::types::ReadLimits;
 use s2_sdk::types::ReadStart;
 use s2_sdk::types::ReadStop;
+use s2_sdk::types::RetryConfig;
 use s2_sdk::types::S2Config;
 use s2_sdk::types::S2Endpoints;
 use s2_sdk::types::S2Error;
@@ -170,7 +173,53 @@ impl Journal {
         if records.is_empty() {
             return Ok(AppendAck::new(expected, expected));
         }
-        self.storage.append(stream, expected, records).await
+        match self
+            .storage
+            .append(stream, expected, records.clone())
+            .await?
+        {
+            AppendOutcome::Acknowledged(ack) => Ok(ack),
+            AppendOutcome::CommitUnknown => {
+                let mut stored = Vec::with_capacity(records.len());
+                let mut cursor = expected;
+                while stored.len() < records.len() {
+                    let page = self
+                        .storage
+                        .read(stream, cursor, (records.len() - stored.len()).min(1_000))
+                        .await?;
+                    if page.is_empty() {
+                        break;
+                    }
+                    cursor = StreamPosition::new(
+                        page.last()
+                            .expect("non-empty page has a last record")
+                            .sequence()
+                            .saturating_add(1),
+                    );
+                    stored.extend(page);
+                }
+                let matches = stored.len() == records.len()
+                    && stored
+                        .iter()
+                        .zip(&records)
+                        .all(|(stored, expected)| stored.body() == expected.body());
+                if matches {
+                    let tail = StreamPosition::new(
+                        expected.sequence().saturating_add(records.len() as u64),
+                    );
+                    Ok(AppendAck::new(expected, tail))
+                } else {
+                    Err(
+                        Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Transient(
+                            anyhow::anyhow!(
+                                "append outcome is unknown and the expected records are not \
+                                 present on {stream}"
+                            ),
+                        ),
+                    )
+                }
+            }
+        }
     }
 
     async fn load_records(
@@ -184,11 +233,50 @@ impl Journal {
         if tail.sequence() == 0 {
             return Ok((Vec::new(), tail));
         }
-        let records = self
-            .storage
-            .read(stream, StreamPosition::default(), tail.sequence() as usize)
-            .await?;
-        Ok((records, tail))
+        let mut records = Vec::new();
+        let mut cursor = StreamPosition::default();
+        while cursor.sequence() < tail.sequence() {
+            let remaining = tail.sequence().saturating_sub(cursor.sequence()) as usize;
+            let page = self
+                .storage
+                .read(stream, cursor, remaining.min(1_000))
+                .await?;
+            if page.is_empty() {
+                return Err(
+                    Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Invariant(
+                        anyhow::anyhow!(
+                            "journal read made no progress on {stream}: cursor {}, captured tail \
+                             {}",
+                            cursor.sequence(),
+                            tail.sequence()
+                        ),
+                    ),
+                );
+            }
+            for record in &page {
+                if record.sequence() != cursor.sequence() {
+                    return Err(
+                        Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Invariant(
+                            anyhow::anyhow!(
+                                "journal read gap on {stream}: expected sequence {}, got {}",
+                                cursor.sequence(),
+                                record.sequence()
+                            ),
+                        ),
+                    );
+                }
+                cursor = StreamPosition::new(cursor.sequence().saturating_add(1));
+                if cursor.sequence() > tail.sequence() {
+                    return Err(
+                        Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Invariant(
+                            anyhow::anyhow!("journal read passed captured tail on {stream}"),
+                        ),
+                    );
+                }
+            }
+            records.extend(page);
+        }
+        Ok((records, cursor))
     }
 }
 
@@ -282,7 +370,12 @@ impl S2Storage {
             AccountEndpoint::new(account_endpoint)?,
             BasinEndpoint::new(basin_endpoint)?,
         )?;
-        let client = S2::new(S2Config::new(access_token).with_endpoints(endpoints))?;
+        let retry = RetryConfig::new().with_append_retry_policy(AppendRetryPolicy::NoSideEffects);
+        let client = S2::new(
+            S2Config::new(access_token)
+                .with_endpoints(endpoints)
+                .with_retry(retry),
+        )?;
         let basin = basin.parse::<BasinName>()?;
         Ok(Self {
             basin: client.basin(basin),
@@ -302,7 +395,7 @@ impl StorageEngine for S2Storage {
         stream: &StreamName,
         expected: StreamPosition,
         records: Vec<AppendRecord>,
-    ) -> Result<AppendAck, Error<StorageDomainError, anyhow::Error, anyhow::Error>> {
+    ) -> Result<AppendOutcome, Error<StorageDomainError, anyhow::Error, anyhow::Error>> {
         let stream = self.stream(stream).map_err(|error| {
             Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Invariant(error)
         })?;
@@ -324,10 +417,10 @@ impl StorageEngine for S2Storage {
             .append(AppendInput::new(batch).with_match_seq_num(expected.sequence()))
             .await
         {
-            Ok(ack) => Ok(AppendAck::new(
+            Ok(ack) => Ok(AppendOutcome::Acknowledged(AppendAck::new(
                 StreamPosition::new(ack.start.seq_num),
                 StreamPosition::new(ack.tail.seq_num),
-            )),
+            ))),
             Err(S2Error::AppendConditionFailed(AppendConditionFailed::SeqNumMismatch(actual))) => {
                 Err(
                     Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Domain(
@@ -338,11 +431,7 @@ impl StorageEngine for S2Storage {
                     ),
                 )
             }
-            Err(error) => Err(
-                Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Transient(
-                    anyhow::Error::new(error),
-                ),
-            ),
+            Err(_error) => Ok(AppendOutcome::CommitUnknown),
         }
     }
 
@@ -355,19 +444,22 @@ impl StorageEngine for S2Storage {
         let s2_stream = self.stream(stream).map_err(|error| {
             Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Invariant(error)
         })?;
-        let batch = s2_stream
-            .read(
-                ReadInput::new()
-                    .with_start(ReadStart::new().with_from(ReadFrom::SeqNum(from.sequence())))
-                    .with_stop(ReadStop::new().with_limits(ReadLimits::new().with_count(limit)))
-                    .with_ignore_command_records(true),
-            )
-            .await
-            .map_err(|error| {
-                Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Transient(
-                    anyhow::Error::new(error),
+        let batch =
+            s2_stream
+                .read(
+                    ReadInput::new()
+                        .with_start(ReadStart::new().with_from(ReadFrom::SeqNum(from.sequence())))
+                        .with_stop(ReadStop::new().with_limits(
+                            ReadLimits::new().with_count(limit).with_bytes(1024 * 1024),
+                        ))
+                        .with_ignore_command_records(true),
                 )
-            })?;
+                .await
+                .map_err(|error| {
+                    Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Transient(
+                        anyhow::Error::new(error),
+                    )
+                })?;
         Ok(batch
             .records
             .into_iter()
@@ -454,5 +546,96 @@ impl StorageEngine for S2Storage {
                 }
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use henosis_storage::AppendOutcome;
+    use henosis_storage::MemoryStorage;
+
+    #[derive(Clone, Default)]
+    struct BoundedReadStorage {
+        inner: MemoryStorage,
+    }
+
+    #[async_trait]
+    impl StorageEngine for BoundedReadStorage {
+        async fn append(
+            &self,
+            stream: &StreamName,
+            expected: StreamPosition,
+            records: Vec<AppendRecord>,
+        ) -> Result<AppendOutcome, Error<StorageDomainError, anyhow::Error, anyhow::Error>>
+        {
+            self.inner.append(stream, expected, records).await
+        }
+
+        async fn read(
+            &self,
+            stream: &StreamName,
+            from: StreamPosition,
+            limit: usize,
+        ) -> Result<Vec<StoredRecord>, Error<StorageDomainError, anyhow::Error, anyhow::Error>>
+        {
+            let records = self.inner.read(stream, from, limit.min(1_000)).await?;
+            let mut bytes = 0_usize;
+            Ok(records
+                .into_iter()
+                .take_while(|record| {
+                    bytes = bytes.saturating_add(record.body().len());
+                    bytes <= 64 * 1024
+                })
+                .collect())
+        }
+
+        async fn tail(
+            &self,
+            stream: &StreamName,
+        ) -> Result<StreamPosition, Error<StorageDomainError, anyhow::Error, anyhow::Error>>
+        {
+            self.inner.tail(stream).await
+        }
+
+        fn follow(
+            &self,
+            stream: StreamName,
+            from: StreamPosition,
+        ) -> BoxStream<
+            'static,
+            Result<StoredRecord, Error<StorageDomainError, anyhow::Error, anyhow::Error>>,
+        > {
+            self.inner.follow(stream, from)
+        }
+    }
+
+    #[tokio::test]
+    async fn replay_reads_every_page_past_count_and_byte_limits() {
+        let storage = Arc::new(BoundedReadStorage::default());
+        let stream = StreamName::new("long-journal").expect("stream name is valid");
+        let records = (0..1_201)
+            .map(|index| {
+                let mut body = vec![b'x'; 1_024];
+                body[..8].copy_from_slice(&(index as u64).to_le_bytes());
+                AppendRecord::new(body)
+            })
+            .collect::<Vec<_>>();
+        let outcome = storage
+            .append(&stream, StreamPosition::default(), records)
+            .await
+            .expect("fixture append succeeds");
+        assert!(matches!(outcome, AppendOutcome::Acknowledged(_)));
+
+        let journal = Journal::new(storage);
+        let (loaded, tail) = journal
+            .load_records(&stream)
+            .await
+            .expect("all bounded pages replay");
+        assert_eq!(loaded.len(), 1_201);
+        assert_eq!(tail.sequence(), 1_201);
+        for (index, record) in loaded.iter().enumerate() {
+            assert_eq!(record.sequence(), index as u64);
+        }
     }
 }

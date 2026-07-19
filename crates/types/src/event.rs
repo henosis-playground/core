@@ -5,6 +5,7 @@ use serde::Serialize;
 use thiserror::Error;
 
 use crate::ComponentName;
+use crate::ControllerCommand;
 use crate::ControllerName;
 use crate::ControllerReport;
 use crate::Generation;
@@ -174,6 +175,7 @@ pub enum CoreEvent {
         graph_id: GraphId,
         plan: Plan,
     },
+    CleanupRequested(ControllerCommand),
     ControllerReported(ControllerReport),
     ComponentOutputsReplaced(ComponentOutputs),
     OutputsPublished(OutputPublication),

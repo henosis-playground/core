@@ -260,6 +260,20 @@ impl RealControllerWorld {
         self.accept_transition(transition);
     }
 
+    pub async fn crash_restart_core(&mut self) {
+        let state = MaterializedCore::fold(&self.events);
+        self.core = Core::from_materialized(self.evaluator.clone(), state);
+        self.controller_schedule = ControllerSchedule::default();
+        self.ready.clear();
+        self.delivered.clear();
+        let transition = self
+            .core
+            .resume_graph(self.graph_id)
+            .await
+            .expect("replayed graph resumes");
+        self.accept_transition(transition);
+    }
+
     pub fn restart_controller(&mut self, controller: &str) {
         match controller {
             "k8s" => self.k8s = K8sController::new(self.k8s_target.clone()),
