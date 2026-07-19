@@ -94,7 +94,7 @@ where
             )
             .map(|report| ControllerPass::Converged(Some(report)))
             .map_err(|error| ControllerError::new(error.to_string())),
-            Err(error) => failed_report(slice, error.to_string())
+            Err(error) => failed_report(slice, error)
                 .map(ControllerPass::Failed)
                 .map_err(|report_error| ControllerError::new(report_error.to_string())),
         }
@@ -107,7 +107,7 @@ where
     ) -> Result<ControllerPass, ControllerError> {
         match reconcile_absent(self, graph_id, resources)
             .await
-            .map_err(|error| ControllerError::new(error.to_string()))?
+            .map_err(ControllerError::new)?
         {
             SlicePass::Acted => Ok(ControllerPass::Acted),
             SlicePass::Converged(_) => self
@@ -459,7 +459,7 @@ mod tests {
         let error = reconcile_slice(&K8sController::new(repository), &slice)
             .await
             .unwrap_err();
-        assert!(error.to_string().contains("ownership labels do not match"));
+        assert!(error.contains("ownership labels do not match"));
         assert_eq!(revision(remote.path(), &branch(slice.graph_id())), before);
     }
 
