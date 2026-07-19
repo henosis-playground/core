@@ -689,7 +689,20 @@ impl GitRepository {
         })
     }
 
-    pub fn delete_branch(&self, branch: &str) -> Result<(), GitError> {
+    pub fn delete_branch(&self, branch: &str) -> Result<bool, GitError> {
+        let exists = run_git_status(
+            None,
+            [
+                "ls-remote",
+                "--exit-code",
+                "--heads",
+                remote_text(&self.remote)?,
+                &format!("refs/heads/{branch}"),
+            ],
+        )?;
+        if !exists {
+            return Ok(false);
+        }
         let directory = tempfile::tempdir().map_err(GitError::Io)?;
         run_git(
             None,
@@ -709,11 +722,11 @@ impl GitRepository {
             .output()
             .map_err(GitError::Io)?;
         if result.status.success() {
-            return Ok(());
+            return Ok(true);
         }
         let detail = String::from_utf8_lossy(&result.stderr);
         if detail.contains("remote ref does not exist") {
-            return Ok(());
+            return Ok(false);
         }
         Err(GitError::Command(detail.into_owned()))
     }

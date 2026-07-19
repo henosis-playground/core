@@ -52,7 +52,7 @@ pub trait K8sTarget: Send + Sync {
         files: &BTreeMap<String, Vec<u8>>,
     ) -> Result<(), String>;
 
-    fn remove_graph_if_empty(&self, graph_id: GraphId) -> Result<(), String>;
+    fn remove_graph_if_empty(&self, graph_id: GraphId) -> Result<bool, String>;
 }
 
 pub struct K8sController<T = GitRepository> {
@@ -110,12 +110,17 @@ where
             .map_err(|error| ControllerError::new(error.to_string()))?
         {
             SlicePass::Acted => Ok(ControllerPass::Acted),
-            SlicePass::Converged(_) => {
-                self.target
-                    .remove_graph_if_empty(graph_id)
-                    .map_err(ControllerError::new)?;
-                Ok(ControllerPass::Converged(None))
-            }
+            SlicePass::Converged(_) => self
+                .target
+                .remove_graph_if_empty(graph_id)
+                .map(|acted| {
+                    if acted {
+                        ControllerPass::Acted
+                    } else {
+                        ControllerPass::Converged(None)
+                    }
+                })
+                .map_err(ControllerError::new),
         }
     }
 }
@@ -261,16 +266,16 @@ impl K8sTarget for GitRepository {
         .map_err(|error| error.to_string())
     }
 
-    fn remove_graph_if_empty(&self, graph_id: GraphId) -> Result<(), String> {
-        if self
+    fn remove_graph_if_empty(&self, graph_id: GraphId) -> Result<bool, String> {
+        if !self
             .read_directory(&branch(graph_id), "resources")
             .map_err(|error| error.to_string())?
             .is_empty()
         {
-            self.delete_branch(&branch(graph_id))
-                .map_err(|error| error.to_string())?;
+            return Ok(false);
         }
-        Ok(())
+        self.delete_branch(&branch(graph_id))
+            .map_err(|error| error.to_string())
     }
 }
 
@@ -424,9 +429,13 @@ mod tests {
         );
         assert_eq!(
             restarted.execute(&retire).await.unwrap(),
-            ControllerPass::Converged(None)
+            ControllerPass::Acted
         );
         assert!(!branch_exists(remote.path(), &branch(slice.graph_id())));
+        assert_eq!(
+            restarted.execute(&retire).await.unwrap(),
+            ControllerPass::Converged(None)
+        );
     }
 
     #[tokio::test]

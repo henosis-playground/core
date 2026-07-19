@@ -216,8 +216,8 @@ impl K8sTarget for FakeK8sTarget {
         }
     }
 
-    fn remove_graph_if_empty(&self, _graph_id: GraphId) -> Result<(), String> {
-        Ok(())
+    fn remove_graph_if_empty(&self, _graph_id: GraphId) -> Result<bool, String> {
+        Ok(false)
     }
 }
 
