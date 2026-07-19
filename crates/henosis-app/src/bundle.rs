@@ -185,10 +185,15 @@ pub enum BundleError {
         column: usize,
     },
     #[error("cannot decode bundle manifest `{path}`: {source}")]
-    DecodeManifest { path: PathBuf, source: serde_json::Error },
+    DecodeManifest {
+        path: PathBuf,
+        source: serde_json::Error,
+    },
     #[error("bundle identity mismatch: directory says {expected}, manifest hashes to {actual}")]
     BundleIdentityMismatch { expected: String, actual: String },
-    #[error("bundle executable digest mismatch: manifest says {expected}, module hashes to {actual}")]
+    #[error(
+        "bundle executable digest mismatch: manifest says {expected}, module hashes to {actual}"
+    )]
     ExecutableDigestMismatch { expected: String, actual: String },
     #[error("unsupported bundle format version {0}")]
     UnsupportedFormat(u32),
@@ -461,7 +466,7 @@ fn run_esbuild(
     if !output.status.success() {
         return Err(BundleError::Esbuild {
             component: component.name.clone(),
-            stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
         });
     }
     Ok(())
@@ -579,15 +584,15 @@ fn bundle_component(
     let config_hash = sha256(ESBUILD_CONFIG.as_bytes());
     let manifest = BundleManifestV1 {
         format_version: BUNDLE_FORMAT_VERSION,
-        module_format: "esm".to_string(),
-        entrypoint: "henosis:component".to_string(),
+        module_format: "esm".to_owned(),
+        entrypoint: "henosis:component".to_owned(),
         executable_sha256: executable_sha256.clone(),
-        runtime_api_version: RUNTIME_API_VERSION.to_string(),
+        runtime_api_version: RUNTIME_API_VERSION.to_owned(),
         bundler: BundlerIdentity {
-            name: "esbuild".to_string(),
-            version: ESBUILD_VERSION.to_string(),
+            name: "esbuild".to_owned(),
+            version: ESBUILD_VERSION.to_owned(),
             config_hash,
-            executable_sha256: ESBUILD_SHA256.to_string(),
+            executable_sha256: ESBUILD_SHA256.to_owned(),
         },
         dependency_lock_hash,
         sdk_package_hashes: BTreeMap::new(),
@@ -955,7 +960,11 @@ fn unique_input_name(base: &str, used: &mut BTreeMap<String, usize>) -> String {
 fn capitalize(value: &str) -> String {
     let mut characters = value.chars();
     match characters.next() {
-        Some(first) => first.to_ascii_uppercase().to_string() + characters.as_str(),
+        Some(first) => {
+            let mut capitalized = first.to_ascii_uppercase().to_string();
+            capitalized.push_str(characters.as_str());
+            capitalized
+        }
         None => String::new(),
     }
 }
@@ -972,7 +981,8 @@ fn line_column(source: &str, offset: usize) -> (usize, usize) {
     let line = prefix.bytes().filter(|byte| *byte == b'\n').count() + 1;
     let column = prefix
         .rsplit_once('\n')
-        .map_or(prefix.len() + 1, |(_, tail)| tail.len() + 1);
+        .map(|(_, tail)| tail.len() + 1)
+        .unwrap_or(prefix.len() + 1);
     (line, column)
 }
 
@@ -1176,7 +1186,7 @@ fn read_dependencies(
     })?;
     let metafile: EsbuildMetafile =
         serde_json::from_slice(&bytes).map_err(|source| BundleError::DecodeMetafile {
-            component: component.to_string(),
+            component: component.to_owned(),
             source,
         })?;
     let mut dependencies = metafile
@@ -1199,8 +1209,8 @@ fn reject_external_imports(component: &str, bytes: &[u8]) -> Result<(), BundleEr
         let specifier = &captures[1];
         if !specifier.starts_with("henosis:") {
             return Err(BundleError::ExternalImport {
-                component: component.to_string(),
-                specifier: specifier.to_string(),
+                component: component.to_owned(),
+                specifier: specifier.to_owned(),
             });
         }
     }
@@ -1348,9 +1358,15 @@ fn bundle_id(manifest: &BundleManifestV1) -> Result<String, BundleError> {
         .map_err(BundleError::EncodeIdentity)?;
     for file in &manifest.config_files {
         encoder.array(3).map_err(BundleError::EncodeIdentity)?;
-        encoder.str(&file.path).map_err(BundleError::EncodeIdentity)?;
-        encoder.str(&file.sha256).map_err(BundleError::EncodeIdentity)?;
-        encoder.u64(file.size).map_err(BundleError::EncodeIdentity)?;
+        encoder
+            .str(&file.path)
+            .map_err(BundleError::EncodeIdentity)?;
+        encoder
+            .str(&file.sha256)
+            .map_err(BundleError::EncodeIdentity)?;
+        encoder
+            .u64(file.size)
+            .map_err(BundleError::EncodeIdentity)?;
     }
     encoder.u8(11).map_err(BundleError::EncodeIdentity)?;
     encoder
@@ -1358,10 +1374,18 @@ fn bundle_id(manifest: &BundleManifestV1) -> Result<String, BundleError> {
         .map_err(BundleError::EncodeIdentity)?;
     for requirement in &manifest.artifact_requirements {
         encoder.array(4).map_err(BundleError::EncodeIdentity)?;
-        encoder.str(&requirement.component).map_err(BundleError::EncodeIdentity)?;
-        encoder.str(&requirement.input).map_err(BundleError::EncodeIdentity)?;
-        encoder.str(requirement.kind.as_str()).map_err(BundleError::EncodeIdentity)?;
-        encoder.str(&requirement.path).map_err(BundleError::EncodeIdentity)?;
+        encoder
+            .str(&requirement.component)
+            .map_err(BundleError::EncodeIdentity)?;
+        encoder
+            .str(&requirement.input)
+            .map_err(BundleError::EncodeIdentity)?;
+        encoder
+            .str(requirement.kind.as_str())
+            .map_err(BundleError::EncodeIdentity)?;
+        encoder
+            .str(&requirement.path)
+            .map_err(BundleError::EncodeIdentity)?;
     }
     Ok(sha256(&bytes))
 }
@@ -1373,28 +1397,32 @@ pub struct VerifiedBundle {
     pub manifest: BundleManifestV1,
 }
 
-pub fn verify_bundle_directory(path: &Path, expected_bundle_id: &str) -> Result<VerifiedBundle, BundleError> {
+pub fn verify_bundle_directory(
+    path: &Path,
+    expected_bundle_id: &str,
+) -> Result<VerifiedBundle, BundleError> {
     let manifest_path = path.join("manifest.json");
     let manifest_bytes = fs::read(&manifest_path).map_err(|source| BundleError::ReadSource {
         path: manifest_path.clone(),
         source,
     })?;
-    let manifest: BundleManifestV1 = serde_json::from_slice(&manifest_bytes).map_err(|source| {
-        BundleError::DecodeManifest {
+    let manifest: BundleManifestV1 =
+        serde_json::from_slice(&manifest_bytes).map_err(|source| BundleError::DecodeManifest {
             path: manifest_path,
             source,
-        }
-    })?;
+        })?;
     if manifest.format_version != BUNDLE_FORMAT_VERSION {
         return Err(BundleError::UnsupportedFormat(manifest.format_version));
     }
     if manifest.runtime_api_version != RUNTIME_API_VERSION {
-        return Err(BundleError::UnsupportedRuntime(manifest.runtime_api_version));
+        return Err(BundleError::UnsupportedRuntime(
+            manifest.runtime_api_version,
+        ));
     }
     let actual_bundle_id = bundle_id(&manifest)?;
     if actual_bundle_id != expected_bundle_id {
         return Err(BundleError::BundleIdentityMismatch {
-            expected: expected_bundle_id.to_string(),
+            expected: expected_bundle_id.to_owned(),
             actual: actual_bundle_id,
         });
     }
@@ -1411,7 +1439,7 @@ pub fn verify_bundle_directory(path: &Path, expected_bundle_id: &str) -> Result<
         });
     }
     Ok(VerifiedBundle {
-        bundle_id: expected_bundle_id.to_string(),
+        bundle_id: expected_bundle_id.to_owned(),
         module,
         manifest,
     })
@@ -1437,7 +1465,7 @@ mod tests {
     #[test]
     fn discovery_finds_multiple_default_components() {
         let repo = tempfile::tempdir().unwrap();
-        fs::create_dir(repo.path().join("src")).unwrap();
+        fs::create_dir_all(repo.path().join("src")).unwrap();
         fs::write(
             repo.path().join("src/a.ts"),
             "export default defineComponent({ name: \"a\", outputs: {}, build() {} });",
@@ -1463,15 +1491,15 @@ mod tests {
     fn bundle_identity_is_stable() {
         let manifest = BundleManifestV1 {
             format_version: 1,
-            module_format: "esm".to_string(),
-            entrypoint: "henosis:component".to_string(),
+            module_format: "esm".to_owned(),
+            entrypoint: "henosis:component".to_owned(),
             executable_sha256: "a".repeat(64),
-            runtime_api_version: RUNTIME_API_VERSION.to_string(),
+            runtime_api_version: RUNTIME_API_VERSION.to_owned(),
             bundler: BundlerIdentity {
-                name: "esbuild".to_string(),
-                version: ESBUILD_VERSION.to_string(),
+                name: "esbuild".to_owned(),
+                version: ESBUILD_VERSION.to_owned(),
                 config_hash: "b".repeat(64),
-                executable_sha256: ESBUILD_SHA256.to_string(),
+                executable_sha256: ESBUILD_SHA256.to_owned(),
             },
             dependency_lock_hash: Some("c".repeat(64)),
             sdk_package_hashes: BTreeMap::new(),
