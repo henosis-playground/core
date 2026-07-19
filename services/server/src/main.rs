@@ -141,13 +141,7 @@ impl CoreService {
             let bundle_id = hex(digest.as_bytes());
             let verified = verify_bundle_directory(&self.bundle_root.join(&bundle_id), &bundle_id)
                 .map_err(|error| invalid(error.to_string()))?;
-            let path = verified.module;
-            let bundle_source = tokio::fs::read(&path).await.map_err(|error| {
-                invalid(format!(
-                    "cannot read bundle for {name:?} at {}: {error}",
-                    path.display()
-                ))
-            })?;
+            let bundle_source = verified.module;
             let intent =
                 inspect_bundle(BundleRef::new(digest), &bundle_source, &self.engine_config)
                     .map_err(|error| invalid(error.to_string()))?;
