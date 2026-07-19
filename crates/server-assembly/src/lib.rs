@@ -622,3 +622,103 @@ impl CloudflareTransport for RecordedCloudflareTransport {
         .boxed()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+
+    use henosis_controller_runtime::controller_name;
+    use henosis_controller_runtime::ready_report;
+    use henosis_orchestrator::ControllerEffect;
+    use henosis_types::ContentDigest;
+    use henosis_types::Generation;
+    use tokio::sync::Notify;
+
+    use super::*;
+
+    struct PanicsOnceController {
+        calls: AtomicUsize,
+        name: ControllerName,
+    }
+
+    impl Controller for PanicsOnceController {
+        fn name(&self) -> &ControllerName {
+            &self.name
+        }
+
+        fn execute<'a>(
+            &'a self,
+            command: &'a ControllerCommand,
+        ) -> BoxFuture<'a, Result<ControllerPass, ControllerError>> {
+            Box::pin(async move {
+                if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                    panic!("test controller panic");
+                }
+                let ControllerCommand::Reconcile(slice) = command else {
+                    return Ok(ControllerPass::Converged(None));
+                };
+                Ok(ControllerPass::Converged(Some(
+                    ready_report(slice, None, Vec::new()).unwrap(),
+                )))
+            })
+        }
+    }
+
+    struct FailsFirstReport {
+        calls: AtomicUsize,
+        accepted: Notify,
+    }
+
+    impl ControllerReportHandler for FailsFirstReport {
+        fn report(
+            &self,
+            _report: ControllerReport,
+        ) -> BoxFuture<'_, anyhow::Result<Vec<ControllerEffect>>> {
+            Box::pin(async move {
+                if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                    anyhow::bail!("transient test failure");
+                }
+                self.accepted.notify_one();
+                Ok(Vec::new())
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn panic_and_transient_report_failure_do_not_stick_or_drop_lane() {
+        let graph = GraphId::from_bytes([7; 16]);
+        let name = controller_name("test");
+        let controller = Arc::new(PanicsOnceController {
+            calls: AtomicUsize::new(0),
+            name: name.clone(),
+        });
+        let reports = Arc::new(FailsFirstReport {
+            calls: AtomicUsize::new(0),
+            accepted: Notify::new(),
+        });
+        let dispatcher = ControllerDispatcher::start(
+            BTreeMap::from([(name.clone(), controller.clone() as Arc<dyn Controller>)]),
+            reports.clone() as Arc<dyn ControllerReportHandler>,
+        );
+        let slice = ControllerSlice::new(
+            graph,
+            Generation::new(1).unwrap(),
+            ContentDigest::digest(b"plan"),
+            name.clone(),
+            BTreeMap::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        dispatcher.dispatch(vec![ControllerEffect::new(
+            name,
+            ControllerCommand::Reconcile(slice),
+        )]);
+
+        tokio::time::timeout(Duration::from_secs(5), reports.accepted.notified())
+            .await
+            .expect("report should be retried and accepted");
+        assert_eq!(controller.calls.load(Ordering::SeqCst), 2);
+        assert_eq!(reports.calls.load(Ordering::SeqCst), 2);
+    }
+}

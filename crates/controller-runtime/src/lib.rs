@@ -978,6 +978,89 @@ mod tests {
     }
 
     #[test]
+    fn scheduler_retains_report_until_acknowledged() {
+        let graph = GraphId::from_bytes([4; 16]);
+        let controller = controller_name("test");
+        let slice = ControllerSlice::new(
+            graph,
+            Generation::new(1).unwrap(),
+            ContentDigest::digest(b"plan"),
+            controller.clone(),
+            BTreeMap::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        let report = ready_report(&slice, None, Vec::new()).unwrap();
+        let mut schedule = ControllerSchedule::default();
+        let key = schedule
+            .submit(controller.clone(), ControllerCommand::Reconcile(slice.clone()))
+            .unwrap();
+        let pass = schedule.pass(&key).unwrap();
+        let ControllerScheduleCompletion::Report(pending) =
+            schedule.complete(&pass, ControllerPass::Converged(Some(report.clone())))
+        else {
+            panic!("convergence should enter report delivery");
+        };
+        assert!(schedule.pass(&key).is_none());
+
+        let newer = ControllerSlice::new(
+            graph,
+            Generation::new(2).unwrap(),
+            ContentDigest::digest(b"new-plan"),
+            controller.clone(),
+            BTreeMap::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        assert_eq!(
+            schedule.submit(controller, ControllerCommand::Reconcile(newer)),
+            None
+        );
+        assert_eq!(
+            schedule.acknowledge_report(&pending),
+            ControllerScheduleCompletion::Continue
+        );
+        assert!(matches!(
+            schedule.pass(&key).unwrap().command(),
+            ControllerCommand::Reconcile(slice)
+                if slice.generation() == Generation::new(2).unwrap()
+        ));
+    }
+
+    #[test]
+    fn retryable_and_terminal_failures_have_distinct_schedule_outcomes() {
+        let graph = GraphId::from_bytes([5; 16]);
+        let controller = controller_name("test");
+        let slice = ControllerSlice::new(
+            graph,
+            Generation::new(1).unwrap(),
+            ContentDigest::digest(b"plan"),
+            controller.clone(),
+            BTreeMap::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        let mut schedule = ControllerSchedule::default();
+        let key = schedule
+            .submit(controller, ControllerCommand::Reconcile(slice.clone()))
+            .unwrap();
+        let pass = schedule.pass(&key).unwrap();
+        assert_eq!(
+            schedule.complete(&pass, ControllerPass::Retryable("offline".into())),
+            ControllerScheduleCompletion::Retry {
+                attempt: 1,
+                message: "offline".into(),
+            }
+        );
+        let pass = schedule.pass(&key).unwrap();
+        let failed = failed_report(&slice, "invalid desired state").unwrap();
+        assert!(matches!(
+            schedule.complete(&pass, ControllerPass::Failed(failed)),
+            ControllerScheduleCompletion::Report(_)
+        ));
+    }
+
+    #[test]
     fn stale_git_publication_cannot_overwrite_newer_branch_head() {
         let remote = tempfile::tempdir().unwrap();
         run_git(
