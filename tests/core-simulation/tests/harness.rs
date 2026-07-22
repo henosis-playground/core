@@ -560,11 +560,8 @@ fn output_publication_racing_retirement_is_fenced_and_cleanup_converges() {
 fn crashes_at_each_cleanup_pass_boundary_preserve_all_obligations() {
     runtime().block_on(async {
         for crash_after_passes in 0..=6 {
-            let mut world = RealControllerWorld::new(
-                Seed::from_u64(0x5eed_2605 + crash_after_passes),
-                3,
-            )
-            .await;
+            let mut world =
+                RealControllerWorld::new(Seed::from_u64(0x5eed_2605 + crash_after_passes), 3).await;
             drive_real_controller_passes(&mut world, 128).await;
             drive_real_controller_reports(&mut world, 128).await;
             assert!(world.all_current_resources_exist());

@@ -31,6 +31,10 @@ lint: check-fmt clippy check-deny check-pre-commit
 test *flags:
     cargo nextest run --cargo-profile testing --no-tests=pass {{ flags }}
 
+# Runs the ignored fresh-machine recovery test against a running s2-lite.
+test-s2-crash:
+    HENOSIS_S2_CRASH_TEST=1 cargo nextest run --cargo-profile testing --no-tests=pass --run-ignored ignored-only -p henosis-core-server server_recovers_on_fresh_machine_from_s2_and_durable_bundle_store
+
 doc *flags:
     RUSTDOCFLAGS="--cfg docsrs" cargo doc --all-features --no-deps --document-private-items --keep-going {{ flags }}
 

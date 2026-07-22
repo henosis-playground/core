@@ -210,12 +210,14 @@ impl Journal {
                     );
                     Ok(AppendAck::new(expected, tail))
                 } else {
-                    Err(Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Domain(
-                        StorageDomainError::CasConflict {
-                            expected: expected.sequence(),
-                            actual: cursor.sequence(),
-                        },
-                    ))
+                    Err(
+                        Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Domain(
+                            StorageDomainError::CasConflict {
+                                expected: expected.sequence(),
+                                actual: cursor.sequence(),
+                            },
+                        ),
+                    )
                 }
             }
         }

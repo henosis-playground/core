@@ -1296,8 +1296,7 @@ impl GraphState {
                 .map(Resource::id)
                 .collect()
         };
-        let mut absent_by_controller =
-            BTreeMap::<ControllerName, BTreeMap<_, Resource>>::new();
+        let mut absent_by_controller = BTreeMap::<ControllerName, BTreeMap<_, Resource>>::new();
         for command in &self.pending_cleanup {
             let (controller, resources) = match command {
                 ControllerCommand::Supersede(cleanup) => {

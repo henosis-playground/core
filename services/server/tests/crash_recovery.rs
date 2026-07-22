@@ -54,11 +54,13 @@ export function evaluate() {
 "#;
 
 #[test]
+#[ignore = "requires s2-lite; run `just test-s2-crash`"]
 fn server_recovers_on_fresh_machine_from_s2_and_durable_bundle_store() {
-    if std::env::var("HENOSIS_S2_CRASH_TEST").as_deref() != Ok("1") {
-        eprintln!("skipped: set HENOSIS_S2_CRASH_TEST=1 with s2-lite running");
-        return;
-    }
+    assert_eq!(
+        std::env::var("HENOSIS_S2_CRASH_TEST").as_deref(),
+        Ok("1"),
+        "run this integration test through `just test-s2-crash`"
+    );
 
     let account_endpoint = test_env("HENOSIS_TEST_S2_ACCOUNT_ENDPOINT", "http://127.0.0.1:4480");
     let basin_endpoint = test_env("HENOSIS_TEST_S2_BASIN_ENDPOINT", "http://127.0.0.1:4480");

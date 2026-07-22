@@ -389,9 +389,8 @@ impl GraphActor {
                     state.needs_reload = true;
                     let original = storage_error(error);
                     if let Err(reload) = self.ensure_authoritative(state).await {
-                        return Err(original.context(format!(
-                            "authoritative graph reload also failed: {reload}"
-                        )));
+                        return Err(original
+                            .context(format!("authoritative graph reload also failed: {reload}")));
                     }
                     return Err(original);
                 }
@@ -430,9 +429,8 @@ impl GraphActor {
                     state.needs_reload = true;
                     let original = storage_error(error);
                     if let Err(reload) = self.ensure_authoritative(&mut state).await {
-                        return Err(original.context(format!(
-                            "authoritative graph reload also failed: {reload}"
-                        )));
+                        return Err(original
+                            .context(format!("authoritative graph reload also failed: {reload}")));
                     }
                     return Err(original);
                 }
@@ -549,7 +547,10 @@ mod tests {
                 components: graph(graph_id, bundle, 2).components,
             })
             .await;
-        assert!(first.is_err(), "the failed resolution remains visible to the caller");
+        assert!(
+            first.is_err(),
+            "the failed resolution remains visible to the caller"
+        );
 
         let result = graphs
             .apply(Command::UpdateGraph {
@@ -596,10 +597,7 @@ mod tests {
         let storage = MemS2::default();
         let (graphs, evaluator, bundle) = materialized(storage.clone()).await;
         let graph_id = GraphId::from_bytes([43; 16]);
-        storage.script([
-            AppendFault::Acknowledge,
-            AppendFault::RejectBeforeCommit,
-        ]);
+        storage.script([AppendFault::Acknowledge, AppendFault::RejectBeforeCommit]);
         assert!(
             graphs
                 .apply(Command::CreateGraph(graph(graph_id, bundle, 1)))
@@ -625,10 +623,7 @@ mod tests {
         let storage = MemS2::default();
         let (graphs, _evaluator, bundle) = materialized(storage.clone()).await;
         let graph_id = GraphId::from_bytes([44; 16]);
-        storage.script([
-            AppendFault::Acknowledge,
-            AppendFault::CommitThenTimeout,
-        ]);
+        storage.script([AppendFault::Acknowledge, AppendFault::CommitThenTimeout]);
         storage.script_reads([ReadFault::Reject]);
         assert!(
             graphs
@@ -644,7 +639,10 @@ mod tests {
                 .is_err(),
             "the accepted graph stream cannot be superseded by registry intent"
         );
-        let snapshot = graphs.snapshot(graph_id).await.expect("accepted graph is loaded");
+        let snapshot = graphs
+            .snapshot(graph_id)
+            .await
+            .expect("accepted graph is loaded");
         assert_eq!(component_revision(&snapshot, graph_id), revision(1));
     }
 
@@ -656,12 +654,10 @@ mod tests {
             resources: Vec::new(),
             static_outputs: BTreeMap::new(),
         });
-        let (graphs, effects) = MaterializedGraphs::boot(
-            evaluator.clone(),
-            Journal::new(Arc::new(storage)),
-        )
-        .await
-        .expect("empty materialization boots");
+        let (graphs, effects) =
+            MaterializedGraphs::boot(evaluator.clone(), Journal::new(Arc::new(storage)))
+                .await
+                .expect("empty materialization boots");
         assert!(effects.is_empty());
         (graphs, evaluator, bundle)
     }
