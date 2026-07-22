@@ -9,6 +9,7 @@ use futures::stream::BoxStream;
 use henosis_storage::AppendAck;
 use henosis_storage::AppendOutcome;
 use henosis_storage::AppendRecord;
+use henosis_storage::AppendSession as StorageAppendSession;
 use henosis_storage::StorageDomainError;
 use henosis_storage::StorageEngine;
 use henosis_storage::StoredRecord;
@@ -43,6 +44,8 @@ pub enum MemS2Error {
     Rejected,
     #[error("append timed out after commit; durability is ambiguous to the caller")]
     TimeoutAfterCommit,
+    #[error("append session is poisoned")]
+    SessionPoisoned,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -56,6 +59,13 @@ struct MemS2State {
     append_faults: VecDeque<AppendFault>,
     read_faults: VecDeque<ReadFault>,
     clock: u64,
+    opened_sessions: u64,
+}
+
+pub struct MemS2AppendSession {
+    storage: MemS2,
+    stream: StreamName,
+    poisoned: bool,
 }
 
 impl MemS2 {
@@ -76,6 +86,35 @@ impl MemS2 {
     }
 
     pub fn append(
+        &self,
+        stream: &StreamName,
+        expected: StreamPosition,
+        records: Vec<AppendRecord>,
+    ) -> Result<MemS2Append, MemS2Error> {
+        self.open_session(stream).append(expected, records)
+    }
+
+    pub fn open_session(&self, stream: &StreamName) -> MemS2AppendSession {
+        self.state
+            .lock()
+            .expect("MemS2 lock is not poisoned")
+            .opened_sessions += 1;
+        MemS2AppendSession {
+            storage: self.clone(),
+            stream: stream.clone(),
+            poisoned: false,
+        }
+    }
+
+    #[must_use]
+    pub fn opened_sessions(&self) -> u64 {
+        self.state
+            .lock()
+            .expect("MemS2 lock is not poisoned")
+            .opened_sessions
+    }
+
+    fn append_in_session(
         &self,
         stream: &StreamName,
         expected: StreamPosition,
@@ -154,15 +193,36 @@ impl MemS2 {
     }
 }
 
+impl MemS2AppendSession {
+    pub fn append(
+        &mut self,
+        expected: StreamPosition,
+        records: Vec<AppendRecord>,
+    ) -> Result<MemS2Append, MemS2Error> {
+        if self.poisoned {
+            return Err(MemS2Error::SessionPoisoned);
+        }
+        let result = self
+            .storage
+            .append_in_session(&self.stream, expected, records);
+        if matches!(
+            result,
+            Err(MemS2Error::CasConflict { .. } | MemS2Error::TimeoutAfterCommit)
+        ) {
+            self.poisoned = true;
+        }
+        result
+    }
+}
+
 #[async_trait]
-impl StorageEngine for MemS2 {
+impl StorageAppendSession for MemS2AppendSession {
     async fn append(
-        &self,
-        stream: &StreamName,
+        &mut self,
         expected: StreamPosition,
         records: Vec<AppendRecord>,
     ) -> Result<AppendOutcome, Error<StorageDomainError, anyhow::Error, anyhow::Error>> {
-        match MemS2::append(self, stream, expected, records) {
+        match MemS2AppendSession::append(self, expected, records) {
             Ok(result) => {
                 Ok(AppendOutcome::Acknowledged(result.acknowledgement.expect(
                     "acknowledged MemS2 append has an acknowledgement",
@@ -178,7 +238,23 @@ impl StorageEngine for MemS2 {
                 "append failed before commit"
             ))),
             Err(MemS2Error::TimeoutAfterCommit) => Ok(AppendOutcome::CommitUnknown),
+            Err(MemS2Error::SessionPoisoned) => Err(Error::Transient(anyhow::anyhow!(
+                "append session is poisoned"
+            ))),
         }
+    }
+}
+
+#[async_trait]
+impl StorageEngine for MemS2 {
+    async fn open_append_session(
+        &self,
+        stream: &StreamName,
+    ) -> Result<
+        Box<dyn StorageAppendSession>,
+        Error<StorageDomainError, anyhow::Error, anyhow::Error>,
+    > {
+        Ok(Box::new(self.open_session(stream)))
     }
 
     async fn read(

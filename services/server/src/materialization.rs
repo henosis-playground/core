@@ -9,6 +9,7 @@ use henosis_orchestrator::ControllerEffect;
 use henosis_orchestrator::Core;
 use henosis_orchestrator::MaterializedCore;
 use henosis_orchestrator::Transition;
+use henosis_storage::StorageDomainError;
 use henosis_storage::StreamPosition;
 use henosis_types::CoreEvent;
 use henosis_types::Evaluator;
@@ -163,7 +164,8 @@ impl MaterializedGraphs {
             self.journal.clone(),
             StreamPosition::default(),
         );
-        let prepared = actor.prepare(Command::CreateGraph(new)).await?;
+        let command = Command::CreateGraph(new);
+        let prepared = actor.prepare(command.clone()).await?;
         let intent = prepared
             .transition
             .events()
@@ -176,45 +178,42 @@ impl MaterializedGraphs {
 
         {
             let mut registry = self.registry.lock().await;
-            if let Some(registration) = registry.graphs.get(&graph_id).cloned() {
-                if let Some((loaded, _)) = self.load_actor(registration.intent.clone()).await? {
-                    self.actors.write().await.insert(graph_id, Arc::new(loaded));
-                    return Err(anyhow::anyhow!("graph already exists"));
+            loop {
+                let event = if let Some(registration) = registry.graphs.get(&graph_id).cloned() {
+                    if let Some((loaded, _)) = self.load_actor(registration.intent.clone()).await? {
+                        self.actors.write().await.insert(graph_id, Arc::new(loaded));
+                        return Err(anyhow::anyhow!("graph already exists"));
+                    }
+                    if registration.intent == intent {
+                        break;
+                    }
+                    RegistryEvent::GraphRegistrationSuperseded(intent.clone())
+                } else {
+                    RegistryEvent::GraphRegistered(intent.clone())
+                };
+                match self.journal.append_registry(registry.tail, &event).await {
+                    Ok(ack) => {
+                        registry.tail = ack.tail();
+                        registry.graphs.insert(
+                            graph_id,
+                            RegistryGraph {
+                                intent: intent.clone(),
+                                retired: false,
+                            },
+                        );
+                        break;
+                    }
+                    Err(error) if is_occ_conflict(&error) => {
+                        let (events, tail) =
+                            self.journal.load_registry().await.map_err(storage_error)?;
+                        *registry = RegistryState::fold(tail, &events);
+                    }
+                    Err(error) => return Err(storage_error(error)),
                 }
-                if registration.intent != intent {
-                    let event = RegistryEvent::GraphRegistrationSuperseded(intent.clone());
-                    let ack = self
-                        .journal
-                        .append_registry(registry.tail, &event)
-                        .await
-                        .map_err(storage_error)?;
-                    registry.tail = ack.tail();
-                    let registration = registry
-                        .graphs
-                        .get_mut(&graph_id)
-                        .expect("registration was checked");
-                    registration.intent = intent.clone();
-                    registration.retired = false;
-                }
-            } else {
-                let event = RegistryEvent::GraphRegistered(intent.clone());
-                let ack = self
-                    .journal
-                    .append_registry(registry.tail, &event)
-                    .await
-                    .map_err(storage_error)?;
-                registry.tail = ack.tail();
-                registry.graphs.insert(
-                    graph_id,
-                    RegistryGraph {
-                        intent: intent.clone(),
-                        retired: false,
-                    },
-                );
             }
         }
 
-        let result = actor.commit(prepared).await?;
+        let result = actor.apply(command).await?;
         self.actors.write().await.insert(graph_id, Arc::new(actor));
         Ok(result)
     }
@@ -240,28 +239,35 @@ impl MaterializedGraphs {
         last_generation: Generation,
     ) -> anyhow::Result<()> {
         let mut registry = self.registry.lock().await;
-        let Some(registration) = registry.graphs.get(&graph_id) else {
-            return Err(anyhow::anyhow!("retired graph is absent from the registry"));
-        };
-        if registration.retired {
-            return Ok(());
+        loop {
+            let Some(registration) = registry.graphs.get(&graph_id) else {
+                return Err(anyhow::anyhow!("retired graph is absent from the registry"));
+            };
+            if registration.retired {
+                return Ok(());
+            }
+            let event = RegistryEvent::GraphRetired {
+                graph_id,
+                last_generation,
+            };
+            match self.journal.append_registry(registry.tail, &event).await {
+                Ok(ack) => {
+                    registry.tail = ack.tail();
+                    registry
+                        .graphs
+                        .get_mut(&graph_id)
+                        .expect("registration was checked")
+                        .retired = true;
+                    return Ok(());
+                }
+                Err(error) if is_occ_conflict(&error) => {
+                    let (events, tail) =
+                        self.journal.load_registry().await.map_err(storage_error)?;
+                    *registry = RegistryState::fold(tail, &events);
+                }
+                Err(error) => return Err(storage_error(error)),
+            }
         }
-        let event = RegistryEvent::GraphRetired {
-            graph_id,
-            last_generation,
-        };
-        let ack = self
-            .journal
-            .append_registry(registry.tail, &event)
-            .await
-            .map_err(storage_error)?;
-        registry.tail = ack.tail();
-        registry
-            .graphs
-            .get_mut(&graph_id)
-            .expect("registration was checked")
-            .retired = true;
-        Ok(())
     }
 
     async fn load_actor(
@@ -308,6 +314,11 @@ struct PreparedTransition {
     transition: Transition,
 }
 
+enum CommitFailure {
+    Occ,
+    Other(anyhow::Error),
+}
+
 impl GraphActor {
     fn new(
         graph_id: GraphId,
@@ -330,20 +341,28 @@ impl GraphActor {
 
     async fn apply(&self, command: Command) -> anyhow::Result<ApplyResult> {
         let mut state = self.state.lock().await;
-        self.ensure_authoritative(&mut state).await?;
-        let mut candidate = state.core.clone();
-        let transition = candidate
-            .handle(command)
-            .await
-            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-        self.commit_locked(
-            &mut state,
-            PreparedTransition {
-                candidate,
-                transition,
-            },
-        )
-        .await
+        loop {
+            self.ensure_authoritative(&mut state).await?;
+            let mut candidate = state.core.clone();
+            let transition = candidate
+                .handle(command.clone())
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            match self
+                .commit_locked(
+                    &mut state,
+                    PreparedTransition {
+                        candidate,
+                        transition,
+                    },
+                )
+                .await
+            {
+                Ok(result) => return Ok(result),
+                Err(CommitFailure::Occ) => {}
+                Err(CommitFailure::Other(error)) => return Err(error),
+            }
+        }
     }
 
     async fn prepare(&self, command: Command) -> anyhow::Result<PreparedTransition> {
@@ -360,17 +379,11 @@ impl GraphActor {
         })
     }
 
-    async fn commit(&self, prepared: PreparedTransition) -> anyhow::Result<ApplyResult> {
-        let mut state = self.state.lock().await;
-        self.ensure_authoritative(&mut state).await?;
-        self.commit_locked(&mut state, prepared).await
-    }
-
     async fn commit_locked(
         &self,
         state: &mut ActorState,
         prepared: PreparedTransition,
-    ) -> anyhow::Result<ApplyResult> {
+    ) -> Result<ApplyResult, CommitFailure> {
         let durable = prepared
             .transition
             .events()
@@ -387,12 +400,17 @@ impl GraphActor {
                 Ok(ack) => state.tail = ack.tail(),
                 Err(error) => {
                     state.needs_reload = true;
+                    let occ = is_occ_conflict(&error);
                     let original = storage_error(error);
                     if let Err(reload) = self.ensure_authoritative(state).await {
-                        return Err(original
-                            .context(format!("authoritative graph reload also failed: {reload}")));
+                        return Err(CommitFailure::Other(original.context(format!(
+                            "authoritative graph reload also failed: {reload}"
+                        ))));
                     }
-                    return Err(original);
+                    if occ {
+                        return Err(CommitFailure::Occ);
+                    }
+                    return Err(CommitFailure::Other(original));
                 }
             }
         }
@@ -406,38 +424,45 @@ impl GraphActor {
 
     async fn resume(&self) -> anyhow::Result<Vec<ControllerEffect>> {
         let mut state = self.state.lock().await;
-        self.ensure_authoritative(&mut state).await?;
-        let mut candidate = state.core.clone();
-        let transition = candidate
-            .resume_graph(self.graph_id)
-            .await
-            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-        let durable = transition
-            .events()
-            .iter()
-            .filter(|event| is_durable(event))
-            .cloned()
-            .collect::<Vec<_>>();
-        if !durable.is_empty() {
-            match self
-                .journal
-                .append_all(self.graph_id, state.tail, &durable)
+        loop {
+            self.ensure_authoritative(&mut state).await?;
+            let mut candidate = state.core.clone();
+            let transition = candidate
+                .resume_graph(self.graph_id)
                 .await
-            {
-                Ok(ack) => state.tail = ack.tail(),
-                Err(error) => {
-                    state.needs_reload = true;
-                    let original = storage_error(error);
-                    if let Err(reload) = self.ensure_authoritative(&mut state).await {
-                        return Err(original
-                            .context(format!("authoritative graph reload also failed: {reload}")));
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            let durable = transition
+                .events()
+                .iter()
+                .filter(|event| is_durable(event))
+                .cloned()
+                .collect::<Vec<_>>();
+            if !durable.is_empty() {
+                match self
+                    .journal
+                    .append_all(self.graph_id, state.tail, &durable)
+                    .await
+                {
+                    Ok(ack) => state.tail = ack.tail(),
+                    Err(error) => {
+                        state.needs_reload = true;
+                        let occ = is_occ_conflict(&error);
+                        let original = storage_error(error);
+                        if let Err(reload) = self.ensure_authoritative(&mut state).await {
+                            return Err(original.context(format!(
+                                "authoritative graph reload also failed: {reload}"
+                            )));
+                        }
+                        if occ {
+                            continue;
+                        }
+                        return Err(original);
                     }
-                    return Err(original);
                 }
             }
+            state.core = candidate;
+            return Ok(transition.effects().to_vec());
         }
-        state.core = candidate;
-        Ok(transition.effects().to_vec())
     }
 
     async fn ensure_authoritative(&self, state: &mut ActorState) -> anyhow::Result<()> {
@@ -505,6 +530,15 @@ impl RegistryState {
     }
 }
 
+fn is_occ_conflict(
+    error: &faultline::Error<StorageDomainError, anyhow::Error, anyhow::Error>,
+) -> bool {
+    matches!(
+        error,
+        faultline::Error::Domain(StorageDomainError::CasConflict { .. })
+    )
+}
+
 fn storage_error(error: impl std::fmt::Display) -> anyhow::Error {
     anyhow::anyhow!(error.to_string())
 }
@@ -538,6 +572,7 @@ mod tests {
             .await
             .expect("initial graph is created");
 
+        let sessions_before_fault = storage.opened_sessions();
         storage.script([AppendFault::CommitThenTimeout]);
         storage.script_reads([ReadFault::Reject]);
         let first = graphs
@@ -570,6 +605,98 @@ mod tests {
                 .ordinal(),
             3
         );
+        assert_eq!(storage.opened_sessions(), sessions_before_fault + 1);
+    }
+
+    #[tokio::test]
+    async fn stale_actor_discards_its_poisoned_session_before_reappend() {
+        let storage = MemS2::default();
+        let evaluator = evaluator();
+        let bundle = evaluator.register(ComponentProgram {
+            resources: Vec::new(),
+            static_outputs: BTreeMap::new(),
+        });
+        let (first, _) =
+            MaterializedGraphs::boot(evaluator.clone(), Journal::new(Arc::new(storage.clone())))
+                .await
+                .expect("first materializer boots");
+        let graph_id = GraphId::from_bytes([45; 16]);
+        first
+            .apply(Command::CreateGraph(graph(graph_id, bundle, 1)))
+            .await
+            .expect("graph is created");
+        let (second, _) =
+            MaterializedGraphs::boot(evaluator, Journal::new(Arc::new(storage.clone())))
+                .await
+                .expect("second materializer boots from the graph stream");
+
+        first
+            .apply(Command::UpdateGraph {
+                graph_id,
+                expected_generation: Generation::new(1).expect("one is non-zero"),
+                components: graph(graph_id, bundle, 2).components,
+            })
+            .await
+            .expect("first actor advances the graph");
+        let sessions_before_conflict = storage.opened_sessions();
+        assert!(
+            second
+                .apply(Command::UpdateGraph {
+                    graph_id,
+                    expected_generation: Generation::new(1).expect("one is non-zero"),
+                    components: graph(graph_id, bundle, 3).components,
+                })
+                .await
+                .is_err(),
+            "the re-derived stale command is rejected after authoritative reload"
+        );
+        assert_eq!(storage.opened_sessions(), sessions_before_conflict + 1);
+
+        let result = second
+            .apply(Command::UpdateGraph {
+                graph_id,
+                expected_generation: Generation::new(2).expect("two is non-zero"),
+                components: graph(graph_id, bundle, 3).components,
+            })
+            .await
+            .expect("a fresh session accepts the re-derived update");
+        assert_eq!(component_revision(&result.state, graph_id), revision(3));
+        assert_eq!(storage.opened_sessions(), sessions_before_conflict + 2);
+    }
+
+    #[tokio::test]
+    async fn stale_registry_reloads_before_rederiving_on_a_fresh_session() {
+        let storage = MemS2::default();
+        let evaluator = evaluator();
+        let bundle = evaluator.register(ComponentProgram {
+            resources: Vec::new(),
+            static_outputs: BTreeMap::new(),
+        });
+        let (first, _) =
+            MaterializedGraphs::boot(evaluator.clone(), Journal::new(Arc::new(storage.clone())))
+                .await
+                .expect("first materializer boots");
+        let (second, _) =
+            MaterializedGraphs::boot(evaluator, Journal::new(Arc::new(storage.clone())))
+                .await
+                .expect("second materializer boots with the same empty registry");
+
+        first
+            .apply(Command::CreateGraph(graph(
+                GraphId::from_bytes([46; 16]),
+                bundle,
+                1,
+            )))
+            .await
+            .expect("first materializer advances the registry");
+        let sessions_before_conflict = storage.opened_sessions();
+        let graph_id = GraphId::from_bytes([47; 16]);
+        let result = second
+            .apply(Command::CreateGraph(graph(graph_id, bundle, 1)))
+            .await
+            .expect("stale registry reloads and appends through a fresh session");
+        assert_eq!(component_revision(&result.state, graph_id), revision(1));
+        assert_eq!(storage.opened_sessions(), sessions_before_conflict + 3);
     }
 
     #[tokio::test]

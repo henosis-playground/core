@@ -19,6 +19,7 @@ use henosis_storage::StreamPosition;
 use henosis_testkit::AppendFault;
 use henosis_testkit::ComponentProgram;
 use henosis_testkit::MemS2;
+use henosis_testkit::MemS2Error;
 use henosis_testkit::ProgramEvaluator;
 use henosis_testkit::Quiescence;
 use henosis_testkit::ResourceProgram;
@@ -183,6 +184,63 @@ fn late_generation_output_is_rejected_without_contamination() {
 }
 
 #[test]
+fn occ_violation_poisons_the_mem_s2_session() {
+    let storage = MemS2::default();
+    let stream = StreamName::new("session-poisoning").expect("stream name is valid");
+    let mut current = storage.open_session(&stream);
+    let mut stale = storage.open_session(&stream);
+    current
+        .append(
+            StreamPosition::default(),
+            vec![AppendRecord::new(b"first".to_vec())],
+        )
+        .expect("current session appends");
+
+    assert!(matches!(
+        stale.append(
+            StreamPosition::default(),
+            vec![AppendRecord::new(b"stale".to_vec())],
+        ),
+        Err(MemS2Error::CasConflict {
+            expected: 0,
+            actual: 1,
+        })
+    ));
+    assert!(matches!(
+        stale.append(
+            StreamPosition::new(1),
+            vec![AppendRecord::new(b"must-not-append".to_vec())],
+        ),
+        Err(MemS2Error::SessionPoisoned)
+    ));
+    assert_eq!(storage.tail(&stream).sequence(), 1);
+}
+
+#[test]
+fn timeout_after_commit_poisons_the_mem_s2_session() {
+    let storage = MemS2::default();
+    let stream = StreamName::new("ambiguous-session").expect("stream name is valid");
+    storage.script([AppendFault::CommitThenTimeout]);
+    let mut session = storage.open_session(&stream);
+
+    assert!(matches!(
+        session.append(
+            StreamPosition::default(),
+            vec![AppendRecord::new(b"committed".to_vec())],
+        ),
+        Err(MemS2Error::TimeoutAfterCommit)
+    ));
+    assert!(matches!(
+        session.append(
+            StreamPosition::new(1),
+            vec![AppendRecord::new(b"must-not-append".to_vec())],
+        ),
+        Err(MemS2Error::SessionPoisoned)
+    ));
+    assert_eq!(storage.tail(&stream).sequence(), 1);
+}
+
+#[test]
 fn timeout_after_commit_is_resolved_through_the_product_journal() {
     runtime().block_on(async {
         let run = run_seed(Seed::from_u64(19), &Scenario::bounded(1), 32).await;
@@ -202,6 +260,14 @@ fn timeout_after_commit_is_resolved_through_the_product_journal() {
             journal.load(graph_id).await.expect("replay succeeds"),
             vec![event.clone()]
         );
+        assert_eq!(storage.opened_sessions(), 1);
+
+        let second = journal
+            .append(graph_id, ack.tail(), event)
+            .await
+            .expect("the next append uses a fresh session");
+        assert_eq!(second.tail().sequence(), 2);
+        assert_eq!(storage.opened_sessions(), 2);
     });
 }
 
@@ -212,7 +278,7 @@ fn unknown_append_with_different_stored_bytes_is_a_cas_loss() {
         let event = run.events.first().expect("simulation emits a graph event");
         let storage = MemS2::default();
         storage.script([AppendFault::CommitDifferentThenTimeout]);
-        let journal = Journal::new(Arc::new(storage));
+        let journal = Journal::new(Arc::new(storage.clone()));
         let graph_id = GraphId::from_bytes([8; 16]);
 
         let error = journal
@@ -226,6 +292,14 @@ fn unknown_append_with_different_stored_bytes_is_a_cas_loss() {
                 actual: 1,
             })
         ));
+        assert_eq!(storage.opened_sessions(), 1);
+
+        let ack = journal
+            .append(graph_id, StreamPosition::new(1), event)
+            .await
+            .expect("the OCC recovery append uses a fresh session");
+        assert_eq!(ack.tail().sequence(), 2);
+        assert_eq!(storage.opened_sessions(), 2);
     });
 }
 

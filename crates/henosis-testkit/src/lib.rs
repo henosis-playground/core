@@ -24,6 +24,7 @@ pub use rng::Seed;
 pub use storage::AppendFault;
 pub use storage::MemS2;
 pub use storage::MemS2Append;
+pub use storage::MemS2AppendSession;
 pub use storage::MemS2Error;
 pub use storage::ReadFault;
 pub use target::FakeCloudflareTransport;

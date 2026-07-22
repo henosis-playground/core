@@ -1,6 +1,13 @@
 //! Durable core-event journal plus the S2 implementation of the storage
 //! boundary.
 //!
+//! Every S2 write uses an append session with `match_seq_num` optimistic
+//! concurrency control. An OCC violation poisons that session. The journal
+//! drops it before authoritative reload, fold, re-derivation, and reappend. An
+//! unknown commit result also drops the session before the journal reads back
+//! and compares the attempted records. The next append always opens a fresh
+//! session. No token or epoch participates in S2 write correctness.
+//!
 //! One graph stream carries facts whose value is their history: accepted graph
 //! generations and plans, component/static-output replacements, observed-output
 //! publications, stalls, and retirement. The root registry stream carries graph
@@ -8,8 +15,9 @@
 //! start. Controller dispositions are level reports, not log-shaped facts: a
 //! controller re-observes and re-reports them on every pass, so they
 //! deliberately remain memory-only. When a report includes an output
-//! publication, only the generation-fenced `OutputsPublished` fact is durable.
+//! publication, only the generation-scoped `OutputsPublished` fact is durable.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -19,6 +27,7 @@ use futures::stream::BoxStream;
 use henosis_storage::AppendAck;
 use henosis_storage::AppendOutcome;
 use henosis_storage::AppendRecord;
+use henosis_storage::AppendSession as StorageAppendSession;
 use henosis_storage::StorageDomainError;
 use henosis_storage::StorageEngine;
 use henosis_storage::StoredRecord;
@@ -30,6 +39,8 @@ use henosis_types::GraphId;
 use henosis_types::GraphIntent;
 use s2_sdk::S2;
 use s2_sdk::S2Basin;
+use s2_sdk::append_session::AppendSession as S2AppendSession;
+use s2_sdk::append_session::AppendSessionConfig;
 use s2_sdk::types::AccountEndpoint;
 use s2_sdk::types::AppendConditionFailed;
 use s2_sdk::types::AppendInput;
@@ -49,8 +60,11 @@ use s2_sdk::types::S2Endpoints;
 use s2_sdk::types::S2Error;
 use serde::Deserialize;
 use serde::Serialize;
+use tokio::sync::Mutex;
 
 const REGISTRY_STREAM: &str = "registry";
+
+type AppendSessionSlot = Arc<Mutex<Option<Box<dyn StorageAppendSession>>>>;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum RegistryEvent {
@@ -65,12 +79,16 @@ pub enum RegistryEvent {
 #[derive(Clone)]
 pub struct Journal {
     storage: Arc<dyn StorageEngine>,
+    append_sessions: Arc<Mutex<BTreeMap<StreamName, AppendSessionSlot>>>,
 }
 
 impl Journal {
     #[must_use]
     pub fn new(storage: Arc<dyn StorageEngine>) -> Self {
-        Self { storage }
+        Self {
+            storage,
+            append_sessions: Arc::new(Mutex::new(BTreeMap::new())),
+        }
     }
 
     pub async fn append(
@@ -174,52 +192,82 @@ impl Journal {
         if records.is_empty() {
             return Ok(AppendAck::new(expected, expected));
         }
-        match self
-            .storage
-            .append(stream, expected, records.clone())
-            .await?
-        {
-            AppendOutcome::Acknowledged(ack) => Ok(ack),
-            AppendOutcome::CommitUnknown => {
-                let mut stored = Vec::with_capacity(records.len());
-                let mut cursor = expected;
-                while stored.len() < records.len() {
-                    let page = self
-                        .storage
-                        .read(stream, cursor, (records.len() - stored.len()).min(1_000))
-                        .await?;
-                    if page.is_empty() {
-                        break;
-                    }
-                    cursor = StreamPosition::new(
-                        page.last()
-                            .expect("non-empty page has a last record")
-                            .sequence()
-                            .saturating_add(1),
-                    );
-                    stored.extend(page);
-                }
-                let matches = stored.len() == records.len()
-                    && stored
-                        .iter()
-                        .zip(&records)
-                        .all(|(stored, expected)| stored.body() == expected.body());
-                if matches {
-                    let tail = StreamPosition::new(
-                        expected.sequence().saturating_add(records.len() as u64),
-                    );
-                    Ok(AppendAck::new(expected, tail))
-                } else {
-                    Err(
-                        Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Domain(
-                            StorageDomainError::CasConflict {
-                                expected: expected.sequence(),
-                                actual: cursor.sequence(),
-                            },
-                        ),
-                    )
-                }
+        let slot = self.append_session_slot(stream).await;
+        let mut session = slot.lock().await;
+        if session.is_none() {
+            *session = Some(self.storage.open_append_session(stream).await?);
+        }
+        let outcome = session
+            .as_mut()
+            .expect("append session was opened")
+            .append(expected, records.clone())
+            .await;
+        match outcome {
+            Ok(AppendOutcome::Acknowledged(ack)) => Ok(ack),
+            Ok(AppendOutcome::CommitUnknown) => {
+                *session = None;
+                drop(session);
+                self.resolve_unknown_append(stream, expected, &records)
+                    .await
             }
+            Err(error) => {
+                *session = None;
+                Err(error)
+            }
+        }
+    }
+
+    async fn append_session_slot(&self, stream: &StreamName) -> AppendSessionSlot {
+        self.append_sessions
+            .lock()
+            .await
+            .entry(stream.clone())
+            .or_insert_with(|| Arc::new(Mutex::new(None)))
+            .clone()
+    }
+
+    async fn resolve_unknown_append(
+        &self,
+        stream: &StreamName,
+        expected: StreamPosition,
+        records: &[AppendRecord],
+    ) -> Result<AppendAck, Error<StorageDomainError, anyhow::Error, anyhow::Error>> {
+        let mut stored = Vec::with_capacity(records.len());
+        let mut cursor = expected;
+        while stored.len() < records.len() {
+            let page = self
+                .storage
+                .read(stream, cursor, (records.len() - stored.len()).min(1_000))
+                .await?;
+            if page.is_empty() {
+                break;
+            }
+            cursor = StreamPosition::new(
+                page.last()
+                    .expect("non-empty page has a last record")
+                    .sequence()
+                    .saturating_add(1),
+            );
+            stored.extend(page);
+        }
+        let matches = stored.len() == records.len()
+            && stored
+                .iter()
+                .zip(records)
+                .all(|(stored, expected)| stored.body() == expected.body());
+        if matches {
+            let tail =
+                StreamPosition::new(expected.sequence().saturating_add(records.len() as u64));
+            Ok(AppendAck::new(expected, tail))
+        } else {
+            Err(
+                Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Domain(
+                    StorageDomainError::CasConflict {
+                        expected: expected.sequence(),
+                        actual: cursor.sequence(),
+                    },
+                ),
+            )
         }
     }
 
@@ -389,17 +437,23 @@ impl S2Storage {
     }
 }
 
+struct S2StorageAppendSession {
+    session: S2AppendSession,
+    poisoned: bool,
+}
+
 #[async_trait]
-impl StorageEngine for S2Storage {
+impl StorageAppendSession for S2StorageAppendSession {
     async fn append(
-        &self,
-        stream: &StreamName,
+        &mut self,
         expected: StreamPosition,
         records: Vec<AppendRecord>,
     ) -> Result<AppendOutcome, Error<StorageDomainError, anyhow::Error, anyhow::Error>> {
-        let stream = self.stream(stream).map_err(|error| {
-            Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Invariant(error)
-        })?;
+        if self.poisoned {
+            return Err(Error::Transient(anyhow::anyhow!(
+                "append session is poisoned"
+            )));
+        }
         let records = records
             .into_iter()
             .map(|record| S2AppendRecord::new(record.body().to_vec()))
@@ -414,15 +468,24 @@ impl StorageEngine for S2Storage {
                 anyhow::Error::new(error),
             )
         })?;
-        match stream
-            .append(AppendInput::new(batch).with_match_seq_num(expected.sequence()))
+        let ticket = match self
+            .session
+            .submit(AppendInput::new(batch).with_match_seq_num(expected.sequence()))
             .await
         {
+            Ok(ticket) => ticket,
+            Err(_error) => {
+                self.poisoned = true;
+                return Ok(AppendOutcome::CommitUnknown);
+            }
+        };
+        match ticket.await {
             Ok(ack) => Ok(AppendOutcome::Acknowledged(AppendAck::new(
                 StreamPosition::new(ack.start.seq_num),
                 StreamPosition::new(ack.tail.seq_num),
             ))),
             Err(S2Error::AppendConditionFailed(AppendConditionFailed::SeqNumMismatch(actual))) => {
+                self.poisoned = true;
                 Err(
                     Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Domain(
                         StorageDomainError::CasConflict {
@@ -432,8 +495,30 @@ impl StorageEngine for S2Storage {
                     ),
                 )
             }
-            Err(_error) => Ok(AppendOutcome::CommitUnknown),
+            Err(_error) => {
+                self.poisoned = true;
+                Ok(AppendOutcome::CommitUnknown)
+            }
         }
+    }
+}
+
+#[async_trait]
+impl StorageEngine for S2Storage {
+    async fn open_append_session(
+        &self,
+        stream: &StreamName,
+    ) -> Result<
+        Box<dyn StorageAppendSession>,
+        Error<StorageDomainError, anyhow::Error, anyhow::Error>,
+    > {
+        let stream = self.stream(stream).map_err(|error| {
+            Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Invariant(error)
+        })?;
+        Ok(Box::new(S2StorageAppendSession {
+            session: stream.append_session(AppendSessionConfig::new()),
+            poisoned: false,
+        }))
     }
 
     async fn read(
@@ -563,6 +648,16 @@ mod tests {
 
     #[async_trait]
     impl StorageEngine for BoundedReadStorage {
+        async fn open_append_session(
+            &self,
+            stream: &StreamName,
+        ) -> Result<
+            Box<dyn StorageAppendSession>,
+            Error<StorageDomainError, anyhow::Error, anyhow::Error>,
+        > {
+            self.inner.open_append_session(stream).await
+        }
+
         async fn append(
             &self,
             stream: &StreamName,

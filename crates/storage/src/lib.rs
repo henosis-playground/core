@@ -1,4 +1,8 @@
-//! Swappable append-only stream storage with an in-memory deterministic fake.
+//! Swappable append-only stream storage.
+//!
+//! Writes run through explicit append sessions. Callers must discard a session
+//! after an OCC violation or unknown commit result, reload the authoritative
+//! stream, derive the operation again, and append through a fresh session.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -162,13 +166,32 @@ pub enum StorageDomainError {
 }
 
 #[async_trait]
+pub trait AppendSession: Send {
+    async fn append(
+        &mut self,
+        expected: StreamPosition,
+        records: Vec<AppendRecord>,
+    ) -> Result<AppendOutcome, Error<StorageDomainError, anyhow::Error, anyhow::Error>>;
+}
+
+#[async_trait]
 pub trait StorageEngine: Send + Sync {
+    async fn open_append_session(
+        &self,
+        stream: &StreamName,
+    ) -> Result<Box<dyn AppendSession>, Error<StorageDomainError, anyhow::Error, anyhow::Error>>;
+
     async fn append(
         &self,
         stream: &StreamName,
         expected: StreamPosition,
         records: Vec<AppendRecord>,
-    ) -> Result<AppendOutcome, Error<StorageDomainError, anyhow::Error, anyhow::Error>>;
+    ) -> Result<AppendOutcome, Error<StorageDomainError, anyhow::Error, anyhow::Error>> {
+        self.open_append_session(stream)
+            .await?
+            .append(expected, records)
+            .await
+    }
 
     async fn read(
         &self,
@@ -209,17 +232,28 @@ struct MemoryState {
     clock: u64,
 }
 
+struct MemoryAppendSession {
+    storage: MemoryStorage,
+    stream: StreamName,
+    poisoned: bool,
+}
+
 #[async_trait]
-impl StorageEngine for MemoryStorage {
+impl AppendSession for MemoryAppendSession {
     async fn append(
-        &self,
-        stream: &StreamName,
+        &mut self,
         expected: StreamPosition,
         records: Vec<AppendRecord>,
     ) -> Result<AppendOutcome, Error<StorageDomainError, anyhow::Error, anyhow::Error>> {
-        let mut state = self.inner.state.lock().await;
-        let actual = state.streams.get(stream).map(Vec::len).unwrap_or(0) as u64;
+        if self.poisoned {
+            return Err(Error::Transient(anyhow::anyhow!(
+                "append session is poisoned"
+            )));
+        }
+        let mut state = self.storage.inner.state.lock().await;
+        let actual = state.streams.get(&self.stream).map(Vec::len).unwrap_or(0) as u64;
         if expected.sequence() != actual {
+            self.poisoned = true;
             return Err(Error::Domain(StorageDomainError::CasConflict {
                 expected: expected.sequence(),
                 actual,
@@ -229,25 +263,40 @@ impl StorageEngine for MemoryStorage {
         for record in records {
             let timestamp = state.clock;
             state.clock = state.clock.saturating_add(1);
-            let sequence = state.streams.get(stream).map(Vec::len).unwrap_or(0) as u64;
+            let sequence = state.streams.get(&self.stream).map(Vec::len).unwrap_or(0) as u64;
             state
                 .streams
-                .entry(stream.clone())
+                .entry(self.stream.clone())
                 .or_default()
                 .push(StoredRecord::new(
-                    stream.clone(),
+                    self.stream.clone(),
                     sequence,
                     timestamp,
                     record.body,
                 ));
         }
-        let tail = state.streams.get(stream).map(Vec::len).unwrap_or(0) as u64;
+        let tail = state.streams.get(&self.stream).map(Vec::len).unwrap_or(0) as u64;
         drop(state);
-        self.inner.changed.notify_waiters();
+        self.storage.inner.changed.notify_waiters();
         Ok(AppendOutcome::Acknowledged(AppendAck::new(
             StreamPosition::new(start),
             StreamPosition::new(tail),
         )))
+    }
+}
+
+#[async_trait]
+impl StorageEngine for MemoryStorage {
+    async fn open_append_session(
+        &self,
+        stream: &StreamName,
+    ) -> Result<Box<dyn AppendSession>, Error<StorageDomainError, anyhow::Error, anyhow::Error>>
+    {
+        Ok(Box::new(MemoryAppendSession {
+            storage: self.clone(),
+            stream: stream.clone(),
+            poisoned: false,
+        }))
     }
 
     async fn read(
