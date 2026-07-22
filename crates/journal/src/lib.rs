@@ -55,6 +55,7 @@ const REGISTRY_STREAM: &str = "registry";
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum RegistryEvent {
     GraphRegistered(GraphIntent),
+    GraphRegistrationSuperseded(GraphIntent),
     GraphRetired {
         graph_id: GraphId,
         last_generation: Generation,
@@ -209,14 +210,12 @@ impl Journal {
                     );
                     Ok(AppendAck::new(expected, tail))
                 } else {
-                    Err(
-                        Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Transient(
-                            anyhow::anyhow!(
-                                "append outcome is unknown and the expected records are not \
-                                 present on {stream}"
-                            ),
-                        ),
-                    )
+                    Err(Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Domain(
+                        StorageDomainError::CasConflict {
+                            expected: expected.sequence(),
+                            actual: cursor.sequence(),
+                        },
+                    ))
                 }
             }
         }

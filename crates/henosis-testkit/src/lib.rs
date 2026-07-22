@@ -25,6 +25,7 @@ pub use storage::AppendFault;
 pub use storage::MemS2;
 pub use storage::MemS2Append;
 pub use storage::MemS2Error;
+pub use storage::ReadFault;
 pub use target::FakeCloudflareTransport;
 pub use target::FakeK8sTarget;
 pub use target::FakeSupabaseTarget;

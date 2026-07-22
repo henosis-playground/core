@@ -31,6 +31,7 @@ workspace-hack = { version = "0.0.0", path = "../../crates/workspace-hack" }
 
 [dev-dependencies]
 base64.workspace = true
+henosis-testkit.workspace = true
 reqwest.workspace = true
 sha2.workspace = true
 

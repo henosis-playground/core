@@ -1324,6 +1324,7 @@ dependencies = [
  "henosis-proto",
  "henosis-server-assembly",
  "henosis-storage",
+ "henosis-testkit",
  "henosis-types",
  "reqwest",
  "serde_json",

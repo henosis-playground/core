@@ -23,6 +23,11 @@ pub enum AppendFault {
     CommitThenTimeout,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReadFault {
+    Reject,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MemS2Append {
     pub acknowledgement: Option<AppendAck>,
@@ -47,7 +52,8 @@ pub struct MemS2 {
 #[derive(Debug, Default)]
 struct MemS2State {
     streams: BTreeMap<StreamName, Vec<StoredRecord>>,
-    faults: VecDeque<AppendFault>,
+    append_faults: VecDeque<AppendFault>,
+    read_faults: VecDeque<ReadFault>,
     clock: u64,
 }
 
@@ -56,7 +62,15 @@ impl MemS2 {
         self.state
             .lock()
             .expect("MemS2 lock is not poisoned")
-            .faults
+            .append_faults
+            .extend(faults);
+    }
+
+    pub fn script_reads(&self, faults: impl IntoIterator<Item = ReadFault>) {
+        self.state
+            .lock()
+            .expect("MemS2 lock is not poisoned")
+            .read_faults
             .extend(faults);
     }
 
@@ -74,7 +88,10 @@ impl MemS2 {
                 actual,
             });
         }
-        let fault = state.faults.pop_front().unwrap_or(AppendFault::Acknowledge);
+        let fault = state
+            .append_faults
+            .pop_front()
+            .unwrap_or(AppendFault::Acknowledge);
         if fault == AppendFault::RejectBeforeCommit {
             return Err(MemS2Error::Rejected);
         }
@@ -166,6 +183,16 @@ impl StorageEngine for MemS2 {
         from: StreamPosition,
         limit: usize,
     ) -> Result<Vec<StoredRecord>, Error<StorageDomainError, anyhow::Error, anyhow::Error>> {
+        if self
+            .state
+            .lock()
+            .expect("MemS2 lock is not poisoned")
+            .read_faults
+            .pop_front()
+            == Some(ReadFault::Reject)
+        {
+            return Err(Error::Transient(anyhow::anyhow!("read failed")));
+        }
         Ok(MemS2::read(self, stream, from, limit))
     }
 
