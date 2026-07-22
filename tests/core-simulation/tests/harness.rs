@@ -557,9 +557,39 @@ fn output_publication_racing_retirement_is_fenced_and_cleanup_converges() {
 }
 
 #[test]
+fn crashes_at_each_cleanup_pass_boundary_preserve_all_obligations() {
+    runtime().block_on(async {
+        for crash_after_passes in 0..=6 {
+            let mut world = RealControllerWorld::new(
+                Seed::from_u64(0x5eed_2605 + crash_after_passes),
+                3,
+            )
+            .await;
+            drive_real_controller_passes(&mut world, 128).await;
+            drive_real_controller_reports(&mut world, 128).await;
+            assert!(world.all_current_resources_exist());
+
+            world.start_next_generation(2).await;
+            world.start_next_generation(1).await;
+            world.crash_restart_core().await;
+            drive_real_controller_passes(&mut world, crash_after_passes as usize).await;
+            world.crash_restart_core().await;
+            drive_real_controller_passes(&mut world, 128).await;
+            drive_real_controller_reports(&mut world, 128).await;
+
+            assert!(world.all_current_resources_exist());
+            assert!(
+                world.no_superseded_resources_exist(),
+                "cleanup leaked after a crash at pass boundary {crash_after_passes}"
+            );
+        }
+    });
+}
+
+#[test]
 fn crash_mid_retirement_replays_cleanup_until_targets_are_empty() {
     runtime().block_on(async {
-        let mut world = RealControllerWorld::new(Seed::from_u64(0x5eed_2605), 2).await;
+        let mut world = RealControllerWorld::new(Seed::from_u64(0x5eed_2610), 2).await;
         drive_real_controller_passes(&mut world, 128).await;
         world.retire().await;
         world.crash_restart_core().await;

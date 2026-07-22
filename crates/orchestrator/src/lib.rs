@@ -1296,50 +1296,47 @@ impl GraphState {
                 .map(Resource::id)
                 .collect()
         };
-        self.pending_cleanup
-            .iter()
-            .filter_map(|command| {
-                let command = match command {
-                    ControllerCommand::Supersede(cleanup) => {
-                        let resources = cleanup
-                            .resources
-                            .iter()
-                            .filter(|resource| !current.contains(&resource.id()))
-                            .cloned()
-                            .collect::<Vec<_>>();
-                        if resources.is_empty() {
-                            return None;
-                        }
-                        ControllerCommand::Supersede(Supersession {
-                            graph_id: cleanup.graph_id,
-                            generation: cleanup.generation,
-                            controller: cleanup.controller.clone(),
-                            resources,
-                        })
-                    }
-                    ControllerCommand::Retire(cleanup) => {
-                        let resources = cleanup
-                            .resources
-                            .iter()
-                            .filter(|resource| !current.contains(&resource.id()))
-                            .cloned()
-                            .collect::<Vec<_>>();
-                        if resources.is_empty() {
-                            return None;
-                        }
-                        ControllerCommand::Retire(Retirement {
-                            graph_id: cleanup.graph_id,
-                            last_generation: cleanup.last_generation,
-                            controller: cleanup.controller.clone(),
-                            resources,
-                        })
-                    }
-                    ControllerCommand::Reconcile(_) => return None,
-                };
-                let controller = match &command {
-                    ControllerCommand::Supersede(cleanup) => cleanup.controller.clone(),
-                    ControllerCommand::Retire(cleanup) => cleanup.controller.clone(),
-                    ControllerCommand::Reconcile(_) => unreachable!(),
+        let mut absent_by_controller =
+            BTreeMap::<ControllerName, BTreeMap<_, Resource>>::new();
+        for command in &self.pending_cleanup {
+            let (controller, resources) = match command {
+                ControllerCommand::Supersede(cleanup) => {
+                    (&cleanup.controller, cleanup.resources.as_slice())
+                }
+                ControllerCommand::Retire(cleanup) => {
+                    (&cleanup.controller, cleanup.resources.as_slice())
+                }
+                ControllerCommand::Reconcile(_) => continue,
+            };
+            let absent = absent_by_controller.entry(controller.clone()).or_default();
+            for resource in resources {
+                if !current.contains(&resource.id()) {
+                    absent.insert(resource.id(), resource.clone());
+                }
+            }
+        }
+
+        absent_by_controller
+            .into_iter()
+            .filter_map(|(controller, resources)| {
+                let resources = resources.into_values().collect::<Vec<_>>();
+                if resources.is_empty() {
+                    return None;
+                }
+                let command = if self.retired {
+                    ControllerCommand::Retire(Retirement {
+                        graph_id: self.intent.id(),
+                        last_generation: self.intent.generation(),
+                        controller: controller.clone(),
+                        resources,
+                    })
+                } else {
+                    ControllerCommand::Supersede(Supersession {
+                        graph_id: self.intent.id(),
+                        generation: self.intent.generation(),
+                        controller: controller.clone(),
+                        resources,
+                    })
                 };
                 Some(ControllerEffect::new(controller, command))
             })

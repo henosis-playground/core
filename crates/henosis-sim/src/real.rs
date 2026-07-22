@@ -58,6 +58,7 @@ use henosis_types::ObservedOutputBinding;
 use henosis_types::OutputAvailability;
 use henosis_types::OutputDeclaration;
 use henosis_types::OutputName;
+use henosis_types::Resource;
 use henosis_types::ResourceAddress;
 use henosis_types::ResourceId;
 use henosis_types::ResourceName;
@@ -377,14 +378,40 @@ impl RealControllerWorld {
                 _ => None,
             })
             .flat_map(|plan| plan.resources())
-            .all(|resource| match resource.controller().as_str() {
-                "k8s" => !self.k8s_target.contains(self.graph_id, resource.id()),
-                "cloudflare" => !self
-                    .cloudflare_target
-                    .contains(self.graph_id, resource.id()),
-                "supabase" => !self.supabase_target.contains(self.graph_id, resource.id()),
-                _ => true,
+            .all(|resource| !self.target_contains(resource))
+    }
+
+    #[must_use]
+    pub fn no_superseded_resources_exist(&self) -> bool {
+        let current = self
+            .core
+            .state()
+            .graph(self.graph_id)
+            .and_then(|graph| graph.plan())
+            .into_iter()
+            .flat_map(henosis_types::Plan::resources)
+            .map(Resource::id)
+            .collect::<BTreeSet<_>>();
+        self.events
+            .iter()
+            .filter_map(|event| match event {
+                henosis_types::CoreEvent::PlanAccepted { plan, .. } => Some(plan),
+                _ => None,
             })
+            .flat_map(|plan| plan.resources())
+            .filter(|resource| !current.contains(&resource.id()))
+            .all(|resource| !self.target_contains(resource))
+    }
+
+    fn target_contains(&self, resource: &Resource) -> bool {
+        match resource.controller().as_str() {
+            "k8s" => self.k8s_target.contains(self.graph_id, resource.id()),
+            "cloudflare" => self
+                .cloudflare_target
+                .contains(self.graph_id, resource.id()),
+            "supabase" => self.supabase_target.contains(self.graph_id, resource.id()),
+            _ => false,
+        }
     }
 
     #[must_use]
