@@ -150,7 +150,7 @@ impl RealControllerWorld {
             cloudflare_target,
             supabase_target,
         };
-        world.accept_transition(transition).await;
+        world.accept_transition(transition);
         world
     }
 
@@ -246,7 +246,7 @@ impl RealControllerWorld {
             })
             .await
             .expect("fixture generation update is valid");
-        self.accept_transition(transition).await;
+        self.accept_transition(transition);
     }
 
     pub async fn reintroduce_during_held_k8s_cleanup(&mut self) -> bool {
@@ -307,7 +307,7 @@ impl RealControllerWorld {
             })
             .await
             .expect("fixture graph retirement is valid");
-        self.accept_transition(transition).await;
+        self.accept_transition(transition);
     }
 
     pub async fn crash_restart_core(&mut self) {
@@ -321,7 +321,7 @@ impl RealControllerWorld {
             .resume_graph(self.graph_id)
             .await
             .expect("replayed graph resumes");
-        self.accept_transition(transition).await;
+        self.accept_transition(transition);
     }
 
     pub fn restart_controller(&mut self, controller: &str) {
@@ -560,7 +560,7 @@ impl RealControllerWorld {
                     ));
                     self.delivered.insert(key, report);
                 }
-                self.accept_transition(transition).await;
+                self.accept_transition(transition);
                 "accepted".to_owned()
             }
             Err(Error::Domain(error)) => {
@@ -578,13 +578,12 @@ impl RealControllerWorld {
         }
     }
 
-    async fn accept_transition(&mut self, transition: Transition) {
+    fn accept_transition(&mut self, transition: Transition) {
         self.events.extend(transition.events().iter().cloned());
         for effect in transition.effects() {
             let _ = self
                 .controller_schedule
-                .submit(effect.controller().clone(), effect.command().clone())
-                .await;
+                .submit(effect.controller().clone(), effect.command().clone());
         }
         self.assert_invariants();
     }

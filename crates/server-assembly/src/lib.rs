@@ -96,7 +96,7 @@ impl ControllerDispatcher {
                             &mut schedule,
                             &controllers,
                             &pass_completions,
-                        ).await;
+                        );
                     }
                     Some((pass, outcome)) = pass_completion_receiver.recv() => {
                         match schedule.complete(&pass, outcome) {
@@ -160,7 +160,7 @@ impl ControllerDispatcher {
                             &mut schedule,
                             &controllers,
                             &pass_completions,
-                        ).await;
+                        );
                     }
                     else => break,
                 }
@@ -181,17 +181,14 @@ struct ReportCompletion {
     follow_up: Vec<ControllerEffect>,
 }
 
-async fn submit_effects(
+fn submit_effects(
     effects: Vec<ControllerEffect>,
     schedule: &mut ControllerSchedule,
     controllers: &Arc<BTreeMap<ControllerName, Arc<dyn Controller>>>,
     completions: &mpsc::UnboundedSender<(ScheduledControllerPass, ControllerPass)>,
 ) {
     for effect in effects {
-        if let Some(key) = schedule
-            .submit(effect.controller().clone(), effect.command().clone())
-            .await
-        {
+        if let Some(key) = schedule.submit(effect.controller().clone(), effect.command().clone()) {
             spawn_next_pass(schedule, &key, controllers, completions, Duration::ZERO);
         }
     }

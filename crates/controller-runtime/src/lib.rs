@@ -6,6 +6,8 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 
 use base64::Engine as _;
 use futures::future::BoxFuture;
@@ -272,12 +274,18 @@ impl ControllerWorkKey {
     }
 }
 
+#[derive(Debug)]
+struct ControllerMutationState {
+    revision: AtomicU64,
+    mutation: Arc<tokio::sync::Mutex<()>>,
+}
+
 #[derive(Clone, Debug)]
 pub struct ScheduledControllerPass {
     key: ControllerWorkKey,
     revision: u64,
     command: ControllerCommand,
-    mutation_revision: Arc<tokio::sync::Mutex<u64>>,
+    mutation_state: Arc<ControllerMutationState>,
 }
 
 impl ScheduledControllerPass {
@@ -295,10 +303,11 @@ impl ScheduledControllerPass {
 impl ControllerMutationFence for ScheduledControllerPass {
     fn enter(&self) -> BoxFuture<'_, Option<ControllerMutationPermit>> {
         let revision = self.revision;
-        let mutation_revision = Arc::clone(&self.mutation_revision);
+        let mutation_state = Arc::clone(&self.mutation_state);
         Box::pin(async move {
-            let permit = mutation_revision.lock_owned().await;
-            (*permit == revision).then(|| ControllerMutationPermit::new(permit))
+            let permit = Arc::clone(&mutation_state.mutation).lock_owned().await;
+            (mutation_state.revision.load(Ordering::Acquire) == revision)
+                .then(|| ControllerMutationPermit::new(permit))
         })
     }
 }
@@ -340,7 +349,7 @@ enum ScheduledControllerWorkState {
 #[derive(Clone, Debug)]
 struct ScheduledControllerWork {
     revision: u64,
-    mutation_revision: Arc<tokio::sync::Mutex<u64>>,
+    mutation_state: Arc<ControllerMutationState>,
     command: ControllerCommand,
     retry_attempt: u32,
     state: ScheduledControllerWorkState,
@@ -354,7 +363,7 @@ pub struct ControllerSchedule {
 
 impl ControllerSchedule {
     #[must_use]
-    pub async fn submit(
+    pub fn submit(
         &mut self,
         controller: ControllerName,
         command: ControllerCommand,
@@ -365,13 +374,10 @@ impl ControllerSchedule {
         };
         self.next_revision = self.next_revision.wrapping_add(1);
         let revision = self.next_revision;
-        if let Some(mutation_revision) = self
-            .work
-            .get(&key)
-            .map(|work| Arc::clone(&work.mutation_revision))
-        {
-            *mutation_revision.lock().await = revision;
-            let work = self.work.get_mut(&key).expect("lane still exists");
+        if let Some(work) = self.work.get_mut(&key) {
+            work.mutation_state
+                .revision
+                .store(revision, Ordering::Release);
             work.revision = revision;
             work.command = command;
             work.retry_attempt = 0;
@@ -386,7 +392,10 @@ impl ControllerSchedule {
                 key.clone(),
                 ScheduledControllerWork {
                     revision,
-                    mutation_revision: Arc::new(tokio::sync::Mutex::new(revision)),
+                    mutation_state: Arc::new(ControllerMutationState {
+                        revision: AtomicU64::new(revision),
+                        mutation: Arc::new(tokio::sync::Mutex::new(())),
+                    }),
                     command,
                     retry_attempt: 0,
                     state: ScheduledControllerWorkState::Ready,
@@ -407,7 +416,7 @@ impl ControllerSchedule {
             key: key.clone(),
             revision: work.revision,
             command: work.command.clone(),
-            mutation_revision: Arc::clone(&work.mutation_revision),
+            mutation_state: Arc::clone(&work.mutation_state),
         })
     }
 
@@ -483,7 +492,7 @@ impl ControllerSchedule {
                 key: key.clone(),
                 revision: work.revision,
                 command: work.command.clone(),
-                mutation_revision: Arc::clone(&work.mutation_revision),
+                mutation_state: Arc::clone(&work.mutation_state),
             })
     }
 }
@@ -984,6 +993,7 @@ pub enum GitError {
 mod tests {
     use std::sync::Arc;
     use std::sync::Barrier;
+    use std::time::Duration;
 
     use futures::executor::block_on;
     use henosis_types::ContentDigest;
@@ -1031,10 +1041,9 @@ mod tests {
         let mut schedule = ControllerSchedule::default();
         let key = schedule
             .submit(controller.clone(), command(1))
-            .await
             .expect("new lane starts a driver");
         let stale = schedule.pass(&key).unwrap();
-        assert_eq!(schedule.submit(controller.clone(), command(2)).await, None);
+        assert_eq!(schedule.submit(controller.clone(), command(2)), None);
         assert_eq!(
             schedule.complete(&stale, ControllerPass::Converged(None)),
             ControllerScheduleCompletion::Continue
@@ -1053,6 +1062,70 @@ mod tests {
             ControllerScheduleCompletion::Complete
         );
         assert!(schedule.pass(&key).is_none());
+    }
+
+    #[tokio::test]
+    async fn held_lane_mutation_does_not_stall_schedule_or_stale_fence() {
+        let controller = controller_name("test");
+        let command = |graph, generation| {
+            ControllerCommand::Reconcile(ControllerSlice::new(
+                graph,
+                Generation::new(generation).unwrap(),
+                ContentDigest::digest(&[generation as u8]),
+                controller.clone(),
+                BTreeMap::new(),
+                Vec::new(),
+                Vec::new(),
+            ))
+        };
+        let held_graph = GraphId::from_bytes([4; 16]);
+        let other_graph = GraphId::from_bytes([5; 16]);
+        let mut schedule = ControllerSchedule::default();
+        let held_key = schedule
+            .submit(controller.clone(), command(held_graph, 1))
+            .unwrap();
+        let stale = schedule.pass(&held_key).unwrap();
+        let mutation = Arc::clone(&stale.mutation_state.mutation)
+            .lock_owned()
+            .await;
+        let stale_fence = stale.clone();
+        let waiting = tokio::spawn(async move { stale_fence.enter().await });
+        tokio::task::yield_now().await;
+
+        assert_eq!(
+            schedule.submit(controller.clone(), command(held_graph, 2)),
+            None,
+            "same-lane supersession must not wait for the held mutation"
+        );
+
+        let other_key = schedule
+            .submit(controller.clone(), command(other_graph, 1))
+            .expect("another lane starts while the first mutation is held");
+        let other = schedule.pass(&other_key).unwrap();
+        let ControllerCommand::Reconcile(other_slice) = other.command() else {
+            unreachable!();
+        };
+        let report = ready_report(other_slice, None, Vec::new()).unwrap();
+        let ControllerScheduleCompletion::Report(pending) =
+            schedule.complete(&other, ControllerPass::Converged(Some(report)))
+        else {
+            panic!("the other lane should complete and queue its report");
+        };
+        assert_eq!(
+            schedule.acknowledge_report(&pending),
+            ControllerScheduleCompletion::Complete,
+            "report acknowledgements must run while another lane mutation is held"
+        );
+
+        drop(mutation);
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), waiting)
+                .await
+                .expect("stale fence waiter should resume after release")
+                .expect("stale fence task should join")
+                .is_none(),
+            "the superseded mutation must be skipped after it reaches the fence"
+        );
     }
 
     #[tokio::test]
@@ -1075,7 +1148,6 @@ mod tests {
                 controller.clone(),
                 ControllerCommand::Reconcile(slice.clone()),
             )
-            .await
             .unwrap();
         let pass = schedule.pass(&key).unwrap();
         let ControllerScheduleCompletion::Report(pending) =
@@ -1095,9 +1167,7 @@ mod tests {
             Vec::new(),
         );
         assert_eq!(
-            schedule
-                .submit(controller, ControllerCommand::Reconcile(newer))
-                .await,
+            schedule.submit(controller, ControllerCommand::Reconcile(newer)),
             Some(key.clone())
         );
         assert_eq!(
@@ -1127,7 +1197,6 @@ mod tests {
         let mut schedule = ControllerSchedule::default();
         let key = schedule
             .submit(controller, ControllerCommand::Reconcile(slice.clone()))
-            .await
             .unwrap();
         let pass = schedule.pass(&key).unwrap();
         assert_eq!(
