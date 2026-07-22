@@ -505,6 +505,31 @@ fn real_controller_mid_reconcile_supersession_cancels_stale_work() {
 }
 
 #[test]
+fn reintroduced_resource_is_not_deleted_by_in_flight_stale_cleanup() {
+    runtime().block_on(async {
+        let mut world = RealControllerWorld::new(Seed::from_u64(0x5eed_2611), 2).await;
+        drive_real_controller_passes(&mut world, 128).await;
+        drive_real_controller_reports(&mut world, 128).await;
+        assert!(world.all_current_resources_exist());
+
+        world.start_next_generation(1).await;
+        let prepare_cleanup = world
+            .enabled_actions()
+            .into_iter()
+            .find(|action| {
+                matches!(
+                    action,
+                    RealControllerAction::ControllerPass { controller }
+                        if controller.as_str() == "k8s"
+                )
+            })
+            .expect("Kubernetes update pass is ready");
+        world.apply(prepare_cleanup).await;
+        assert!(world.reintroduce_during_held_k8s_cleanup().await);
+    });
+}
+
+#[test]
 fn real_controller_restart_and_apply_then_timeout_still_converge() {
     runtime().block_on(async {
         let mut world = RealControllerWorld::new(Seed::from_u64(0x5eed_2602), 2).await;

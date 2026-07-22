@@ -33,6 +33,7 @@ pub use target::FakeTarget;
 pub use target::IdempotencyViolation;
 pub use target::OutputDelivery;
 pub use target::TargetFault;
+pub use target::TargetObservationHold;
 pub use target::TargetOperation;
 pub use trace::NormalizedTrace;
 pub use trace::TraceEvent;

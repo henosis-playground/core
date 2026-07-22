@@ -1282,6 +1282,7 @@ dependencies = [
  "sha2 0.10.9",
  "tempfile",
  "thiserror",
+ "tokio",
  "uuid",
  "workspace-hack",
 ]
@@ -1509,6 +1510,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+ "tokio",
  "workspace-hack",
 ]
 

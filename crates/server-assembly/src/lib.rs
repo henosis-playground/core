@@ -46,6 +46,7 @@ use henosis_types::BundleRef;
 use henosis_types::Controller;
 use henosis_types::ControllerCommand;
 use henosis_types::ControllerError;
+use henosis_types::ControllerMutationFence;
 use henosis_types::ControllerName;
 use henosis_types::ControllerPass;
 use henosis_types::ControllerReport;
@@ -95,7 +96,7 @@ impl ControllerDispatcher {
                             &mut schedule,
                             &controllers,
                             &pass_completions,
-                        );
+                        ).await;
                     }
                     Some((pass, outcome)) = pass_completion_receiver.recv() => {
                         match schedule.complete(&pass, outcome) {
@@ -159,7 +160,7 @@ impl ControllerDispatcher {
                             &mut schedule,
                             &controllers,
                             &pass_completions,
-                        );
+                        ).await;
                     }
                     else => break,
                 }
@@ -180,14 +181,17 @@ struct ReportCompletion {
     follow_up: Vec<ControllerEffect>,
 }
 
-fn submit_effects(
+async fn submit_effects(
     effects: Vec<ControllerEffect>,
     schedule: &mut ControllerSchedule,
     controllers: &Arc<BTreeMap<ControllerName, Arc<dyn Controller>>>,
     completions: &mpsc::UnboundedSender<(ScheduledControllerPass, ControllerPass)>,
 ) {
     for effect in effects {
-        if let Some(key) = schedule.submit(effect.controller().clone(), effect.command().clone()) {
+        if let Some(key) = schedule
+            .submit(effect.controller().clone(), effect.command().clone())
+            .await
+        {
             spawn_next_pass(schedule, &key, controllers, completions, Duration::ZERO);
         }
     }
@@ -222,7 +226,7 @@ fn spawn_controller_pass(
                     pass.key().controller()
                 ));
             };
-            match controller.execute(pass.command()).await {
+            match controller.execute(pass.command(), &pass).await {
                 Ok(outcome) => outcome,
                 Err(error) => ControllerPass::Retryable(error.to_string()),
             }
@@ -538,6 +542,7 @@ impl Controller for DemoSupabaseController {
     fn execute<'a>(
         &'a self,
         command: &'a ControllerCommand,
+        _mutation_fence: &'a dyn ControllerMutationFence,
     ) -> BoxFuture<'a, Result<ControllerPass, ControllerError>> {
         Box::pin(async move {
             match command {
@@ -690,6 +695,7 @@ mod tests {
         fn execute<'a>(
             &'a self,
             command: &'a ControllerCommand,
+            _mutation_fence: &'a dyn ControllerMutationFence,
         ) -> BoxFuture<'a, Result<ControllerPass, ControllerError>> {
             Box::pin(async move {
                 if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
@@ -718,6 +724,7 @@ mod tests {
         fn execute<'a>(
             &'a self,
             command: &'a ControllerCommand,
+            _mutation_fence: &'a dyn ControllerMutationFence,
         ) -> BoxFuture<'a, Result<ControllerPass, ControllerError>> {
             Box::pin(async move {
                 let ControllerCommand::Reconcile(slice) = command else {

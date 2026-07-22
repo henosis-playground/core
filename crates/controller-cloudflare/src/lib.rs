@@ -20,13 +20,16 @@ use henosis_controller_runtime::failed_report;
 use henosis_controller_runtime::output;
 use henosis_controller_runtime::publication_id;
 use henosis_controller_runtime::ready_report;
-use henosis_controller_runtime::reconcile_absent;
+use henosis_controller_runtime::reconcile_absent_fenced;
+#[cfg(test)]
 use henosis_controller_runtime::reconcile_slice;
+use henosis_controller_runtime::reconcile_slice_fenced;
 use henosis_types::ArtifactDigest;
 use henosis_types::ContentDigest;
 use henosis_types::Controller;
 use henosis_types::ControllerCommand;
 use henosis_types::ControllerError;
+use henosis_types::ControllerMutationFence;
 use henosis_types::ControllerName;
 use henosis_types::ControllerPass;
 use henosis_types::ControllerSlice;
@@ -175,8 +178,12 @@ where
         }
     }
 
-    async fn reconcile(&self, slice: &ControllerSlice) -> Result<ControllerPass, ControllerError> {
-        match reconcile_slice(self, slice).await {
+    async fn reconcile(
+        &self,
+        slice: &ControllerSlice,
+        mutation_fence: &dyn ControllerMutationFence,
+    ) -> Result<ControllerPass, ControllerError> {
+        match reconcile_slice_fenced(self, slice, mutation_fence).await {
             Ok(SlicePass::Acted) => Ok(ControllerPass::Acted),
             Ok(SlicePass::Converged(convergence)) => ready_report(
                 slice,
@@ -314,28 +321,35 @@ where
     fn execute<'a>(
         &'a self,
         command: &'a ControllerCommand,
+        mutation_fence: &'a dyn ControllerMutationFence,
     ) -> BoxFuture<'a, Result<ControllerPass, ControllerError>> {
         async move {
             match command {
-                ControllerCommand::Reconcile(slice) => self.reconcile(slice).await,
-                ControllerCommand::Supersede(supersession) => {
-                    reconcile_absent(self, supersession.graph_id, &supersession.resources)
-                        .await
-                        .map(|pass| match pass {
-                            SlicePass::Acted => ControllerPass::Acted,
-                            SlicePass::Converged(_) => ControllerPass::Converged(None),
-                        })
-                        .map_err(|error| ControllerError::new(error.to_string()))
-                }
-                ControllerCommand::Retire(retirement) => {
-                    reconcile_absent(self, retirement.graph_id, &retirement.resources)
-                        .await
-                        .map(|pass| match pass {
-                            SlicePass::Acted => ControllerPass::Acted,
-                            SlicePass::Converged(_) => ControllerPass::Converged(None),
-                        })
-                        .map_err(|error| ControllerError::new(error.to_string()))
-                }
+                ControllerCommand::Reconcile(slice) => self.reconcile(slice, mutation_fence).await,
+                ControllerCommand::Supersede(supersession) => reconcile_absent_fenced(
+                    self,
+                    supersession.graph_id,
+                    &supersession.resources,
+                    mutation_fence,
+                )
+                .await
+                .map(|pass| match pass {
+                    SlicePass::Acted => ControllerPass::Acted,
+                    SlicePass::Converged(_) => ControllerPass::Converged(None),
+                })
+                .map_err(|error| ControllerError::new(error.to_string())),
+                ControllerCommand::Retire(retirement) => reconcile_absent_fenced(
+                    self,
+                    retirement.graph_id,
+                    &retirement.resources,
+                    mutation_fence,
+                )
+                .await
+                .map(|pass| match pass {
+                    SlicePass::Acted => ControllerPass::Acted,
+                    SlicePass::Converged(_) => ControllerPass::Converged(None),
+                })
+                .map_err(|error| ControllerError::new(error.to_string())),
             }
         }
         .boxed()
@@ -605,15 +619,27 @@ mod tests {
         let slice = slice();
         let reconcile = ControllerCommand::Reconcile(slice.clone());
         assert_eq!(
-            fixture.controller.execute(&reconcile).await.unwrap(),
+            fixture
+                .controller
+                .execute(&reconcile, &henosis_types::UnfencedControllerMutation)
+                .await
+                .unwrap(),
             ControllerPass::Acted
         );
         assert_eq!(
-            fixture.controller.execute(&reconcile).await.unwrap(),
+            fixture
+                .controller
+                .execute(&reconcile, &henosis_types::UnfencedControllerMutation)
+                .await
+                .unwrap(),
             ControllerPass::Acted
         );
         assert!(matches!(
-            fixture.controller.execute(&reconcile).await.unwrap(),
+            fixture
+                .controller
+                .execute(&reconcile, &henosis_types::UnfencedControllerMutation)
+                .await
+                .unwrap(),
             ControllerPass::Converged(Some(_))
         ));
         let restarted = CloudflareController::new(RecordedTransport {
@@ -627,11 +653,17 @@ mod tests {
             resources: slice.resources().to_vec(),
         });
         assert_eq!(
-            restarted.execute(&retire).await.unwrap(),
+            restarted
+                .execute(&retire, &henosis_types::UnfencedControllerMutation)
+                .await
+                .unwrap(),
             ControllerPass::Acted
         );
         assert_eq!(
-            restarted.execute(&retire).await.unwrap(),
+            restarted
+                .execute(&retire, &henosis_types::UnfencedControllerMutation)
+                .await
+                .unwrap(),
             ControllerPass::Converged(None)
         );
         assert!(fixture.state.lock().unwrap().resources.is_empty());

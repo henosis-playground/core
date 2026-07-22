@@ -1339,7 +1339,11 @@ mod tests {
         command: &ControllerCommand,
     ) -> Option<ControllerReport> {
         loop {
-            match controller.execute(command).await.unwrap() {
+            match controller
+                .execute(command, &henosis_types::UnfencedControllerMutation)
+                .await
+                .unwrap()
+            {
                 ControllerPass::Acted => {}
                 ControllerPass::Converged(report) => return report,
                 ControllerPass::Failed(report) => return Some(report),

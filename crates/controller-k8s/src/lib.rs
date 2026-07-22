@@ -20,11 +20,14 @@ use henosis_controller_runtime::controller_name;
 use henosis_controller_runtime::failed_report;
 use henosis_controller_runtime::publication_id;
 use henosis_controller_runtime::ready_report;
-use henosis_controller_runtime::reconcile_absent;
+use henosis_controller_runtime::reconcile_absent_fenced;
+#[cfg(test)]
 use henosis_controller_runtime::reconcile_slice;
+use henosis_controller_runtime::reconcile_slice_fenced;
 use henosis_types::Controller;
 use henosis_types::ControllerCommand;
 use henosis_types::ControllerError;
+use henosis_types::ControllerMutationFence;
 use henosis_types::ControllerName;
 use henosis_types::ControllerPass;
 use henosis_types::ControllerSlice;
@@ -45,6 +48,10 @@ pub trait K8sTarget: Send + Sync {
         graph_id: GraphId,
         resource: &Resource,
     ) -> Result<BTreeMap<String, Vec<u8>>, String>;
+
+    fn after_observe(&self, _resource: &Resource) -> BoxFuture<'_, ()> {
+        Box::pin(async {})
+    }
 
     fn write_resource(
         &self,
@@ -93,8 +100,12 @@ where
         }
     }
 
-    async fn reconcile(&self, slice: &ControllerSlice) -> Result<ControllerPass, ControllerError> {
-        match reconcile_slice(self, slice).await {
+    async fn reconcile(
+        &self,
+        slice: &ControllerSlice,
+        mutation_fence: &dyn ControllerMutationFence,
+    ) -> Result<ControllerPass, ControllerError> {
+        match reconcile_slice_fenced(self, slice, mutation_fence).await {
             Ok(SlicePass::Acted) => Ok(ControllerPass::Acted),
             Ok(SlicePass::Converged(convergence)) => ready_report(
                 slice,
@@ -114,14 +125,20 @@ where
         &self,
         graph_id: GraphId,
         resources: &[Resource],
+        mutation_fence: &dyn ControllerMutationFence,
     ) -> Result<ControllerPass, ControllerError> {
-        match reconcile_absent(self, graph_id, resources).await {
+        match reconcile_absent_fenced(self, graph_id, resources, mutation_fence).await {
             Ok(SlicePass::Acted) => Ok(ControllerPass::Acted),
-            Ok(SlicePass::Converged(_)) => Ok(match self.target.remove_graph_if_empty(graph_id) {
-                Ok(true) => ControllerPass::Acted,
-                Ok(false) => ControllerPass::Converged(None),
-                Err(error) => ControllerPass::Retryable(error),
-            }),
+            Ok(SlicePass::Converged(_)) => {
+                let Some(_permit) = mutation_fence.enter().await else {
+                    return Ok(ControllerPass::Acted);
+                };
+                Ok(match self.target.remove_graph_if_empty(graph_id) {
+                    Ok(true) => ControllerPass::Acted,
+                    Ok(false) => ControllerPass::Converged(None),
+                    Err(error) => ControllerPass::Retryable(error),
+                })
+            }
             Err(K8sError::Unavailable(message)) => Ok(ControllerPass::Retryable(message)),
             Err(K8sError::Contract(message)) => Err(ControllerError::new(message)),
         }
@@ -146,6 +163,7 @@ where
                 .target
                 .read_resource(graph_id, resource)
                 .map_err(K8sError::Unavailable)?;
+            self.target.after_observe(resource).await;
             if files.is_empty() {
                 return Ok(K8sObservation::Missing);
             }
@@ -224,16 +242,21 @@ where
     fn execute<'a>(
         &'a self,
         command: &'a ControllerCommand,
+        mutation_fence: &'a dyn ControllerMutationFence,
     ) -> BoxFuture<'a, Result<ControllerPass, ControllerError>> {
         async move {
             match command {
-                ControllerCommand::Reconcile(slice) => self.reconcile(slice).await,
+                ControllerCommand::Reconcile(slice) => self.reconcile(slice, mutation_fence).await,
                 ControllerCommand::Supersede(supersession) => {
-                    self.remove(supersession.graph_id, &supersession.resources)
-                        .await
+                    self.remove(
+                        supersession.graph_id,
+                        &supersession.resources,
+                        mutation_fence,
+                    )
+                    .await
                 }
                 ControllerCommand::Retire(retirement) => {
-                    self.remove(retirement.graph_id, &retirement.resources)
+                    self.remove(retirement.graph_id, &retirement.resources, mutation_fence)
                         .await
                 }
             }
@@ -416,11 +439,17 @@ mod tests {
         let first = K8sController::new(GitRepository::new(remote.path()));
         let reconcile = ControllerCommand::Reconcile(slice.clone());
         assert_eq!(
-            first.execute(&reconcile).await.unwrap(),
+            first
+                .execute(&reconcile, &henosis_types::UnfencedControllerMutation)
+                .await
+                .unwrap(),
             ControllerPass::Acted
         );
         assert!(matches!(
-            first.execute(&reconcile).await.unwrap(),
+            first
+                .execute(&reconcile, &henosis_types::UnfencedControllerMutation)
+                .await
+                .unwrap(),
             ControllerPass::Converged(Some(_))
         ));
         let restarted = K8sController::new(GitRepository::new(remote.path()));
@@ -431,16 +460,25 @@ mod tests {
             resources: slice.resources().to_vec(),
         });
         assert_eq!(
-            restarted.execute(&retire).await.unwrap(),
+            restarted
+                .execute(&retire, &henosis_types::UnfencedControllerMutation)
+                .await
+                .unwrap(),
             ControllerPass::Acted
         );
         assert_eq!(
-            restarted.execute(&retire).await.unwrap(),
+            restarted
+                .execute(&retire, &henosis_types::UnfencedControllerMutation)
+                .await
+                .unwrap(),
             ControllerPass::Acted
         );
         assert!(!branch_exists(remote.path(), &branch(slice.graph_id())));
         assert_eq!(
-            restarted.execute(&retire).await.unwrap(),
+            restarted
+                .execute(&retire, &henosis_types::UnfencedControllerMutation)
+                .await
+                .unwrap(),
             ControllerPass::Converged(None)
         );
     }

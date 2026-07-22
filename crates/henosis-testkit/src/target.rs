@@ -3,6 +3,8 @@ use std::collections::BTreeSet;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
 use futures::FutureExt as _;
 use futures::future::BoxFuture;
@@ -130,11 +132,48 @@ fn reports_failure(fault: &TargetFault) -> bool {
     )
 }
 
+#[derive(Debug)]
+struct ObservationHoldState {
+    reached: AtomicBool,
+    reached_notify: tokio::sync::Notify,
+    released: AtomicBool,
+    release_notify: tokio::sync::Notify,
+}
+
+#[derive(Clone, Debug)]
+pub struct TargetObservationHold {
+    state: Arc<ObservationHoldState>,
+}
+
+impl TargetObservationHold {
+    pub async fn wait(&self) {
+        loop {
+            let notified = self.state.reached_notify.notified();
+            if self.state.reached.load(Ordering::Acquire) {
+                return;
+            }
+            notified.await;
+        }
+    }
+
+    pub fn release(&self) {
+        self.state.released.store(true, Ordering::Release);
+        self.state.release_notify.notify_waiters();
+    }
+}
+
+impl Drop for TargetObservationHold {
+    fn drop(&mut self) {
+        self.release();
+    }
+}
+
 #[derive(Debug, Default)]
 struct FakeK8sState {
     resources: BTreeMap<(GraphId, ResourceId), BTreeMap<String, Vec<u8>>>,
     faults: VecDeque<TargetFault>,
     actions: BTreeMap<ResourceId, usize>,
+    observation_hold: Option<(ResourceId, Arc<ObservationHoldState>)>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -143,6 +182,20 @@ pub struct FakeK8sTarget {
 }
 
 impl FakeK8sTarget {
+    pub fn hold_after_observation_of(&self, resource: ResourceId) -> TargetObservationHold {
+        let state = Arc::new(ObservationHoldState {
+            reached: AtomicBool::new(false),
+            reached_notify: tokio::sync::Notify::new(),
+            released: AtomicBool::new(false),
+            release_notify: tokio::sync::Notify::new(),
+        });
+        self.state
+            .lock()
+            .expect("fake Kubernetes target lock is not poisoned")
+            .observation_hold = Some((resource, Arc::clone(&state)));
+        TargetObservationHold { state }
+    }
+
     pub fn script(&self, faults: impl IntoIterator<Item = TargetFault>) {
         self.state
             .lock()
@@ -186,6 +239,38 @@ impl K8sTarget for FakeK8sTarget {
             .get(&(graph_id, resource.id()))
             .cloned()
             .unwrap_or_default())
+    }
+
+    fn after_observe(&self, resource: &Resource) -> BoxFuture<'_, ()> {
+        let hold = {
+            let mut state = self
+                .state
+                .lock()
+                .expect("fake Kubernetes target lock is not poisoned");
+            if state
+                .observation_hold
+                .as_ref()
+                .is_some_and(|(held, _)| *held == resource.id())
+            {
+                state.observation_hold.take().map(|(_, hold)| hold)
+            } else {
+                None
+            }
+        };
+        Box::pin(async move {
+            let Some(hold) = hold else {
+                return;
+            };
+            hold.reached.store(true, Ordering::Release);
+            hold.reached_notify.notify_waiters();
+            loop {
+                let released = hold.release_notify.notified();
+                if hold.released.load(Ordering::Acquire) {
+                    return;
+                }
+                released.await;
+            }
+        })
     }
 
     fn write_resource(

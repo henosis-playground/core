@@ -150,7 +150,7 @@ impl RealControllerWorld {
             cloudflare_target,
             supabase_target,
         };
-        world.accept_transition(transition);
+        world.accept_transition(transition).await;
         world
     }
 
@@ -246,7 +246,56 @@ impl RealControllerWorld {
             })
             .await
             .expect("fixture generation update is valid");
-        self.accept_transition(transition);
+        self.accept_transition(transition).await;
+    }
+
+    pub async fn reintroduce_during_held_k8s_cleanup(&mut self) -> bool {
+        let ready = self
+            .controller_schedule
+            .passes()
+            .find(|pass| {
+                pass.key().controller().as_str() == "k8s"
+                    && matches!(
+                        pass.command(),
+                        ControllerCommand::Reconcile(slice) if !slice.superseded().is_empty()
+                    )
+            })
+            .expect("Kubernetes cleanup pass is ready");
+        let resource = match ready.command() {
+            ControllerCommand::Reconcile(slice) => slice
+                .superseded()
+                .first()
+                .expect("cleanup pass has a resource")
+                .id(),
+            _ => unreachable!(),
+        };
+        let pass = self
+            .controller_schedule
+            .pass(ready.key())
+            .expect("Kubernetes cleanup pass starts");
+        let before = self.k8s_target.action_count(resource);
+        let hold = self.k8s_target.hold_after_observation_of(resource);
+        let controller = K8sController::new(self.k8s_target.clone());
+        let running = pass.clone();
+        let completion = tokio::spawn(async move {
+            let outcome = controller
+                .execute(running.command(), &running)
+                .await
+                .expect("held Kubernetes cleanup pass executes");
+            (running, outcome)
+        });
+
+        hold.wait().await;
+        self.start_next_generation(2).await;
+        hold.release();
+        let (stale, outcome) = completion.await.expect("held cleanup task joins");
+        assert_eq!(
+            self.controller_schedule.complete(&stale, outcome),
+            ControllerScheduleCompletion::Continue
+        );
+
+        self.k8s_target.action_count(resource) == before
+            && self.k8s_target.contains(self.graph_id, resource)
     }
 
     pub async fn retire(&mut self) {
@@ -258,7 +307,7 @@ impl RealControllerWorld {
             })
             .await
             .expect("fixture graph retirement is valid");
-        self.accept_transition(transition);
+        self.accept_transition(transition).await;
     }
 
     pub async fn crash_restart_core(&mut self) {
@@ -272,7 +321,7 @@ impl RealControllerWorld {
             .resume_graph(self.graph_id)
             .await
             .expect("replayed graph resumes");
-        self.accept_transition(transition);
+        self.accept_transition(transition).await;
     }
 
     pub fn restart_controller(&mut self, controller: &str) {
@@ -452,9 +501,9 @@ impl RealControllerWorld {
             return "cancelled stale work".to_owned();
         };
         let result = match controller.as_str() {
-            "k8s" => self.k8s.execute(pass.command()).await,
-            "cloudflare" => self.cloudflare.execute(pass.command()).await,
-            "supabase" => self.supabase.execute(pass.command()).await,
+            "k8s" => self.k8s.execute(pass.command(), &pass).await,
+            "cloudflare" => self.cloudflare.execute(pass.command(), &pass).await,
+            "supabase" => self.supabase.execute(pass.command(), &pass).await,
             _ => return format!("unknown controller {controller}"),
         };
         let outcome = match result {
@@ -511,7 +560,7 @@ impl RealControllerWorld {
                     ));
                     self.delivered.insert(key, report);
                 }
-                self.accept_transition(transition);
+                self.accept_transition(transition).await;
                 "accepted".to_owned()
             }
             Err(Error::Domain(error)) => {
@@ -529,12 +578,13 @@ impl RealControllerWorld {
         }
     }
 
-    fn accept_transition(&mut self, transition: Transition) {
+    async fn accept_transition(&mut self, transition: Transition) {
         self.events.extend(transition.events().iter().cloned());
         for effect in transition.effects() {
             let _ = self
                 .controller_schedule
-                .submit(effect.controller().clone(), effect.command().clone());
+                .submit(effect.controller().clone(), effect.command().clone())
+                .await;
         }
         self.assert_invariants();
     }

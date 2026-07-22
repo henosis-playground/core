@@ -22,14 +22,17 @@ use henosis_controller_runtime::failed_report;
 use henosis_controller_runtime::output;
 use henosis_controller_runtime::publication_id;
 use henosis_controller_runtime::ready_report;
-use henosis_controller_runtime::reconcile_absent;
+use henosis_controller_runtime::reconcile_absent_fenced;
+#[cfg(test)]
 use henosis_controller_runtime::reconcile_slice;
+use henosis_controller_runtime::reconcile_slice_fenced;
 use henosis_types::BundleRef;
 use henosis_types::ComponentName;
 use henosis_types::ConfigClosureReader;
 use henosis_types::Controller;
 use henosis_types::ControllerCommand;
 use henosis_types::ControllerError;
+use henosis_types::ControllerMutationFence;
 use henosis_types::ControllerName;
 use henosis_types::ControllerPass;
 use henosis_types::ControllerSlice;
@@ -193,9 +196,13 @@ where
         }
     }
 
-    async fn reconcile(&self, slice: &ControllerSlice) -> Result<ControllerPass, ControllerError> {
+    async fn reconcile(
+        &self,
+        slice: &ControllerSlice,
+        mutation_fence: &dyn ControllerMutationFence,
+    ) -> Result<ControllerPass, ControllerError> {
         let pass = self.for_slice(slice);
-        match reconcile_slice(&pass, slice).await {
+        match reconcile_slice_fenced(&pass, slice, mutation_fence).await {
             Ok(SlicePass::Acted) => Ok(ControllerPass::Acted),
             Ok(SlicePass::Converged(convergence)) => ready_report(
                 slice,
@@ -417,35 +424,46 @@ where
     fn execute<'a>(
         &'a self,
         command: &'a ControllerCommand,
+        mutation_fence: &'a dyn ControllerMutationFence,
     ) -> BoxFuture<'a, Result<ControllerPass, ControllerError>> {
         async move {
             match command {
-                ControllerCommand::Reconcile(slice) => self.reconcile(slice).await,
+                ControllerCommand::Reconcile(slice) => self.reconcile(slice, mutation_fence).await,
                 ControllerCommand::Supersede(supersession) => {
                     let pass = SupabasePass {
                         controller: self,
                         slice: None,
                     };
-                    reconcile_absent(&pass, supersession.graph_id, &supersession.resources)
-                        .await
-                        .map(|pass| match pass {
-                            SlicePass::Acted => ControllerPass::Acted,
-                            SlicePass::Converged(_) => ControllerPass::Converged(None),
-                        })
-                        .map_err(|error| ControllerError::new(error.to_string()))
+                    reconcile_absent_fenced(
+                        &pass,
+                        supersession.graph_id,
+                        &supersession.resources,
+                        mutation_fence,
+                    )
+                    .await
+                    .map(|pass| match pass {
+                        SlicePass::Acted => ControllerPass::Acted,
+                        SlicePass::Converged(_) => ControllerPass::Converged(None),
+                    })
+                    .map_err(|error| ControllerError::new(error.to_string()))
                 }
                 ControllerCommand::Retire(retirement) => {
                     let pass = SupabasePass {
                         controller: self,
                         slice: None,
                     };
-                    reconcile_absent(&pass, retirement.graph_id, &retirement.resources)
-                        .await
-                        .map(|pass| match pass {
-                            SlicePass::Acted => ControllerPass::Acted,
-                            SlicePass::Converged(_) => ControllerPass::Converged(None),
-                        })
-                        .map_err(|error| ControllerError::new(error.to_string()))
+                    reconcile_absent_fenced(
+                        &pass,
+                        retirement.graph_id,
+                        &retirement.resources,
+                        mutation_fence,
+                    )
+                    .await
+                    .map(|pass| match pass {
+                        SlicePass::Acted => ControllerPass::Acted,
+                        SlicePass::Converged(_) => ControllerPass::Converged(None),
+                    })
+                    .map_err(|error| ControllerError::new(error.to_string()))
                 }
             }
         }
@@ -1186,12 +1204,18 @@ mod tests {
         let reconcile = ControllerCommand::Reconcile(slice.clone());
         for _ in 0..3 {
             assert_eq!(
-                first.execute(&reconcile).await.unwrap(),
+                first
+                    .execute(&reconcile, &henosis_types::UnfencedControllerMutation)
+                    .await
+                    .unwrap(),
                 ControllerPass::Acted
             );
         }
         assert!(matches!(
-            first.execute(&reconcile).await.unwrap(),
+            first
+                .execute(&reconcile, &henosis_types::UnfencedControllerMutation)
+                .await
+                .unwrap(),
             ControllerPass::Converged(Some(_))
         ));
         let restarted = make_controller(Arc::clone(&state), actions);
@@ -1202,15 +1226,24 @@ mod tests {
             resources: slice.resources().to_vec(),
         });
         assert_eq!(
-            restarted.execute(&retire).await.unwrap(),
+            restarted
+                .execute(&retire, &henosis_types::UnfencedControllerMutation)
+                .await
+                .unwrap(),
             ControllerPass::Acted
         );
         assert_eq!(
-            restarted.execute(&retire).await.unwrap(),
+            restarted
+                .execute(&retire, &henosis_types::UnfencedControllerMutation)
+                .await
+                .unwrap(),
             ControllerPass::Acted
         );
         assert_eq!(
-            restarted.execute(&retire).await.unwrap(),
+            restarted
+                .execute(&retire, &henosis_types::UnfencedControllerMutation)
+                .await
+                .unwrap(),
             ControllerPass::Converged(None)
         );
         assert!(state.lock().unwrap().schemas.is_empty());
