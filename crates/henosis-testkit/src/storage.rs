@@ -21,6 +21,7 @@ pub enum AppendFault {
     Acknowledge,
     RejectBeforeCommit,
     CommitThenTimeout,
+    CommitDifferentThenTimeout,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -96,25 +97,28 @@ impl MemS2 {
             return Err(MemS2Error::Rejected);
         }
         let start = actual;
-        for record in records {
+        for (index, record) in records.into_iter().enumerate() {
             let sequence = state.streams.get(stream).map(Vec::len).unwrap_or_default() as u64;
             let timestamp = state.clock;
             state.clock = state.clock.saturating_add(1);
+            let body = if fault == AppendFault::CommitDifferentThenTimeout && index == 0 {
+                vec![0]
+            } else {
+                record.body().to_vec()
+            };
             state
                 .streams
                 .entry(stream.clone())
                 .or_default()
-                .push(StoredRecord::new(
-                    stream.clone(),
-                    sequence,
-                    timestamp,
-                    record.body().to_vec(),
-                ));
+                .push(StoredRecord::new(stream.clone(), sequence, timestamp, body));
         }
         let tail =
             StreamPosition::new(state.streams.get(stream).map(Vec::len).unwrap_or_default() as u64);
         let acknowledgement = AppendAck::new(StreamPosition::new(start), tail);
-        if fault == AppendFault::CommitThenTimeout {
+        if matches!(
+            fault,
+            AppendFault::CommitThenTimeout | AppendFault::CommitDifferentThenTimeout
+        ) {
             return Err(MemS2Error::TimeoutAfterCommit);
         }
         Ok(MemS2Append {

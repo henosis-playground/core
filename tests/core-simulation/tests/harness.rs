@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use faultline::Error;
 use henosis_journal::Journal;
 use henosis_sim::RealControllerAction;
 use henosis_sim::RealControllerWorld;
@@ -12,6 +13,7 @@ use henosis_sim::canonical_resources;
 use henosis_sim::run_seed;
 use henosis_sim::slow_all_inputs_model;
 use henosis_storage::AppendRecord;
+use henosis_storage::StorageDomainError;
 use henosis_storage::StreamName;
 use henosis_storage::StreamPosition;
 use henosis_testkit::AppendFault;
@@ -200,6 +202,30 @@ fn timeout_after_commit_is_resolved_through_the_product_journal() {
             journal.load(graph_id).await.expect("replay succeeds"),
             vec![event.clone()]
         );
+    });
+}
+
+#[test]
+fn unknown_append_with_different_stored_bytes_is_a_cas_loss() {
+    runtime().block_on(async {
+        let run = run_seed(Seed::from_u64(20), &Scenario::bounded(1), 32).await;
+        let event = run.events.first().expect("simulation emits a graph event");
+        let storage = MemS2::default();
+        storage.script([AppendFault::CommitDifferentThenTimeout]);
+        let journal = Journal::new(Arc::new(storage));
+        let graph_id = GraphId::from_bytes([8; 16]);
+
+        let error = journal
+            .append(graph_id, StreamPosition::default(), event)
+            .await
+            .expect_err("different committed bytes lose the append CAS");
+        assert!(matches!(
+            error,
+            Error::Domain(StorageDomainError::CasConflict {
+                expected: 0,
+                actual: 1,
+            })
+        ));
     });
 }
 
