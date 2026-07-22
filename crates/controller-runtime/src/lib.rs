@@ -1,13 +1,12 @@
 //! Small controller-side primitives shared by target adapters.
 
 use std::collections::BTreeMap;
+use std::collections::VecDeque;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
-use std::sync::atomic::Ordering;
 
 use base64::Engine as _;
 use futures::future::BoxFuture;
@@ -276,8 +275,104 @@ impl ControllerWorkKey {
 
 #[derive(Debug)]
 struct ControllerMutationState {
-    revision: AtomicU64,
+    messages: tokio::sync::mpsc::UnboundedSender<ControllerLaneMessage>,
+    #[cfg(test)]
     mutation: Arc<tokio::sync::Mutex<()>>,
+}
+
+#[derive(Debug)]
+enum ControllerLaneMessage {
+    Supersede(u64),
+    Admit {
+        revision: u64,
+        response: tokio::sync::oneshot::Sender<Option<ControllerLanePermit>>,
+    },
+}
+
+#[derive(Debug)]
+struct ControllerLanePermit {
+    _mutation: tokio::sync::OwnedMutexGuard<()>,
+    released: Option<tokio::sync::oneshot::Sender<()>>,
+}
+
+impl Drop for ControllerLanePermit {
+    fn drop(&mut self) {
+        if let Some(released) = self.released.take() {
+            let _ = released.send(());
+        }
+    }
+}
+
+impl ControllerMutationState {
+    fn new(revision: u64) -> Arc<Self> {
+        let mutation = Arc::new(tokio::sync::Mutex::new(()));
+        let (messages, receiver) = tokio::sync::mpsc::unbounded_channel();
+        let state = Arc::new(Self {
+            messages,
+            #[cfg(test)]
+            mutation: Arc::clone(&mutation),
+        });
+        tokio::spawn(run_controller_lane(revision, mutation, receiver));
+        state
+    }
+
+    fn supersede(&self, revision: u64) {
+        self.messages
+            .send(ControllerLaneMessage::Supersede(revision))
+            .expect("controller lane worker must outlive its schedule");
+    }
+}
+
+async fn run_controller_lane(
+    mut revision: u64,
+    mutation: Arc<tokio::sync::Mutex<()>>,
+    mut messages: tokio::sync::mpsc::UnboundedReceiver<ControllerLaneMessage>,
+) {
+    let mut deferred = VecDeque::new();
+    while let Some(message) = match deferred.pop_front() {
+        Some(message) => Some(message),
+        None => messages.recv().await,
+    } {
+        match message {
+            ControllerLaneMessage::Supersede(next_revision) => revision = next_revision,
+            ControllerLaneMessage::Admit {
+                revision: requested_revision,
+                response,
+            } => {
+                let mut admission = Box::pin(Arc::clone(&mutation).lock_owned());
+                let mut messages_open = true;
+                let mutation = loop {
+                    tokio::select! {
+                        biased;
+                        message = messages.recv(), if messages_open => {
+                            match message {
+                                Some(ControllerLaneMessage::Supersede(next_revision)) => {
+                                    revision = next_revision;
+                                }
+                                Some(message @ ControllerLaneMessage::Admit { .. }) => {
+                                    deferred.push_back(message);
+                                }
+                                None => messages_open = false,
+                            }
+                        }
+                        mutation = &mut admission => break mutation,
+                    }
+                };
+                if revision != requested_revision {
+                    let _ = response.send(None);
+                    continue;
+                }
+                let (released, release) = tokio::sync::oneshot::channel();
+                let permit = ControllerLanePermit {
+                    _mutation: mutation,
+                    released: Some(released),
+                };
+                if response.send(Some(permit)).is_ok() {
+                    let _ = release.await;
+                }
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -303,11 +398,17 @@ impl ScheduledControllerPass {
 impl ControllerMutationFence for ScheduledControllerPass {
     fn enter(&self) -> BoxFuture<'_, Option<ControllerMutationPermit>> {
         let revision = self.revision;
-        let mutation_state = Arc::clone(&self.mutation_state);
+        let messages = self.mutation_state.messages.clone();
         Box::pin(async move {
-            let permit = Arc::clone(&mutation_state.mutation).lock_owned().await;
-            (mutation_state.revision.load(Ordering::Acquire) == revision)
-                .then(|| ControllerMutationPermit::new(permit))
+            let (response, admission) = tokio::sync::oneshot::channel();
+            messages
+                .send(ControllerLaneMessage::Admit { revision, response })
+                .expect("controller lane worker must outlive its pass");
+            admission
+                .await
+                .ok()
+                .flatten()
+                .map(ControllerMutationPermit::new)
         })
     }
 }
@@ -375,9 +476,7 @@ impl ControllerSchedule {
         self.next_revision = self.next_revision.wrapping_add(1);
         let revision = self.next_revision;
         if let Some(work) = self.work.get_mut(&key) {
-            work.mutation_state
-                .revision
-                .store(revision, Ordering::Release);
+            work.mutation_state.supersede(revision);
             work.revision = revision;
             work.command = command;
             work.retry_attempt = 0;
@@ -392,10 +491,7 @@ impl ControllerSchedule {
                 key.clone(),
                 ScheduledControllerWork {
                     revision,
-                    mutation_state: Arc::new(ControllerMutationState {
-                        revision: AtomicU64::new(revision),
-                        mutation: Arc::new(tokio::sync::Mutex::new(())),
-                    }),
+                    mutation_state: ControllerMutationState::new(revision),
                     command,
                     retry_attempt: 0,
                     state: ScheduledControllerWorkState::Ready,
@@ -1062,6 +1158,67 @@ mod tests {
             ControllerScheduleCompletion::Complete
         );
         assert!(schedule.pass(&key).is_none());
+    }
+
+    #[tokio::test]
+    async fn lane_serializes_supersession_with_mutation_admission_in_both_orders() {
+        let graph = GraphId::from_bytes([9; 16]);
+        let controller = controller_name("test");
+        let command = |generation| {
+            ControllerCommand::Reconcile(ControllerSlice::new(
+                graph,
+                Generation::new(generation).unwrap(),
+                ContentDigest::digest(&[generation as u8]),
+                controller.clone(),
+                BTreeMap::new(),
+                Vec::new(),
+                Vec::new(),
+            ))
+        };
+
+        let mut supersession_first = ControllerSchedule::default();
+        let key = supersession_first
+            .submit(controller.clone(), command(1))
+            .unwrap();
+        let stale = supersession_first.pass(&key).unwrap();
+        assert_eq!(
+            supersession_first.submit(controller.clone(), command(2)),
+            None
+        );
+        let mut actions = 0;
+        if stale.enter().await.is_some() {
+            actions += 1;
+        }
+        assert_eq!(
+            actions, 0,
+            "a supersession serialized before admission must fence the old action"
+        );
+
+        let mut admission_first = ControllerSchedule::default();
+        let key = admission_first
+            .submit(controller.clone(), command(1))
+            .unwrap();
+        let admitted = admission_first.pass(&key).unwrap();
+        let permit = admitted
+            .enter()
+            .await
+            .expect("the old action is admitted before supersession");
+        assert_eq!(admission_first.submit(controller.clone(), command(2)), None);
+        actions += 1;
+        drop(permit);
+        assert_eq!(
+            actions, 1,
+            "an admitted action must finish before the later supersession takes effect"
+        );
+        assert_eq!(
+            admission_first.complete(&admitted, ControllerPass::Acted),
+            ControllerScheduleCompletion::Continue
+        );
+        let current = admission_first.pass(&key).unwrap();
+        assert!(
+            current.enter().await.is_some(),
+            "the current action must not be mistaken for stale after the old action finishes"
+        );
     }
 
     #[tokio::test]
