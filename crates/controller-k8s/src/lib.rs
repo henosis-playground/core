@@ -344,14 +344,7 @@ impl K8sTarget for GitRepository {
     }
 
     fn remove_graph_if_empty(&self, graph_id: GraphId) -> Result<bool, String> {
-        if !self
-            .read_directory(&branch(graph_id), "resources")
-            .map_err(|error| error.to_string())?
-            .is_empty()
-        {
-            return Ok(false);
-        }
-        self.delete_branch(&branch(graph_id))
+        self.delete_branch_if_directory_empty(&branch(graph_id), "resources")
             .map_err(|error| error.to_string())
     }
 }

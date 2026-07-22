@@ -793,46 +793,67 @@ impl GitRepository {
         })
     }
 
-    pub fn delete_branch(&self, branch: &str) -> Result<bool, GitError> {
-        let exists = run_git_status(
+    pub fn delete_branch_if_directory_empty(
+        &self,
+        branch: &str,
+        prefix: &str,
+    ) -> Result<bool, GitError> {
+        let directory = tempfile::tempdir().map_err(GitError::Io)?;
+        run_git(
             None,
             [
-                "ls-remote",
-                "--exit-code",
-                "--heads",
+                "clone",
+                "--quiet",
                 remote_text(&self.remote)?,
-                &format!("refs/heads/{branch}"),
+                directory.path().to_str().ok_or(GitError::NonUtf8Path)?,
+            ],
+        )?;
+        let exists = run_git_status(
+            Some(directory.path()),
+            [
+                "show-ref",
+                "--verify",
+                "--quiet",
+                &format!("refs/remotes/origin/{branch}"),
             ],
         )?;
         if !exists {
             return Ok(false);
         }
-        let directory = tempfile::tempdir().map_err(GitError::Io)?;
         run_git(
-            None,
+            Some(directory.path()),
             [
-                "init",
+                "checkout",
                 "--quiet",
-                directory.path().to_str().ok_or(GitError::NonUtf8Path)?,
+                "-B",
+                branch,
+                &format!("origin/{branch}"),
             ],
         )?;
-        let result = git_command()?
-            .current_dir(directory.path())
-            .args([
-                "push",
-                remote_text(&self.remote)?,
-                &format!(":refs/heads/{branch}"),
-            ])
-            .output()
-            .map_err(GitError::Io)?;
-        if result.status.success() {
-            return Ok(true);
+        let root = directory.path().join(prefix);
+        let mut files = BTreeMap::new();
+        if root.exists() {
+            collect_files(&root, &root, &mut files)?;
         }
-        let detail = String::from_utf8_lossy(&result.stderr);
-        if detail.contains("remote ref does not exist") {
+        if !files.is_empty() {
             return Ok(false);
         }
-        Err(GitError::Command(detail.into_owned()))
+        let expected_revision = git_output(
+            Some(directory.path()),
+            ["rev-parse", &format!("origin/{branch}")],
+        )?;
+        let lease = format!("--force-with-lease=refs/heads/{branch}:{expected_revision}");
+        run_git(
+            Some(directory.path()),
+            [
+                "push",
+                "--quiet",
+                &lease,
+                "origin",
+                &format!(":refs/heads/{branch}"),
+            ],
+        )?;
+        Ok(true)
     }
 
     pub fn read_directory(
