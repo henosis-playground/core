@@ -90,6 +90,14 @@ impl ControllerSlice {
     pub fn superseded(&self) -> &[Resource] {
         &self.superseded
     }
+
+    #[must_use]
+    pub fn with_cleanup_obligations(mut self, mut resources: Vec<Resource>) -> Self {
+        resources.sort_by_key(Resource::id);
+        resources.dedup_by_key(|resource| resource.id());
+        self.superseded = resources;
+        self
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -347,38 +355,11 @@ pub enum ControllerPass {
     Retryable(String),
 }
 
-pub struct ControllerMutationPermit {
-    _guard: Box<dyn Send>,
-}
-
-impl ControllerMutationPermit {
-    #[must_use]
-    pub fn new(guard: impl Send + 'static) -> Self {
-        Self {
-            _guard: Box::new(guard),
-        }
-    }
-}
-
-pub trait ControllerMutationFence: Send + Sync {
-    fn enter(&self) -> BoxFuture<'_, Option<ControllerMutationPermit>>;
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-pub struct UnfencedControllerMutation;
-
-impl ControllerMutationFence for UnfencedControllerMutation {
-    fn enter(&self) -> BoxFuture<'_, Option<ControllerMutationPermit>> {
-        Box::pin(async { Some(ControllerMutationPermit::new(())) })
-    }
-}
-
 pub trait Controller: Send + Sync {
     fn name(&self) -> &ControllerName;
 
     fn execute<'a>(
         &'a self,
         command: &'a ControllerCommand,
-        mutation_fence: &'a dyn ControllerMutationFence,
     ) -> BoxFuture<'a, Result<ControllerPass, ControllerError>>;
 }

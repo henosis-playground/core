@@ -22,6 +22,7 @@ use henosis_controller_cloudflare::RouteObservation;
 use henosis_controller_cloudflare::TunnelObservation;
 use henosis_controller_cloudflare::WorkerObservation;
 use henosis_controller_k8s::K8sController;
+use henosis_controller_runtime::ControllerDesiredState;
 use henosis_controller_runtime::ControllerSchedule;
 use henosis_controller_runtime::ControllerScheduleCompletion;
 use henosis_controller_runtime::ControllerWorkKey;
@@ -46,7 +47,6 @@ use henosis_types::BundleRef;
 use henosis_types::Controller;
 use henosis_types::ControllerCommand;
 use henosis_types::ControllerError;
-use henosis_types::ControllerMutationFence;
 use henosis_types::ControllerName;
 use henosis_types::ControllerPass;
 use henosis_types::ControllerReport;
@@ -86,6 +86,7 @@ impl ControllerDispatcher {
             mpsc::unbounded_channel::<ReportCompletion>();
         tokio::spawn(async move {
             let controllers = Arc::new(controllers);
+            let mut desired = ControllerDesiredState::default();
             let mut schedule = ControllerSchedule::default();
             let mut report_deliveries = BTreeMap::new();
             loop {
@@ -93,6 +94,7 @@ impl ControllerDispatcher {
                     Some(incoming) = effect_receiver.recv() => {
                         submit_effects(
                             incoming,
+                            &mut desired,
                             &mut schedule,
                             &controllers,
                             &pass_completions,
@@ -103,6 +105,7 @@ impl ControllerDispatcher {
                             ControllerScheduleCompletion::Continue => {
                                 spawn_next_pass(
                                     &mut schedule,
+                                    &desired,
                                     pass.key(),
                                     &controllers,
                                     &pass_completions,
@@ -128,6 +131,7 @@ impl ControllerDispatcher {
                                 );
                                 spawn_next_pass(
                                     &mut schedule,
+                                    &desired,
                                     pass.key(),
                                     &controllers,
                                     &pass_completions,
@@ -143,6 +147,7 @@ impl ControllerDispatcher {
                             ControllerScheduleCompletion::Continue => {
                                 spawn_next_pass(
                                     &mut schedule,
+                                    &desired,
                                     &key,
                                     &controllers,
                                     &pass_completions,
@@ -157,6 +162,7 @@ impl ControllerDispatcher {
                         }
                         submit_effects(
                             delivery.follow_up,
+                            &mut desired,
                             &mut schedule,
                             &controllers,
                             &pass_completions,
@@ -183,25 +189,35 @@ struct ReportCompletion {
 
 fn submit_effects(
     effects: Vec<ControllerEffect>,
+    desired: &mut ControllerDesiredState,
     schedule: &mut ControllerSchedule,
     controllers: &Arc<BTreeMap<ControllerName, Arc<dyn Controller>>>,
     completions: &mpsc::UnboundedSender<(ScheduledControllerPass, ControllerPass)>,
 ) {
     for effect in effects {
-        if let Some(key) = schedule.submit(effect.controller().clone(), effect.command().clone()) {
-            spawn_next_pass(schedule, &key, controllers, completions, Duration::ZERO);
+        let key = desired.update(effect.controller().clone(), effect.command().clone());
+        if let Some(key) = schedule.submit(key) {
+            spawn_next_pass(
+                schedule,
+                desired,
+                &key,
+                controllers,
+                completions,
+                Duration::ZERO,
+            );
         }
     }
 }
 
 fn spawn_next_pass(
     schedule: &mut ControllerSchedule,
+    desired: &ControllerDesiredState,
     key: &ControllerWorkKey,
     controllers: &Arc<BTreeMap<ControllerName, Arc<dyn Controller>>>,
     completions: &mpsc::UnboundedSender<(ScheduledControllerPass, ControllerPass)>,
     delay: Duration,
 ) {
-    if let Some(pass) = schedule.pass(key) {
+    if let Some(pass) = schedule.pass(key, desired) {
         spawn_controller_pass(Arc::clone(controllers), pass, completions.clone(), delay);
     }
 }
@@ -223,7 +239,7 @@ fn spawn_controller_pass(
                     pass.key().controller()
                 ));
             };
-            match controller.execute(pass.command(), &pass).await {
+            match controller.execute(pass.command()).await {
                 Ok(outcome) => outcome,
                 Err(error) => ControllerPass::Retryable(error.to_string()),
             }
@@ -539,7 +555,6 @@ impl Controller for DemoSupabaseController {
     fn execute<'a>(
         &'a self,
         command: &'a ControllerCommand,
-        _mutation_fence: &'a dyn ControllerMutationFence,
     ) -> BoxFuture<'a, Result<ControllerPass, ControllerError>> {
         Box::pin(async move {
             match command {
@@ -692,7 +707,6 @@ mod tests {
         fn execute<'a>(
             &'a self,
             command: &'a ControllerCommand,
-            _mutation_fence: &'a dyn ControllerMutationFence,
         ) -> BoxFuture<'a, Result<ControllerPass, ControllerError>> {
             Box::pin(async move {
                 if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
@@ -721,7 +735,6 @@ mod tests {
         fn execute<'a>(
             &'a self,
             command: &'a ControllerCommand,
-            _mutation_fence: &'a dyn ControllerMutationFence,
         ) -> BoxFuture<'a, Result<ControllerPass, ControllerError>> {
             Box::pin(async move {
                 let ControllerCommand::Reconcile(slice) = command else {
@@ -731,6 +744,36 @@ mod tests {
                 Ok(ControllerPass::Converged(Some(
                     ready_report(slice, None, Vec::new()).unwrap(),
                 )))
+            })
+        }
+    }
+
+    struct HeldLaneController {
+        held_graph: GraphId,
+        name: ControllerName,
+        release: Semaphore,
+        held_started: Notify,
+        other_completed: Notify,
+    }
+
+    impl Controller for HeldLaneController {
+        fn name(&self) -> &ControllerName {
+            &self.name
+        }
+
+        fn execute<'a>(
+            &'a self,
+            command: &'a ControllerCommand,
+        ) -> BoxFuture<'a, Result<ControllerPass, ControllerError>> {
+            Box::pin(async move {
+                if command.graph_id() == self.held_graph {
+                    self.held_started.notify_one();
+                    let permit = self.release.acquire().await.unwrap();
+                    permit.forget();
+                } else {
+                    self.other_completed.notify_one();
+                }
+                Ok(ControllerPass::Converged(None))
             })
         }
     }
@@ -856,6 +899,55 @@ mod tests {
             *reports.generations.lock().unwrap(),
             vec![Generation::new(1).unwrap(), Generation::new(4).unwrap()]
         );
+    }
+
+    #[tokio::test]
+    async fn held_action_delays_only_its_key_lane() {
+        let held_graph = GraphId::from_bytes([6; 16]);
+        let other_graph = GraphId::from_bytes([7; 16]);
+        let name = controller_name("test");
+        let controller = Arc::new(HeldLaneController {
+            held_graph,
+            name: name.clone(),
+            release: Semaphore::new(0),
+            held_started: Notify::new(),
+            other_completed: Notify::new(),
+        });
+        let reports = Arc::new(FailsFirstReport {
+            calls: AtomicUsize::new(0),
+            accepted: Notify::new(),
+        });
+        let dispatcher = ControllerDispatcher::start(
+            BTreeMap::from([(name.clone(), controller.clone() as Arc<dyn Controller>)]),
+            reports as Arc<dyn ControllerReportHandler>,
+        );
+        let effect = |graph| {
+            ControllerEffect::new(
+                name.clone(),
+                ControllerCommand::Reconcile(ControllerSlice::new(
+                    graph,
+                    Generation::new(1).unwrap(),
+                    ContentDigest::digest(graph.to_string().as_bytes()),
+                    name.clone(),
+                    BTreeMap::new(),
+                    Vec::new(),
+                    Vec::new(),
+                )),
+            )
+        };
+
+        dispatcher.dispatch(vec![effect(held_graph)]);
+        tokio::time::timeout(Duration::from_secs(5), controller.held_started.notified())
+            .await
+            .expect("held lane should start");
+        dispatcher.dispatch(vec![effect(other_graph)]);
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            controller.other_completed.notified(),
+        )
+        .await
+        .expect("another key lane should finish while the first action is held");
+        controller.release.add_permits(1);
     }
 
     #[tokio::test]
