@@ -55,10 +55,12 @@ use s2_sdk::types::ReadInput;
 use s2_sdk::types::ReadLimits;
 use s2_sdk::types::ReadStart;
 use s2_sdk::types::ReadStop;
+use s2_sdk::types::RetentionPolicy;
 use s2_sdk::types::RetryConfig;
 use s2_sdk::types::S2Config;
 use s2_sdk::types::S2Endpoints;
 use s2_sdk::types::S2Error;
+use s2_sdk::types::StreamConfig;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::sync::Mutex;
@@ -456,7 +458,11 @@ impl S2Storage {
                 )
             })?;
         self.basin
-            .ensure_stream(EnsureStreamInput::new(name.clone()))
+            .ensure_stream(
+                EnsureStreamInput::new(name.clone()).with_config(
+                    StreamConfig::new().with_retention_policy(RetentionPolicy::Infinite),
+                ),
+            )
             .await
             .map_err(classify_definite_failure)?;
         Ok(self.basin.stream(name))
