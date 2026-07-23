@@ -616,9 +616,7 @@ impl StorageEngine for S2Storage {
             Err(S2Error::ReadUnwritten(tail)) if from.sequence() >= tail.seq_num => {
                 return Ok(Vec::new());
             }
-            Err(error) => {
-                return Err(Error::Transient(anyhow::Error::new(error)));
-            }
+            Err(error) => return Err(classify_definite_failure(error)),
         };
         Ok(batch
             .records
@@ -643,11 +641,7 @@ impl StorageEngine for S2Storage {
             .check_tail()
             .await
             .map(|tail| StreamPosition::new(tail.seq_num))
-            .map_err(|error| {
-                Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Transient(
-                    anyhow::Error::new(error),
-                )
-            })
+            .map_err(classify_definite_failure)
     }
 
     fn follow(
@@ -698,7 +692,7 @@ impl StorageEngine for S2Storage {
                         }
                     }
                     Err(error) => {
-                        yield Err(Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Transient(anyhow::Error::new(error)));
+                        yield Err(classify_definite_failure(error));
                         return;
                     }
                 }
