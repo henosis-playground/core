@@ -31,6 +31,14 @@ lint: check-fmt clippy check-deny check-pre-commit
 test *flags:
     cargo nextest run --cargo-profile testing --no-tests=pass {{ flags }}
 
+# Runs the deterministic multi-node network simulation suite.
+test-distributed:
+    cargo nextest run --cargo-profile testing --no-tests=pass -p henosis-distributed-core-tests
+
+# Runs more seeded schedules in the deterministic multi-node suite.
+test-distributed-extended:
+    HENOSIS_EXTENDED_DST=1 cargo nextest run --cargo-profile testing --no-tests=pass -p henosis-distributed-core-tests
+
 # Runs the ignored fresh-machine recovery test against a running s2-lite.
 test-s2-crash:
     HENOSIS_S2_CRASH_TEST=1 cargo nextest run --cargo-profile testing --no-tests=pass --run-ignored ignored-only -p henosis-core-server server_recovers_on_fresh_machine_from_s2_and_durable_bundle_store
