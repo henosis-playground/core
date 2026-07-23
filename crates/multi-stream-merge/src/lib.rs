@@ -8,6 +8,7 @@
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use faultline::Error;
@@ -52,23 +53,25 @@ impl MergedRecord {
     }
 }
 
-pub fn subscribe_dynamic(
-    storage: Arc<dyn StorageEngine>,
-    streams: impl IntoIterator<Item = (StreamName, StreamPosition)>,
-) -> (
-    tokio::sync::mpsc::UnboundedSender<(StreamName, StreamPosition)>,
-    BoxStream<
+pub struct DynamicSubscription {
+    pub additions: tokio::sync::mpsc::UnboundedSender<(StreamName, StreamPosition)>,
+    pub records: BoxStream<
         'static,
         Result<MergedRecord, Error<StorageDomainError, anyhow::Error, anyhow::Error>>,
     >,
-) {
+}
+
+pub fn subscribe_dynamic(
+    storage: Arc<dyn StorageEngine>,
+    streams: impl IntoIterator<Item = (StreamName, StreamPosition)>,
+) -> DynamicSubscription {
     let (add, mut additions) =
         tokio::sync::mpsc::unbounded_channel::<(StreamName, StreamPosition)>();
     let mut known = BTreeSet::new();
     let mut followers = futures::stream::SelectAll::new();
     for (stream, from) in streams {
         if known.insert(stream.clone()) {
-            followers.push(storage.follow(stream, from));
+            followers.push(resilient_follow(Arc::clone(&storage), stream, from));
         }
     }
     let merged = async_stream::stream! {
@@ -79,7 +82,7 @@ pub fn subscribe_dynamic(
                     break;
                 };
                 if known.insert(stream.clone()) {
-                    followers.push(storage.follow(stream, from));
+                    followers.push(resilient_follow(Arc::clone(&storage), stream, from));
                 }
                 continue;
             }
@@ -93,7 +96,7 @@ pub fn subscribe_dynamic(
                         break;
                     };
                     if known.insert(stream.clone()) {
-                        followers.push(storage.follow(stream, from));
+                        followers.push(resilient_follow(Arc::clone(&storage), stream, from));
                     }
                 }
                 Some(item) = followers.next() => {
@@ -103,7 +106,41 @@ pub fn subscribe_dynamic(
             }
         }
     };
-    (add, Box::pin(merged))
+    DynamicSubscription {
+        additions: add,
+        records: Box::pin(merged),
+    }
+}
+
+fn resilient_follow(
+    storage: Arc<dyn StorageEngine>,
+    stream: StreamName,
+    from: StreamPosition,
+) -> BoxStream<'static, Result<StoredRecord, Error<StorageDomainError, anyhow::Error, anyhow::Error>>>
+{
+    Box::pin(async_stream::stream! {
+        let mut next = from;
+        loop {
+            let mut follower = storage.follow(stream.clone(), next);
+            while let Some(item) = follower.next().await {
+                match item {
+                    Ok(record) => {
+                        next = StreamPosition::new(record.sequence().saturating_add(1));
+                        yield Ok(record);
+                    }
+                    Err(Error::Transient(error)) => {
+                        yield Err(Error::Transient(error));
+                        break;
+                    }
+                    Err(error) => {
+                        yield Err(error);
+                        return;
+                    }
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
 }
 
 pub async fn subscribe(
@@ -124,7 +161,7 @@ pub async fn subscribe(
         .into_iter()
         .map(|stream| {
             let from = cursors.get(&stream).copied().unwrap_or_default();
-            storage.follow(stream, from)
+            resilient_follow(Arc::clone(&storage), stream, from)
         })
         .collect::<Vec<_>>();
     let merged = select_all(followers).scan(0_u64, |offset, item| {

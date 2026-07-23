@@ -64,6 +64,8 @@ tokio = { version = "1", features = [
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 turmoil = "0.7.2"
+mad-turmoil = "0.2.1"
+rand-10 = { package = "rand", version = "0.10" }
 toml = "0.9"
 uuid = { version = "1", features = ["serde", "v7"] }
 

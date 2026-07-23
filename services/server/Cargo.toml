@@ -15,13 +15,11 @@ connectrpc.workspace = true
 faultline.workspace = true
 futures.workspace = true
 henosis-app = { path = "../../crates/henosis-app" }
-henosis-controller-runtime.workspace = true
 henosis-evaluation-engine.workspace = true
 henosis-journal.workspace = true
 henosis-orchestrator.workspace = true
 henosis-proto.workspace = true
 henosis-server-assembly.workspace = true
-henosis-storage.workspace = true
 henosis-types.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

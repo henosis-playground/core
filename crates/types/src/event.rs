@@ -173,6 +173,7 @@ pub struct ControllerProgress {
     generation: Generation,
     plan_digest: ContentDigest,
     controller: ControllerName,
+    failed: bool,
 }
 
 impl ControllerProgress {
@@ -182,12 +183,14 @@ impl ControllerProgress {
         generation: Generation,
         plan_digest: ContentDigest,
         controller: ControllerName,
+        failed: bool,
     ) -> Self {
         Self {
             graph_id,
             generation,
             plan_digest,
             controller,
+            failed,
         }
     }
 
@@ -209,6 +212,11 @@ impl ControllerProgress {
     #[must_use]
     pub const fn controller(&self) -> &ControllerName {
         &self.controller
+    }
+
+    #[must_use]
+    pub const fn failed(&self) -> bool {
+        self.failed
     }
 }
 

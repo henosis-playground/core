@@ -562,15 +562,7 @@ fn graph_phase(graph: &henosis_orchestrator::GraphState) -> proto::GraphPhase {
     if plan.blocked().next().is_some() {
         return proto::GraphPhase::Blocked;
     }
-    let dispositions = graph
-        .reports()
-        .filter(|report| report.generation() == graph.intent().generation())
-        .flat_map(|report| report.dispositions())
-        .collect::<Vec<_>>();
-    if dispositions
-        .iter()
-        .any(|disposition| matches!(disposition.kind(), ResourceDispositionKind::Failed { .. }))
-    {
+    if graph.controller_failed() {
         return proto::GraphPhase::Failed;
     }
     if plan.resources().len() == 0 || graph.controllers_complete() {

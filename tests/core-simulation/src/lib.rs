@@ -933,7 +933,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn replayed_publication_still_refreshes_level_controller_status() {
+    async fn replayed_progress_avoids_duplicate_controller_pass() {
         let producer = component(
             "database",
             1,
@@ -964,32 +964,16 @@ mod tests {
             .resume_graph(graph_id())
             .await
             .expect("replayed graph resumes");
-        let duplicate = controller_report(&resume.effects()[0], 21, "postgres.test");
-        let refreshed = restarted
-            .handle(Command::ReportController(duplicate))
-            .await
-            .expect("duplicate publication refreshes level status");
-
         assert!(
-            refreshed
-                .events()
-                .iter()
-                .any(|event| matches!(event, henosis_types::CoreEvent::ControllerReported(_)))
+            resume.effects().is_empty(),
+            "durable controller progress prevents a duplicate pass after restart"
         );
         assert!(
-            !refreshed
-                .events()
-                .iter()
-                .any(|event| matches!(event, henosis_types::CoreEvent::OutputsPublished(_)))
-        );
-        assert_eq!(
             restarted
                 .state()
                 .graph(graph_id())
                 .expect("graph exists")
-                .reports()
-                .count(),
-            1
+                .controllers_complete()
         );
     }
 

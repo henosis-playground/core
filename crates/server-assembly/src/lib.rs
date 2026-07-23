@@ -409,4 +409,3 @@ impl CloudflareTransport for RecordedCloudflareTransport {
         .boxed()
     }
 }
-

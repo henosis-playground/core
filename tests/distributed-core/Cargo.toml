@@ -6,14 +6,19 @@ publish.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+async-stream.workspace = true
 async-trait.workspace = true
 faultline.workspace = true
 futures.workspace = true
+henosis-app = { path = "../../crates/henosis-app" }
+henosis-controller-runtime.workspace = true
 henosis-journal.workspace = true
 henosis-orchestrator.workspace = true
 henosis-storage.workspace = true
 henosis-testkit.workspace = true
 henosis-types.workspace = true
+mad-turmoil.workspace = true
+rand-10.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

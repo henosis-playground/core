@@ -50,6 +50,7 @@ use henosis_types::Plan;
 use henosis_types::PublicationId;
 use henosis_types::Resource;
 use henosis_types::ResourceDisposition;
+use henosis_types::ResourceDispositionKind;
 use henosis_types::ResourceId;
 use henosis_types::Retirement;
 use henosis_types::Stall;
@@ -216,30 +217,15 @@ impl Core {
         &mut self,
         graph_id: GraphId,
     ) -> Result<Transition, Error<CommandError, Never, anyhow::Error>> {
-        let cleanup_effects = self.graph(graph_id)?.recovery_cleanup_effects();
         if self.graph(graph_id)?.retired {
             return Ok(Transition {
                 events: Vec::new(),
-                effects: cleanup_effects,
+                effects: self.graph(graph_id)?.controller_commands(),
             });
         }
         self.runtime.insert(graph_id, GraphRuntime::default());
         let mut transition = self.evaluate_graph(graph_id).await?;
-        if transition.effects.is_empty() {
-            let graph = self.graph(graph_id)?;
-            let plan = graph.plan.as_ref().ok_or_else(|| {
-                Error::<CommandError, Never, anyhow::Error>::Invariant(anyhow::anyhow!(
-                    "replayed live graph has no accepted plan"
-                ))
-            })?;
-            let bundles = graph
-                .intent
-                .components()
-                .map(|component| (component.name().clone(), component.bundle()))
-                .collect();
-            transition.effects = dispatch_effects(graph_id, bundles, None, plan);
-        }
-        transition.effects.extend(cleanup_effects);
+        transition.effects = self.graph(graph_id)?.controller_commands();
         Ok(transition)
     }
 
@@ -416,17 +402,24 @@ impl Core {
                 graph.outputs.insert_overwrite(output);
             }
         }
+        let failed = report.dispositions().any(|disposition| {
+            matches!(disposition.kind(), ResourceDispositionKind::Failed { .. })
+        });
         let progress = ControllerProgress::new(
             graph_id,
             report.generation(),
             report.plan_digest(),
             report.controller().clone(),
+            failed,
         );
-        self.graph_mut(graph_id)?.progress.insert((
-            progress.generation(),
-            progress.plan_digest(),
-            progress.controller().clone(),
-        ));
+        self.graph_mut(graph_id)?.progress.insert(
+            (
+                progress.generation(),
+                progress.plan_digest(),
+                progress.controller().clone(),
+            ),
+            progress.failed(),
+        );
 
         let mut transition = Transition {
             events: vec![
@@ -484,7 +477,7 @@ impl Core {
         if graph.retired {
             return Ok(Transition {
                 events: Vec::new(),
-                effects: graph.recovery_cleanup_effects(),
+                effects: graph.controller_commands(),
             });
         }
         let resources = graph
@@ -1107,11 +1100,14 @@ impl MaterializedCore {
                     .get_mut(&progress.graph_id())
                     .expect("progress graph must already exist")
                     .progress
-                    .insert((
-                        progress.generation(),
-                        progress.plan_digest(),
-                        progress.controller().clone(),
-                    ));
+                    .insert(
+                        (
+                            progress.generation(),
+                            progress.plan_digest(),
+                            progress.controller().clone(),
+                        ),
+                        progress.failed(),
+                    );
             }
             CoreEvent::ComponentOutputsReplaced(replacement) => {
                 let mut graph = self
@@ -1186,11 +1182,11 @@ impl MaterializedCore {
 pub struct GraphState {
     intent: GraphIntent,
     plan: Option<Plan>,
-    planned_resources: BTreeMap<ResourceId, Resource>,
+    planned_resources: BTreeMap<(ControllerName, ResourceId), Resource>,
     outputs: IdOrdMap<OutputRecord>,
     reports: IdOrdMap<LatestControllerReport>,
     publications: BTreeSet<(Generation, PublicationId)>,
-    progress: BTreeSet<(Generation, henosis_types::ContentDigest, ControllerName)>,
+    progress: BTreeMap<(Generation, henosis_types::ContentDigest, ControllerName), bool>,
     stall: Option<Stall>,
     retired: bool,
 }
@@ -1204,7 +1200,7 @@ impl GraphState {
             outputs: IdOrdMap::new(),
             reports: IdOrdMap::new(),
             publications: BTreeSet::new(),
-            progress: BTreeSet::new(),
+            progress: BTreeMap::new(),
             stall: None,
             retired: false,
         }
@@ -1219,7 +1215,7 @@ impl GraphState {
         self.planned_resources.extend(
             plan.resources()
                 .cloned()
-                .map(|resource| (resource.id(), resource)),
+                .map(|resource| ((resource.controller().clone(), resource.id()), resource)),
         );
         self.plan = Some(plan);
         self.stall = None;
@@ -1235,17 +1231,12 @@ impl GraphState {
         self.plan.as_ref()
     }
 
-    fn recovery_cleanup_effects(&self) -> Vec<ControllerEffect> {
-        self.controller_commands()
-            .into_iter()
-            .filter(|effect| !matches!(effect.command(), ControllerCommand::Reconcile(_)))
-            .collect()
-    }
-
     #[must_use]
     pub fn controller_commands(&self) -> Vec<ControllerEffect> {
         let mut current = BTreeMap::<ControllerName, Vec<Resource>>::new();
-        if !self.retired && let Some(plan) = &self.plan {
+        if !self.retired
+            && let Some(plan) = &self.plan
+        {
             for resource in plan.resources() {
                 current
                     .entry(resource.controller().clone())
@@ -1254,13 +1245,16 @@ impl GraphState {
             }
         }
         let current_ids = current
-            .values()
-            .flatten()
-            .map(Resource::id)
+            .iter()
+            .flat_map(|(controller, resources)| {
+                resources
+                    .iter()
+                    .map(|resource| (controller.clone(), resource.id()))
+            })
             .collect::<BTreeSet<_>>();
         let mut absent = BTreeMap::<ControllerName, Vec<Resource>>::new();
-        for resource in self.planned_resources.values() {
-            if !current_ids.contains(&resource.id()) {
+        for ((controller, resource_id), resource) in &self.planned_resources {
+            if !current_ids.contains(&(controller.clone(), *resource_id)) {
                 absent
                     .entry(resource.controller().clone())
                     .or_default()
@@ -1275,12 +1269,14 @@ impl GraphState {
         let mut effects = Vec::new();
         for (controller, resources) in current {
             let superseded = absent.remove(&controller).unwrap_or_default();
-            let plan = self.plan.as_ref().expect("current resources require a plan");
-            if self.progress.contains(&(
-                plan.generation(),
-                plan.digest(),
-                controller.clone(),
-            )) {
+            let plan = self
+                .plan
+                .as_ref()
+                .expect("current resources require a plan");
+            if self
+                .progress
+                .contains_key(&(plan.generation(), plan.digest(), controller.clone()))
+            {
                 continue;
             }
             effects.push(ControllerEffect::new(
@@ -1328,7 +1324,19 @@ impl GraphState {
             .into_iter()
             .all(|controller| {
                 self.progress
-                    .contains(&(plan.generation(), plan.digest(), controller))
+                    .contains_key(&(plan.generation(), plan.digest(), controller))
+            })
+    }
+
+    #[must_use]
+    pub fn controller_failed(&self) -> bool {
+        let Some(plan) = &self.plan else {
+            return false;
+        };
+        self.progress
+            .iter()
+            .any(|((generation, digest, _), failed)| {
+                *generation == plan.generation() && *digest == plan.digest() && *failed
             })
     }
 

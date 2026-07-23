@@ -32,7 +32,7 @@ use tokio::sync::mpsc;
 use tracing::error;
 
 #[derive(Clone)]
-pub struct MaterializedGraphs {
+pub(crate) struct MaterializedGraphs {
     evaluator: Arc<dyn Evaluator>,
     journal: Journal,
     registry: Arc<Mutex<RegistryState>>,
@@ -48,7 +48,7 @@ pub struct Application {
 
 pub struct ApplyResult {
     pub graph_id: GraphId,
-    pub transition: Transition,
+    transition: Transition,
     pub state: MaterializedCore,
 }
 
@@ -89,7 +89,7 @@ impl Application {
 }
 
 impl MaterializedGraphs {
-    pub async fn boot(evaluator: Arc<dyn Evaluator>, journal: Journal) -> anyhow::Result<Self> {
+    async fn boot(evaluator: Arc<dyn Evaluator>, journal: Journal) -> anyhow::Result<Self> {
         let (registry_events, tail) = journal.load_registry().await.map_err(storage_error)?;
         let registry = RegistryState::fold(tail, &registry_events);
         let registered = registry.graphs.values().cloned().collect::<Vec<_>>();
@@ -125,7 +125,7 @@ impl MaterializedGraphs {
         Ok(materialized)
     }
 
-    pub async fn apply(&self, command: Command) -> anyhow::Result<ApplyResult> {
+    async fn apply(&self, command: Command) -> anyhow::Result<ApplyResult> {
         match command {
             Command::CreateGraph(new) => self.create_graph(new).await,
             Command::RetireGraph {
@@ -178,12 +178,12 @@ impl MaterializedGraphs {
         }
     }
 
-    pub async fn snapshot(&self, graph_id: GraphId) -> Option<MaterializedCore> {
+    async fn snapshot(&self, graph_id: GraphId) -> Option<MaterializedCore> {
         let actor = self.actors.read().await.get(&graph_id).cloned()?;
         actor.snapshot().await.ok()
     }
 
-    pub async fn snapshots(&self) -> Vec<MaterializedCore> {
+    async fn snapshots(&self) -> Vec<MaterializedCore> {
         let actors = self
             .actors
             .read()
@@ -205,10 +205,12 @@ impl MaterializedGraphs {
     }
 
     async fn controller_effects(&self, graph_id: GraphId) -> Vec<ControllerEffect> {
-        self.snapshot(graph_id)
-            .await
-            .and_then(|state| state.graph(graph_id).cloned())
-            .map(|graph| graph.controller_commands())
+        let Some(state) = self.snapshot(graph_id).await else {
+            return Vec::new();
+        };
+        state
+            .graph(graph_id)
+            .map(henosis_orchestrator::GraphState::controller_commands)
             .unwrap_or_default()
     }
 
@@ -225,12 +227,20 @@ impl MaterializedGraphs {
 
     async fn start_follower(&self, dispatcher: ControllerDispatcher) {
         let registry_tail = self.registry.lock().await.tail;
-        let actors = self.actors.read().await.values().cloned().collect::<Vec<_>>();
+        let actors = self
+            .actors
+            .read()
+            .await
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
         let mut graph_tails = Vec::with_capacity(actors.len());
         for actor in actors {
             graph_tails.push((actor.graph_id, actor.tail().await));
         }
-        let (follower, mut events) = self.journal.follow_all(registry_tail, graph_tails);
+        let subscription = self.journal.follow_all(registry_tail, graph_tails);
+        let follower = subscription.follower;
+        let mut events = subscription.events;
         let graphs = self.clone();
         tokio::spawn(async move {
             while let Some(event) = events.next().await {
@@ -238,6 +248,10 @@ impl MaterializedGraphs {
                     Ok(JournalEvent::Registry(_)) => {
                         if let Err(error) = graphs.refresh_registry(&follower).await {
                             error!(%error, "registry follower refresh failed");
+                            continue;
+                        }
+                        for graph_id in graphs.graph_ids().await {
+                            dispatcher.wake(graph_id);
                         }
                     }
                     Ok(JournalEvent::Graph(graph_id, _)) => {
@@ -248,13 +262,16 @@ impl MaterializedGraphs {
                         let _ = graphs.changes.send(graph_id);
                         dispatcher.wake(graph_id);
                     }
-                    Err(error) => error!(%error, "journal follower stopped"),
+                    Err(error) => error!(%error, "journal follower read failed; retrying"),
                 }
             }
         });
     }
 
-    async fn refresh_registry(&self, follower: &henosis_journal::JournalFollower) -> anyhow::Result<()> {
+    async fn refresh_registry(
+        &self,
+        follower: &henosis_journal::JournalFollower,
+    ) -> anyhow::Result<()> {
         let (events, tail) = self.journal.load_registry().await.map_err(storage_error)?;
         let refreshed = RegistryState::fold(tail, &events);
         let registrations = refreshed.graphs.values().cloned().collect::<Vec<_>>();
@@ -463,11 +480,7 @@ impl ControllerDispatcher {
                 for effect in graphs.controller_effects(graph_id).await {
                     let key = ControllerWorkKey::new(graph_id, effect.controller().clone());
                     let lane = lanes.entry(key.clone()).or_insert_with(|| {
-                        spawn_controller_lane(
-                            key,
-                            graphs.clone(),
-                            Arc::clone(&controllers),
-                        )
+                        spawn_controller_lane(key, graphs.clone(), Arc::clone(&controllers))
                     });
                     let _ = lane.try_send(());
                 }
@@ -934,7 +947,8 @@ mod tests {
             resources: Vec::new(),
             static_outputs: BTreeMap::new(),
         });
-        let first = MaterializedGraphs::boot(evaluator.clone(), Journal::new(Arc::new(storage.clone())))
+        let first =
+            MaterializedGraphs::boot(evaluator.clone(), Journal::new(Arc::new(storage.clone())))
                 .await
                 .expect("first materializer boots");
         let graph_id = GraphId::from_bytes([45; 16]);
@@ -943,8 +957,8 @@ mod tests {
             .await
             .expect("graph is created");
         let second = MaterializedGraphs::boot(evaluator, Journal::new(Arc::new(storage.clone())))
-                .await
-                .expect("second materializer boots from the graph stream");
+            .await
+            .expect("second materializer boots from the graph stream");
 
         first
             .apply(Command::UpdateGraph {
@@ -992,7 +1006,8 @@ mod tests {
             resources: Vec::new(),
             static_outputs: BTreeMap::new(),
         });
-        let first = MaterializedGraphs::boot(evaluator.clone(), Journal::new(Arc::new(storage.clone())))
+        let first =
+            MaterializedGraphs::boot(evaluator.clone(), Journal::new(Arc::new(storage.clone())))
                 .await
                 .expect("first materializer boots");
         let graph_id = GraphId::from_bytes([48; 16]);
@@ -1028,12 +1043,13 @@ mod tests {
             resources: Vec::new(),
             static_outputs: BTreeMap::new(),
         });
-        let first = MaterializedGraphs::boot(evaluator.clone(), Journal::new(Arc::new(storage.clone())))
+        let first =
+            MaterializedGraphs::boot(evaluator.clone(), Journal::new(Arc::new(storage.clone())))
                 .await
                 .expect("first materializer boots");
         let second = MaterializedGraphs::boot(evaluator, Journal::new(Arc::new(storage.clone())))
-                .await
-                .expect("second materializer boots with the same empty registry");
+            .await
+            .expect("second materializer boots with the same empty registry");
 
         first
             .apply(Command::CreateGraph(graph(
@@ -1136,8 +1152,8 @@ mod tests {
             static_outputs: BTreeMap::new(),
         });
         let graphs = MaterializedGraphs::boot(evaluator.clone(), Journal::new(Arc::new(storage)))
-                .await
-                .expect("empty materialization boots");
+            .await
+            .expect("empty materialization boots");
         (graphs, evaluator, bundle)
     }
 

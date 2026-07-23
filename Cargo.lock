@@ -1326,13 +1326,11 @@ dependencies = [
  "faultline",
  "futures",
  "henosis-app",
- "henosis-controller-runtime",
  "henosis-evaluation-engine",
  "henosis-journal",
  "henosis-orchestrator",
  "henosis-proto",
  "henosis-server-assembly",
- "henosis-storage",
  "henosis-testkit",
  "henosis-types",
  "reqwest",
@@ -1374,14 +1372,19 @@ name = "henosis-distributed-core-tests"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "async-stream",
  "async-trait",
  "faultline",
  "futures",
+ "henosis-app",
+ "henosis-controller-runtime",
  "henosis-journal",
  "henosis-orchestrator",
  "henosis-storage",
  "henosis-testkit",
  "henosis-types",
+ "mad-turmoil",
+ "rand 0.10.2",
  "serde",
  "serde_json",
  "tokio",
@@ -1479,10 +1482,8 @@ dependencies = [
  "henosis-controller-runtime",
  "henosis-controller-supabase",
  "henosis-evaluation-engine",
- "henosis-orchestrator",
  "henosis-types",
  "serde_json",
- "tokio",
  "tracing",
  "workspace-hack",
 ]
@@ -2061,6 +2062,18 @@ name = "log"
 version = "0.4.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
+
+[[package]]
+name = "mad-turmoil"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "06138aebc1442e86b201f492616a51690a758d7b75253162f9e9208382ca2bb7"
+dependencies = [
+ "libc",
+ "rand 0.10.2",
+ "tokio",
+ "turmoil",
+]
 
 [[package]]
 name = "matchers"

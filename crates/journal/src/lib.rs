@@ -12,10 +12,10 @@
 //! generations and plans, component/static-output replacements, observed-output
 //! publications, stalls, and retirement. The root registry stream carries graph
 //! registration and retirement so graph streams can be discovered after a cold
-//! start. Controller dispositions are level reports, not log-shaped facts: a
-//! controller re-observes and re-reports them on every pass, so they
-//! deliberately remain memory-only. When a report includes an output
-//! publication, only the generation-scoped `OutputsPublished` fact is durable.
+//! start. Full controller reports stay level-only and memory-only. One small
+//! generation-and-plan-scoped completion fact is durable so every node reaches
+//! the same quiescence decision. Output-bearing reports also append the
+//! generation-scoped `OutputsPublished` fact.
 
 use std::collections::BTreeMap;
 use std::str::FromStr as _;
@@ -95,6 +95,14 @@ impl JournalFollower {
     pub fn add_graph(&self, graph_id: GraphId, from: StreamPosition) {
         let _ = self.additions.send((graph_stream(graph_id), from));
     }
+}
+
+pub struct JournalSubscription {
+    pub follower: JournalFollower,
+    pub events: BoxStream<
+        'static,
+        Result<JournalEvent, Error<StorageDomainError, anyhow::Error, anyhow::Error>>,
+    >,
 }
 
 #[derive(Clone)]
@@ -195,40 +203,19 @@ impl Journal {
         Ok((events, tail))
     }
 
-    pub fn follow(
-        &self,
-        graph_id: GraphId,
-        from: StreamPosition,
-    ) -> BoxStream<
-        'static,
-        Result<CoreEvent, Error<StorageDomainError, anyhow::Error, anyhow::Error>>,
-    > {
-        Box::pin(
-            self.storage
-                .follow(graph_stream(graph_id), from)
-                .map(|record| record.and_then(decode_graph_record)),
-        )
-    }
-
     pub fn follow_all(
         &self,
         registry_from: StreamPosition,
         graphs: impl IntoIterator<Item = (GraphId, StreamPosition)>,
-    ) -> (
-        JournalFollower,
-        BoxStream<
-            'static,
-            Result<JournalEvent, Error<StorageDomainError, anyhow::Error, anyhow::Error>>,
-        >,
-    ) {
+    ) -> JournalSubscription {
         let streams = std::iter::once((registry_stream(), registry_from)).chain(
             graphs
                 .into_iter()
                 .map(|(graph_id, from)| (graph_stream(graph_id), from)),
         );
-        let (additions, merged) =
+        let subscription =
             henosis_multi_stream_merge::subscribe_dynamic(Arc::clone(&self.storage), streams);
-        let events = merged.map(|item| {
+        let events = subscription.records.map(|item| {
             item.and_then(|item| {
                 let record = item.record().clone();
                 if record.stream() == &registry_stream() {
@@ -247,7 +234,12 @@ impl Journal {
                 decode_graph_record(record).map(|event| JournalEvent::Graph(graph_id, event))
             })
         });
-        (JournalFollower { additions }, Box::pin(events))
+        JournalSubscription {
+            follower: JournalFollower {
+                additions: subscription.additions,
+            },
+            events: Box::pin(events),
+        }
     }
 
     async fn append_records<'a>(

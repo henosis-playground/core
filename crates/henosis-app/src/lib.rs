@@ -24,7 +24,6 @@ pub use bundle::VerifiedBundleDirectory;
 pub use bundle::WorkloadArtifactKind;
 pub use bundle::verify_bundle_directory;
 pub use henosis_types::GraphSourcePolicy;
+pub use henosis_types::SourceProvenance;
 pub use runtime::Application;
 pub use runtime::ApplyResult;
-pub use runtime::MaterializedGraphs;
-pub use henosis_types::SourceProvenance;
