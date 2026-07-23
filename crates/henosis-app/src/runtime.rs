@@ -1,7 +1,13 @@
 use std::collections::BTreeMap;
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
+use std::time::Duration;
 
+use futures::FutureExt as _;
+use futures::StreamExt as _;
+use henosis_controller_runtime::ControllerWorkKey;
 use henosis_journal::Journal;
+use henosis_journal::JournalEvent;
 use henosis_journal::RegistryEvent;
 use henosis_journal::is_durable;
 use henosis_orchestrator::Command;
@@ -11,6 +17,9 @@ use henosis_orchestrator::MaterializedCore;
 use henosis_orchestrator::Transition;
 use henosis_storage::StorageDomainError;
 use henosis_storage::StreamPosition;
+use henosis_types::Controller;
+use henosis_types::ControllerName;
+use henosis_types::ControllerPass;
 use henosis_types::CoreEvent;
 use henosis_types::Evaluator;
 use henosis_types::Generation;
@@ -18,44 +27,85 @@ use henosis_types::GraphId;
 use henosis_types::GraphIntent;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
+use tokio::sync::broadcast;
+use tokio::sync::mpsc;
+use tracing::error;
 
 #[derive(Clone)]
-pub(crate) struct MaterializedGraphs {
+pub struct MaterializedGraphs {
     evaluator: Arc<dyn Evaluator>,
     journal: Journal,
     registry: Arc<Mutex<RegistryState>>,
     actors: Arc<RwLock<BTreeMap<GraphId, Arc<GraphActor>>>>,
+    changes: broadcast::Sender<GraphId>,
 }
 
-pub(crate) struct ApplyResult {
+#[derive(Clone)]
+pub struct Application {
+    graphs: MaterializedGraphs,
+    dispatcher: ControllerDispatcher,
+}
+
+pub struct ApplyResult {
     pub graph_id: GraphId,
     pub transition: Transition,
     pub state: MaterializedCore,
 }
 
-impl MaterializedGraphs {
-    pub(crate) async fn boot(
+impl Application {
+    pub async fn start(
         evaluator: Arc<dyn Evaluator>,
         journal: Journal,
-    ) -> anyhow::Result<(Self, Vec<ControllerEffect>)> {
+        controllers: BTreeMap<ControllerName, Arc<dyn Controller>>,
+    ) -> anyhow::Result<Self> {
+        let graphs = MaterializedGraphs::boot(evaluator, journal).await?;
+        let dispatcher = ControllerDispatcher::start(graphs.clone(), controllers);
+        graphs.start_follower(dispatcher.clone()).await;
+        for graph_id in graphs.graph_ids().await {
+            dispatcher.wake(graph_id);
+        }
+        Ok(Self { graphs, dispatcher })
+    }
+
+    pub async fn apply(&self, command: Command) -> anyhow::Result<ApplyResult> {
+        let result = self.graphs.apply(command).await?;
+        let _ = self.graphs.changes.send(result.graph_id);
+        self.dispatcher.wake(result.graph_id);
+        Ok(result)
+    }
+
+    pub async fn snapshot(&self, graph_id: GraphId) -> Option<MaterializedCore> {
+        self.graphs.snapshot(graph_id).await
+    }
+
+    pub async fn snapshots(&self) -> Vec<MaterializedCore> {
+        self.graphs.snapshots().await
+    }
+
+    #[must_use]
+    pub fn subscribe(&self) -> broadcast::Receiver<GraphId> {
+        self.graphs.changes.subscribe()
+    }
+}
+
+impl MaterializedGraphs {
+    pub async fn boot(evaluator: Arc<dyn Evaluator>, journal: Journal) -> anyhow::Result<Self> {
         let (registry_events, tail) = journal.load_registry().await.map_err(storage_error)?;
         let registry = RegistryState::fold(tail, &registry_events);
         let registered = registry.graphs.values().cloned().collect::<Vec<_>>();
+        let (changes, _) = broadcast::channel(256);
         let materialized = Self {
             evaluator,
             journal,
             registry: Arc::new(Mutex::new(registry)),
             actors: Arc::new(RwLock::new(BTreeMap::new())),
+            changes,
         };
 
-        let mut effects = Vec::new();
         for registration in registered {
-            let Some((actor, resumed)) =
-                materialized.load_actor(registration.intent.clone()).await?
-            else {
+            let Some(actor) = materialized.load_actor(registration.intent.clone()).await? else {
                 continue;
             };
-            effects.extend(resumed);
             let state = actor.snapshot().await?;
             let retired_generation = state
                 .graph(registration.intent.id())
@@ -72,10 +122,10 @@ impl MaterializedGraphs {
                     .await?;
             }
         }
-        Ok((materialized, effects))
+        Ok(materialized)
     }
 
-    pub(crate) async fn apply(&self, command: Command) -> anyhow::Result<ApplyResult> {
+    pub async fn apply(&self, command: Command) -> anyhow::Result<ApplyResult> {
         match command {
             Command::CreateGraph(new) => self.create_graph(new).await,
             Command::RetireGraph {
@@ -128,12 +178,12 @@ impl MaterializedGraphs {
         }
     }
 
-    pub(crate) async fn snapshot(&self, graph_id: GraphId) -> Option<MaterializedCore> {
+    pub async fn snapshot(&self, graph_id: GraphId) -> Option<MaterializedCore> {
         let actor = self.actors.read().await.get(&graph_id).cloned()?;
         actor.snapshot().await.ok()
     }
 
-    pub(crate) async fn snapshots(&self) -> Vec<MaterializedCore> {
+    pub async fn snapshots(&self) -> Vec<MaterializedCore> {
         let actors = self
             .actors
             .read()
@@ -148,6 +198,102 @@ impl MaterializedGraphs {
             }
         }
         states
+    }
+
+    async fn graph_ids(&self) -> Vec<GraphId> {
+        self.actors.read().await.keys().copied().collect()
+    }
+
+    async fn controller_effects(&self, graph_id: GraphId) -> Vec<ControllerEffect> {
+        self.snapshot(graph_id)
+            .await
+            .and_then(|state| state.graph(graph_id).cloned())
+            .map(|graph| graph.controller_commands())
+            .unwrap_or_default()
+    }
+
+    async fn controller_command(
+        &self,
+        key: &ControllerWorkKey,
+    ) -> Option<henosis_types::ControllerCommand> {
+        self.controller_effects(key.graph_id())
+            .await
+            .into_iter()
+            .find(|effect| effect.controller() == key.controller())
+            .map(|effect| effect.command().clone())
+    }
+
+    async fn start_follower(&self, dispatcher: ControllerDispatcher) {
+        let registry_tail = self.registry.lock().await.tail;
+        let actors = self.actors.read().await.values().cloned().collect::<Vec<_>>();
+        let mut graph_tails = Vec::with_capacity(actors.len());
+        for actor in actors {
+            graph_tails.push((actor.graph_id, actor.tail().await));
+        }
+        let (follower, mut events) = self.journal.follow_all(registry_tail, graph_tails);
+        let graphs = self.clone();
+        tokio::spawn(async move {
+            while let Some(event) = events.next().await {
+                match event {
+                    Ok(JournalEvent::Registry(_)) => {
+                        if let Err(error) = graphs.refresh_registry(&follower).await {
+                            error!(%error, "registry follower refresh failed");
+                        }
+                    }
+                    Ok(JournalEvent::Graph(graph_id, _)) => {
+                        if let Err(error) = graphs.refresh_graph(graph_id).await {
+                            error!(%graph_id, %error, "graph follower refresh failed");
+                            continue;
+                        }
+                        let _ = graphs.changes.send(graph_id);
+                        dispatcher.wake(graph_id);
+                    }
+                    Err(error) => error!(%error, "journal follower stopped"),
+                }
+            }
+        });
+    }
+
+    async fn refresh_registry(&self, follower: &henosis_journal::JournalFollower) -> anyhow::Result<()> {
+        let (events, tail) = self.journal.load_registry().await.map_err(storage_error)?;
+        let refreshed = RegistryState::fold(tail, &events);
+        let registrations = refreshed.graphs.values().cloned().collect::<Vec<_>>();
+        *self.registry.lock().await = refreshed;
+        for registration in registrations {
+            let graph_id = registration.intent.id();
+            if let Some(actor) = self.actors.read().await.get(&graph_id).cloned() {
+                follower.add_graph(graph_id, actor.tail().await);
+                continue;
+            }
+            if let Some(actor) = self.load_actor(registration.intent).await? {
+                let tail = actor.tail().await;
+                self.actors.write().await.insert(graph_id, Arc::new(actor));
+                follower.add_graph(graph_id, tail);
+                let _ = self.changes.send(graph_id);
+            } else {
+                follower.add_graph(graph_id, StreamPosition::default());
+            }
+        }
+        Ok(())
+    }
+
+    async fn refresh_graph(&self, graph_id: GraphId) -> anyhow::Result<()> {
+        if let Some(actor) = self.actors.read().await.get(&graph_id).cloned() {
+            actor.snapshot().await?;
+            return Ok(());
+        }
+        let registration = self
+            .registry
+            .lock()
+            .await
+            .graphs
+            .get(&graph_id)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("graph follower observed an unregistered graph"))?;
+        if let Some(actor) = self.load_actor(registration.intent).await? {
+            self.actors.write().await.insert(graph_id, Arc::new(actor));
+        }
+        Ok(())
     }
 
     async fn create_graph(
@@ -182,7 +328,7 @@ impl MaterializedGraphs {
             let mut registry = self.registry.lock().await;
             loop {
                 let event = if let Some(registration) = registry.graphs.get(&graph_id).cloned() {
-                    if let Some((loaded, _)) = self.load_actor(registration.intent.clone()).await? {
+                    if let Some(loaded) = self.load_actor(registration.intent.clone()).await? {
                         self.actors.write().await.insert(graph_id, Arc::new(loaded));
                         return Err(anyhow::anyhow!("graph already exists"));
                     }
@@ -275,7 +421,7 @@ impl MaterializedGraphs {
     async fn load_actor(
         &self,
         registered_intent: GraphIntent,
-    ) -> anyhow::Result<Option<(GraphActor, Vec<ControllerEffect>)>> {
+    ) -> anyhow::Result<Option<GraphActor>> {
         let graph_id = registered_intent.id();
         let (events, tail) = self
             .journal
@@ -293,9 +439,121 @@ impl MaterializedGraphs {
             self.journal.clone(),
             tail,
         );
-        let effects = actor.resume().await?;
-        Ok(Some((actor, effects)))
+        actor.resume().await?;
+        Ok(Some(actor))
     }
+}
+
+#[derive(Clone)]
+struct ControllerDispatcher {
+    wakes: mpsc::UnboundedSender<GraphId>,
+}
+
+impl ControllerDispatcher {
+    fn start(
+        graphs: MaterializedGraphs,
+        controllers: BTreeMap<ControllerName, Arc<dyn Controller>>,
+    ) -> Self {
+        let (wakes, mut incoming) = mpsc::unbounded_channel();
+        let sender = wakes.clone();
+        tokio::spawn(async move {
+            let controllers = Arc::new(controllers);
+            let mut lanes = BTreeMap::<ControllerWorkKey, mpsc::Sender<()>>::new();
+            while let Some(graph_id) = incoming.recv().await {
+                for effect in graphs.controller_effects(graph_id).await {
+                    let key = ControllerWorkKey::new(graph_id, effect.controller().clone());
+                    let lane = lanes.entry(key.clone()).or_insert_with(|| {
+                        spawn_controller_lane(
+                            key,
+                            graphs.clone(),
+                            Arc::clone(&controllers),
+                        )
+                    });
+                    let _ = lane.try_send(());
+                }
+            }
+        });
+        Self { wakes: sender }
+    }
+
+    fn wake(&self, graph_id: GraphId) {
+        let _ = self.wakes.send(graph_id);
+    }
+}
+
+fn spawn_controller_lane(
+    key: ControllerWorkKey,
+    graphs: MaterializedGraphs,
+    controllers: Arc<BTreeMap<ControllerName, Arc<dyn Controller>>>,
+) -> mpsc::Sender<()> {
+    let (wake, mut incoming) = mpsc::channel(1);
+    tokio::spawn(async move {
+        while incoming.recv().await.is_some() {
+            let mut attempt = 0_u32;
+            loop {
+                let Some(command) = graphs.controller_command(&key).await else {
+                    break;
+                };
+                let outcome = AssertUnwindSafe(async {
+                    let Some(controller) = controllers.get(key.controller()) else {
+                        return ControllerPass::Retryable(format!(
+                            "no controller named {}",
+                            key.controller()
+                        ));
+                    };
+                    controller
+                        .execute(&command)
+                        .await
+                        .unwrap_or_else(|error| ControllerPass::Retryable(error.to_string()))
+                })
+                .catch_unwind()
+                .await
+                .unwrap_or_else(|_| ControllerPass::Retryable("controller pass panicked".into()));
+                match outcome {
+                    ControllerPass::Acted => attempt = 0,
+                    ControllerPass::Converged(Some(report)) | ControllerPass::Failed(report) => {
+                        match graphs.apply(Command::ReportController(report)).await {
+                            Ok(result) => {
+                                let _ = graphs.changes.send(result.graph_id);
+                                break;
+                            }
+                            Err(error) => {
+                                attempt = attempt.saturating_add(1);
+                                error!(
+                                    graph = %key.graph_id(),
+                                    controller = %key.controller(),
+                                    %error,
+                                    "controller progress append failed; retrying",
+                                );
+                                tokio::time::sleep(retry_delay(attempt)).await;
+                            }
+                        }
+                    }
+                    ControllerPass::Converged(None) => break,
+                    ControllerPass::Retryable(message) => {
+                        attempt = attempt.saturating_add(1);
+                        error!(
+                            graph = %key.graph_id(),
+                            controller = %key.controller(),
+                            %message,
+                            "controller pass failed; retrying from fresh projection",
+                        );
+                        tokio::time::sleep(retry_delay(attempt)).await;
+                    }
+                }
+            }
+        }
+    });
+    wake
+}
+
+fn retry_delay(attempt: u32) -> Duration {
+    Duration::from_secs(
+        1_u64
+            .checked_shl(attempt.saturating_sub(1).min(5))
+            .unwrap_or(32)
+            .min(30),
+    )
 }
 
 struct GraphActor {
@@ -540,6 +798,10 @@ impl GraphActor {
         self.refresh_authoritative(&mut state).await?;
         Ok(state.core.state().clone())
     }
+
+    async fn tail(&self) -> StreamPosition {
+        self.state.lock().await.tail
+    }
 }
 
 #[derive(Clone)]
@@ -672,8 +934,7 @@ mod tests {
             resources: Vec::new(),
             static_outputs: BTreeMap::new(),
         });
-        let (first, _) =
-            MaterializedGraphs::boot(evaluator.clone(), Journal::new(Arc::new(storage.clone())))
+        let first = MaterializedGraphs::boot(evaluator.clone(), Journal::new(Arc::new(storage.clone())))
                 .await
                 .expect("first materializer boots");
         let graph_id = GraphId::from_bytes([45; 16]);
@@ -681,8 +942,7 @@ mod tests {
             .apply(Command::CreateGraph(graph(graph_id, bundle, 1)))
             .await
             .expect("graph is created");
-        let (second, _) =
-            MaterializedGraphs::boot(evaluator, Journal::new(Arc::new(storage.clone())))
+        let second = MaterializedGraphs::boot(evaluator, Journal::new(Arc::new(storage.clone())))
                 .await
                 .expect("second materializer boots from the graph stream");
 
@@ -732,8 +992,7 @@ mod tests {
             resources: Vec::new(),
             static_outputs: BTreeMap::new(),
         });
-        let (first, _) =
-            MaterializedGraphs::boot(evaluator.clone(), Journal::new(Arc::new(storage.clone())))
+        let first = MaterializedGraphs::boot(evaluator.clone(), Journal::new(Arc::new(storage.clone())))
                 .await
                 .expect("first materializer boots");
         let graph_id = GraphId::from_bytes([48; 16]);
@@ -741,7 +1000,7 @@ mod tests {
             .apply(Command::CreateGraph(graph(graph_id, bundle, 1)))
             .await
             .expect("graph is created");
-        let (second, _) = MaterializedGraphs::boot(evaluator, Journal::new(Arc::new(storage)))
+        let second = MaterializedGraphs::boot(evaluator, Journal::new(Arc::new(storage)))
             .await
             .expect("second materializer boots");
 
@@ -769,12 +1028,10 @@ mod tests {
             resources: Vec::new(),
             static_outputs: BTreeMap::new(),
         });
-        let (first, _) =
-            MaterializedGraphs::boot(evaluator.clone(), Journal::new(Arc::new(storage.clone())))
+        let first = MaterializedGraphs::boot(evaluator.clone(), Journal::new(Arc::new(storage.clone())))
                 .await
                 .expect("first materializer boots");
-        let (second, _) =
-            MaterializedGraphs::boot(evaluator, Journal::new(Arc::new(storage.clone())))
+        let second = MaterializedGraphs::boot(evaluator, Journal::new(Arc::new(storage.clone())))
                 .await
                 .expect("second materializer boots with the same empty registry");
 
@@ -835,7 +1092,7 @@ mod tests {
             .expect("a different create supersedes the abandoned registration");
         assert_eq!(component_revision(&result.state, graph_id), revision(2));
 
-        let (rebooted, _) = MaterializedGraphs::boot(evaluator, Journal::new(Arc::new(storage)))
+        let rebooted = MaterializedGraphs::boot(evaluator, Journal::new(Arc::new(storage)))
             .await
             .expect("registry supersession replays");
         let snapshot = rebooted.snapshot(graph_id).await.expect("graph replays");
@@ -878,11 +1135,9 @@ mod tests {
             resources: Vec::new(),
             static_outputs: BTreeMap::new(),
         });
-        let (graphs, effects) =
-            MaterializedGraphs::boot(evaluator.clone(), Journal::new(Arc::new(storage)))
+        let graphs = MaterializedGraphs::boot(evaluator.clone(), Journal::new(Arc::new(storage)))
                 .await
                 .expect("empty materialization boots");
-        assert!(effects.is_empty());
         (graphs, evaluator, bundle)
     }
 

@@ -6,6 +6,7 @@
 //! underlying independent streams cannot provide.
 
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -49,6 +50,60 @@ impl MergedRecord {
     pub const fn record(&self) -> &StoredRecord {
         &self.record
     }
+}
+
+pub fn subscribe_dynamic(
+    storage: Arc<dyn StorageEngine>,
+    streams: impl IntoIterator<Item = (StreamName, StreamPosition)>,
+) -> (
+    tokio::sync::mpsc::UnboundedSender<(StreamName, StreamPosition)>,
+    BoxStream<
+        'static,
+        Result<MergedRecord, Error<StorageDomainError, anyhow::Error, anyhow::Error>>,
+    >,
+) {
+    let (add, mut additions) =
+        tokio::sync::mpsc::unbounded_channel::<(StreamName, StreamPosition)>();
+    let mut known = BTreeSet::new();
+    let mut followers = futures::stream::SelectAll::new();
+    for (stream, from) in streams {
+        if known.insert(stream.clone()) {
+            followers.push(storage.follow(stream, from));
+        }
+    }
+    let merged = async_stream::stream! {
+        let mut offset = 0_u64;
+        loop {
+            if followers.is_empty() {
+                let Some((stream, from)) = additions.recv().await else {
+                    break;
+                };
+                if known.insert(stream.clone()) {
+                    followers.push(storage.follow(stream, from));
+                }
+                continue;
+            }
+            tokio::select! {
+                addition = additions.recv() => {
+                    let Some((stream, from)) = addition else {
+                        while let Some(item) = followers.next().await {
+                            yield item.map(|record| MergedRecord::new(offset, record));
+                            offset = offset.saturating_add(1);
+                        }
+                        break;
+                    };
+                    if known.insert(stream.clone()) {
+                        followers.push(storage.follow(stream, from));
+                    }
+                }
+                Some(item) = followers.next() => {
+                    yield item.map(|record| MergedRecord::new(offset, record));
+                    offset = offset.saturating_add(1);
+                }
+            }
+        }
+    };
+    (add, Box::pin(merged))
 }
 
 pub async fn subscribe(

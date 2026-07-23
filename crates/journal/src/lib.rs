@@ -18,6 +18,7 @@
 //! publication, only the generation-scoped `OutputsPublished` fact is durable.
 
 use std::collections::BTreeMap;
+use std::str::FromStr as _;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -77,6 +78,23 @@ pub enum RegistryEvent {
         graph_id: GraphId,
         last_generation: Generation,
     },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum JournalEvent {
+    Registry(RegistryEvent),
+    Graph(GraphId, CoreEvent),
+}
+
+#[derive(Clone)]
+pub struct JournalFollower {
+    additions: tokio::sync::mpsc::UnboundedSender<(StreamName, StreamPosition)>,
+}
+
+impl JournalFollower {
+    pub fn add_graph(&self, graph_id: GraphId, from: StreamPosition) {
+        let _ = self.additions.send((graph_stream(graph_id), from));
+    }
 }
 
 #[derive(Clone)]
@@ -190,6 +208,46 @@ impl Journal {
                 .follow(graph_stream(graph_id), from)
                 .map(|record| record.and_then(decode_graph_record)),
         )
+    }
+
+    pub fn follow_all(
+        &self,
+        registry_from: StreamPosition,
+        graphs: impl IntoIterator<Item = (GraphId, StreamPosition)>,
+    ) -> (
+        JournalFollower,
+        BoxStream<
+            'static,
+            Result<JournalEvent, Error<StorageDomainError, anyhow::Error, anyhow::Error>>,
+        >,
+    ) {
+        let streams = std::iter::once((registry_stream(), registry_from)).chain(
+            graphs
+                .into_iter()
+                .map(|(graph_id, from)| (graph_stream(graph_id), from)),
+        );
+        let (additions, merged) =
+            henosis_multi_stream_merge::subscribe_dynamic(Arc::clone(&self.storage), streams);
+        let events = merged.map(|item| {
+            item.and_then(|item| {
+                let record = item.record().clone();
+                if record.stream() == &registry_stream() {
+                    return decode_registry_record(record).map(JournalEvent::Registry);
+                }
+                let graph_id = record
+                    .stream()
+                    .as_str()
+                    .strip_prefix("graph-")
+                    .and_then(|value| GraphId::from_str(value).ok())
+                    .ok_or_else(|| {
+                        Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Invariant(
+                            anyhow::anyhow!("invalid graph journal stream {}", record.stream()),
+                        )
+                    })?;
+                decode_graph_record(record).map(|event| JournalEvent::Graph(graph_id, event))
+            })
+        });
+        (JournalFollower { additions }, Box::pin(events))
     }
 
     async fn append_records<'a>(

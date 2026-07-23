@@ -9,10 +9,6 @@ use futures::future::BoxFuture;
 use henosis_controller_cloudflare::CloudflareController;
 use henosis_controller_k8s::K8sController;
 use henosis_controller_k8s::K8sTarget;
-use henosis_controller_runtime::ControllerDesiredState;
-use henosis_controller_runtime::ControllerSchedule;
-use henosis_controller_runtime::ControllerScheduleCompletion;
-use henosis_controller_runtime::ScheduledControllerReport;
 use henosis_controller_supabase::SupabaseController;
 use henosis_orchestrator::Command;
 use henosis_orchestrator::Core;
@@ -98,9 +94,8 @@ pub struct RealControllerWorld {
     core: Core,
     graph_id: GraphId,
     component: ComponentName,
-    desired: ControllerDesiredState,
-    controller_schedule: ControllerSchedule,
-    ready: BTreeMap<(ControllerName, Generation), ScheduledControllerReport>,
+    desired: BTreeMap<ControllerName, ControllerCommand>,
+    ready: BTreeMap<(ControllerName, Generation), ControllerReport>,
     delivered: BTreeMap<(ControllerName, Generation), ControllerReport>,
     events: Vec<henosis_types::CoreEvent>,
     trace: TraceRecorder,
@@ -141,8 +136,7 @@ impl RealControllerWorld {
             core,
             graph_id,
             component,
-            desired: ControllerDesiredState::default(),
-            controller_schedule: ControllerSchedule::default(),
+            desired: BTreeMap::new(),
             ready: BTreeMap::new(),
             delivered: BTreeMap::new(),
             events: Vec::new(),
@@ -183,11 +177,12 @@ impl RealControllerWorld {
     #[must_use]
     pub fn enabled_actions(&self) -> Vec<RealControllerAction> {
         let mut actions = Vec::new();
-        actions.extend(self.controller_schedule.passes(&self.desired).map(|pass| {
-            RealControllerAction::ControllerPass {
-                controller: pass.key().controller().clone(),
-            }
-        }));
+        actions.extend(
+            self.desired
+                .keys()
+                .cloned()
+                .map(|controller| RealControllerAction::ControllerPass { controller }),
+        );
         actions.extend(self.ready.keys().cloned().map(|(controller, generation)| {
             RealControllerAction::DeliverReport {
                 controller,
@@ -254,18 +249,18 @@ impl RealControllerWorld {
     }
 
     pub async fn reintroduce_during_held_k8s_cleanup(&mut self) -> bool {
-        let ready = self
-            .controller_schedule
-            .passes(&self.desired)
-            .find(|pass| {
-                pass.key().controller().as_str() == "k8s"
-                    && matches!(
-                        pass.command(),
-                        ControllerCommand::Reconcile(slice) if !slice.superseded().is_empty()
-                    )
+        let command = self
+            .desired
+            .get(&ControllerName::new("k8s").expect("controller name is valid"))
+            .filter(|command| {
+                matches!(
+                    command,
+                    ControllerCommand::Reconcile(slice) if !slice.superseded().is_empty()
+                )
             })
+            .cloned()
             .expect("Kubernetes cleanup pass is ready");
-        let resource = match ready.command() {
+        let resource = match &command {
             ControllerCommand::Reconcile(slice) => slice
                 .superseded()
                 .first()
@@ -273,20 +268,14 @@ impl RealControllerWorld {
                 .clone(),
             _ => unreachable!(),
         };
-        let pass = self
-            .controller_schedule
-            .pass(ready.key(), &self.desired)
-            .expect("Kubernetes cleanup pass starts");
         let before = self.k8s_target.action_count(resource.id());
         let hold = self.k8s_target.hold_after_observation_of(resource.id());
         let controller = K8sController::new(self.k8s_target.clone());
-        let running = pass.clone();
         let completion = tokio::spawn(async move {
-            let outcome = controller
-                .execute(running.command())
+            controller
+                .execute(&command)
                 .await
-                .expect("held Kubernetes cleanup pass executes");
-            (running, outcome)
+                .expect("held Kubernetes cleanup pass executes")
         });
 
         hold.wait().await;
@@ -300,11 +289,7 @@ impl RealControllerWorld {
             .write_resource(self.graph_id, &resource, &reintroduced)
             .expect("target identity is reintroduced before stale delete");
         hold.release();
-        let (stale, outcome) = completion.await.expect("held cleanup task joins");
-        assert_eq!(
-            self.controller_schedule.complete(&stale, outcome),
-            ControllerScheduleCompletion::Continue
-        );
+        let _outcome = completion.await.expect("held cleanup task joins");
 
         self.k8s_target.action_count(resource.id()) == before + 1
             && self.k8s_target.contains(self.graph_id, resource.id())
@@ -325,7 +310,7 @@ impl RealControllerWorld {
     pub async fn crash_restart_core(&mut self) {
         let state = MaterializedCore::fold(&self.events);
         self.core = Core::from_materialized(self.evaluator.clone(), state);
-        self.controller_schedule = ControllerSchedule::default();
+        self.desired.clear();
         self.ready.clear();
         self.delivered.clear();
         let transition = self
@@ -505,40 +490,32 @@ impl RealControllerWorld {
     }
 
     async fn apply_controller_pass(&mut self, controller: &ControllerName) -> String {
-        let Some(key) = self
-            .controller_schedule
-            .passes(&self.desired)
-            .find(|pass| pass.key().controller() == controller)
-            .map(|pass| pass.key().clone())
-        else {
+        let Some(command) = self.desired.get(controller).cloned() else {
             return "cancelled stale work".to_owned();
         };
-        let pass = self
-            .controller_schedule
-            .pass(&key, &self.desired)
-            .expect("enabled controller key dequeues once");
         let result = match controller.as_str() {
-            "k8s" => self.k8s.execute(pass.command()).await,
-            "cloudflare" => self.cloudflare.execute(pass.command()).await,
-            "supabase" => self.supabase.execute(pass.command()).await,
+            "k8s" => self.k8s.execute(&command).await,
+            "cloudflare" => self.cloudflare.execute(&command).await,
+            "supabase" => self.supabase.execute(&command).await,
             _ => return format!("unknown controller {controller}"),
         };
-        let outcome = match result {
-            Ok(outcome) => outcome,
-            Err(error) => return format!("retryable failure: {error}"),
-        };
-        match self.controller_schedule.complete(&pass, outcome) {
-            ControllerScheduleCompletion::Continue => "acted or superseded".to_owned(),
-            ControllerScheduleCompletion::Complete => "converged".to_owned(),
-            ControllerScheduleCompletion::Report(pending) => {
-                let generation = pending.report().generation();
+        match result {
+            Ok(henosis_types::ControllerPass::Acted) => "acted or superseded".to_owned(),
+            Ok(henosis_types::ControllerPass::Converged(Some(report)))
+            | Ok(henosis_types::ControllerPass::Failed(report)) => {
+                self.desired.remove(controller);
                 self.ready
-                    .insert((controller.clone(), generation), *pending);
+                    .insert((controller.clone(), report.generation()), report);
                 "converged".to_owned()
             }
-            ControllerScheduleCompletion::Retry { message, .. } => {
+            Ok(henosis_types::ControllerPass::Converged(None)) => {
+                self.desired.remove(controller);
+                "converged".to_owned()
+            }
+            Ok(henosis_types::ControllerPass::Retryable(message)) => {
                 format!("retryable failure: {message}")
             }
+            Err(error) => format!("retryable failure: {error}"),
         }
     }
 
@@ -554,8 +531,8 @@ impl RealControllerWorld {
                 .remove(&key)
                 .expect("enabled report delivery exists")
         });
-        let report = if let Some(pending) = &pending {
-            pending.report().clone()
+        let report = if let Some(report) = &pending {
+            report.clone()
         } else {
             self.delivered
                 .get(&key)
@@ -568,13 +545,7 @@ impl RealControllerWorld {
             .await
         {
             Ok(transition) => {
-                if let Some(pending) = &pending {
-                    let completion = self.controller_schedule.acknowledge_report(pending);
-                    assert!(matches!(
-                        completion,
-                        ControllerScheduleCompletion::Complete
-                            | ControllerScheduleCompletion::Continue
-                    ));
+                if pending.is_some() {
                     self.delivered.insert(key, report);
                 }
                 self.accept_transition(transition);
@@ -598,10 +569,8 @@ impl RealControllerWorld {
     fn accept_transition(&mut self, transition: Transition) {
         self.events.extend(transition.events().iter().cloned());
         for effect in transition.effects() {
-            let key = self
-                .desired
-                .update(effect.controller().clone(), effect.command().clone());
-            let _ = self.controller_schedule.submit(key);
+            self.desired
+                .insert(effect.controller().clone(), effect.command().clone());
         }
         self.assert_invariants();
     }
@@ -614,14 +583,11 @@ impl RealControllerWorld {
         );
         let generation = self.generation();
         assert!(
-            self.controller_schedule
-                .passes(&self.desired)
-                .all(|pass| match pass.command() {
-                    ControllerCommand::Reconcile(slice) => slice.generation() == generation,
-                    ControllerCommand::Supersede(supersession) =>
-                        supersession.generation == generation,
-                    ControllerCommand::Retire(_) => true,
-                }),
+            self.desired.values().all(|command| match command {
+                ControllerCommand::Reconcile(slice) => slice.generation() == generation,
+                ControllerCommand::Supersede(supersession) => supersession.generation == generation,
+                ControllerCommand::Retire(_) => true,
+            }),
             "superseding a generation cancels unfinished stale controller work"
         );
     }

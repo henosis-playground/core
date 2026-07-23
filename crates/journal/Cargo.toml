@@ -16,6 +16,7 @@ async-stream.workspace = true
 async-trait.workspace = true
 faultline.workspace = true
 futures.workspace = true
+henosis-multi-stream-merge.workspace = true
 henosis-storage.workspace = true
 henosis-types.workspace = true
 s2-sdk.workspace = true

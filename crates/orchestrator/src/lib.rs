@@ -1276,6 +1276,13 @@ impl GraphState {
         for (controller, resources) in current {
             let superseded = absent.remove(&controller).unwrap_or_default();
             let plan = self.plan.as_ref().expect("current resources require a plan");
+            if self.progress.contains(&(
+                plan.generation(),
+                plan.digest(),
+                controller.clone(),
+            )) {
+                continue;
+            }
             effects.push(ControllerEffect::new(
                 controller.clone(),
                 ControllerCommand::Reconcile(ControllerSlice::new(
@@ -1310,7 +1317,8 @@ impl GraphState {
         effects
     }
 
-    fn controllers_complete(&self) -> bool {
+    #[must_use]
+    pub fn controllers_complete(&self) -> bool {
         let Some(plan) = &self.plan else {
             return false;
         };

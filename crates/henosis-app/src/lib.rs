@@ -1,7 +1,7 @@
 //! Product-level Henosis operations shared by every frontend.
 
 mod bundle;
-mod operation;
+mod runtime;
 
 pub use bundle::ArtifactRequirement;
 pub use bundle::BUNDLE_FORMAT_VERSION;
@@ -24,22 +24,7 @@ pub use bundle::VerifiedBundleDirectory;
 pub use bundle::WorkloadArtifactKind;
 pub use bundle::verify_bundle_directory;
 pub use henosis_types::GraphSourcePolicy;
+pub use runtime::Application;
+pub use runtime::ApplyResult;
+pub use runtime::MaterializedGraphs;
 pub use henosis_types::SourceProvenance;
-pub use operation::ApplyGraph;
-pub use operation::ApplyOutcome;
-pub use operation::ArtifactBinding;
-pub use operation::ArtifactService;
-pub use operation::BlockedOn;
-pub use operation::BundlePin;
-pub use operation::CheckoutService;
-pub use operation::CoreClient;
-pub use operation::GraphIntent;
-pub use operation::GraphOperation;
-pub use operation::GraphOutput;
-pub use operation::GraphPhase;
-pub use operation::GraphStatus;
-pub use operation::GraphSummary;
-pub use operation::OperationError;
-pub use operation::PreparedSource;
-pub use operation::ResourceDisposition;
-pub use operation::SourceRequest;

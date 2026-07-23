@@ -1,7 +1,5 @@
 //! `ConnectRPC` service process for the Henosis graph orchestrator.
 
-mod materialization;
-
 use async_stream::try_stream;
 use connectrpc::ConnectError;
 use connectrpc::ErrorCode;
@@ -20,7 +18,6 @@ use henosis_journal::Journal;
 use henosis_journal::S2Storage;
 use henosis_orchestrator::Command;
 use henosis_orchestrator::CommandError;
-use henosis_orchestrator::ControllerEffect;
 use henosis_proto::connect::henosis::v1::GraphService;
 use henosis_proto::connect::henosis::v1::GraphServiceExt;
 use henosis_proto::proto::henosis::v1 as proto;
@@ -40,13 +37,9 @@ use henosis_types::OutputSource;
 use henosis_types::Resource;
 use henosis_types::ResourceDispositionKind;
 use henosis_types::SourceProvenance;
-use materialization::MaterializedGraphs;
-use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::str::FromStr as _;
 use std::sync::Arc;
-use tokio::sync::Mutex;
-use tokio::sync::watch;
 use tracing::info;
 
 #[tokio::main]
@@ -72,26 +65,18 @@ async fn main() -> anyhow::Result<()> {
         &required_env("S2_BASIN_ENDPOINT")?,
         &required_env("S2_BASIN")?,
     )?;
-    let (materialized, resume_effects) =
-        MaterializedGraphs::boot(Arc::clone(&evaluator), Journal::new(Arc::new(s2))).await?;
-    let reports = Arc::new(ControllerReports {
-        materialized,
-        watches: Arc::new(Mutex::new(BTreeMap::new())),
-    });
-    let dispatcher = henosis_server_assembly::ControllerDispatcher::start(
+    let application = henosis_app::Application::start(
+        Arc::clone(&evaluator),
+        Journal::new(Arc::new(s2)),
         controllers,
-        Arc::clone(&reports) as Arc<dyn henosis_server_assembly::ControllerReportHandler>,
-    );
+    )
+    .await?;
     let service = Arc::new(CoreService {
-        reports,
+        application,
         bundle_root,
         bundle_store,
         engine_config: config,
-        dispatcher,
     });
-    if !resume_effects.is_empty() {
-        service.dispatcher.dispatch(resume_effects);
-    }
     let router = service.register(Router::new());
     info!(%bind, "Henosis core server listening");
     connectrpc::server::Server::new(router)
@@ -103,16 +88,10 @@ async fn main() -> anyhow::Result<()> {
 
 #[derive(Clone)]
 struct CoreService {
-    reports: Arc<ControllerReports>,
+    application: henosis_app::Application,
     bundle_root: PathBuf,
     bundle_store: Arc<dyn BundleStore>,
     engine_config: EngineConfig,
-    dispatcher: henosis_server_assembly::ControllerDispatcher,
-}
-
-struct ControllerReports {
-    materialized: MaterializedGraphs,
-    watches: Arc<Mutex<BTreeMap<GraphId, watch::Sender<proto::GraphStatus>>>>,
 }
 
 impl CoreService {
@@ -176,26 +155,13 @@ impl CoreService {
     }
 
     async fn apply(&self, command: Command) -> Result<proto::GraphStatus, ConnectError> {
-        let applied = self
-            .reports
-            .materialized
-            .apply(command)
-            .await
-            .map_err(apply_error)?;
-        let graph_id = applied.graph_id;
-        let transition = applied.transition;
-        let status = graph_status(&applied.state, graph_id)?;
-        self.reports.publish(graph_id, status.clone()).await;
-        if !transition.effects().is_empty() {
-            self.dispatcher.dispatch(transition.effects().to_vec());
-        }
-        Ok(status)
+        let applied = self.application.apply(command).await.map_err(apply_error)?;
+        graph_status(&applied.state, applied.graph_id)
     }
 
     async fn current(&self, graph_id: GraphId) -> Result<proto::GraphStatus, ConnectError> {
         let state = self
-            .reports
-            .materialized
+            .application
             .snapshot(graph_id)
             .await
             .ok_or_else(|| ConnectError::new(ErrorCode::NotFound, "graph does not exist"))?;
@@ -329,37 +295,6 @@ fn verify_executable_contract(
     Ok(intent)
 }
 
-impl ControllerReports {
-    async fn publish(&self, graph_id: GraphId, status: proto::GraphStatus) {
-        let mut watches = self.watches.lock().await;
-        if let Some(sender) = watches.get(&graph_id) {
-            sender.send_replace(status);
-        } else {
-            let (sender, _) = watch::channel(status);
-            watches.insert(graph_id, sender);
-        }
-    }
-}
-
-impl henosis_server_assembly::ControllerReportHandler for ControllerReports {
-    fn report(
-        &self,
-        report: henosis_types::ControllerReport,
-    ) -> futures::future::BoxFuture<'_, anyhow::Result<Vec<ControllerEffect>>> {
-        Box::pin(async move {
-            let applied = self
-                .materialized
-                .apply(Command::ReportController(report))
-                .await?;
-            let graph_id = applied.graph_id;
-            let status = graph_status(&applied.state, graph_id)
-                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-            self.publish(graph_id, status).await;
-            Ok(applied.transition.effects().to_vec())
-        })
-    }
-}
-
 impl GraphService for CoreService {
     async fn create_graph<'a>(
         &'a self,
@@ -460,8 +395,7 @@ impl GraphService for CoreService {
             .include_retired
             .unwrap_or_default();
         let graphs = self
-            .reports
-            .materialized
+            .application
             .snapshots()
             .await
             .iter()
@@ -483,23 +417,15 @@ impl GraphService for CoreService {
     > {
         let request = request.to_owned_message();
         let graph_id = parse_graph(request.graph_id.as_deref().unwrap_or_default())?;
-        let current = self.current(graph_id).await?;
-        let mut receiver = {
-            let mut watches = self.reports.watches.lock().await;
-            watches
-                .entry(graph_id)
-                .or_insert_with(|| watch::channel(current.clone()).0)
-                .subscribe()
-        };
-        // Watch sequence numbers are connection-local cursors, not durable journal
-        // offsets. A reconnect (including after a server crash) receives the current
-        // replayed snapshot immediately, numbered after the caller's supplied cursor,
-        // and then level-triggered replacements for changes observed on this process.
+        let mut status = self.current(graph_id).await?;
+        let mut changes = self.application.subscribe();
+        let service = self.clone();
+        // Watch sequence numbers are connection-local cursors. S2 followers wake
+        // this stream for changes accepted by any core process.
         let stream = try_stream! {
             let mut sequence = request.after_sequence.unwrap_or_default();
             loop {
                 sequence += 1;
-                let status = receiver.borrow_and_update().clone();
                 let retired = status.retired.unwrap_or(false);
                 yield proto::WatchGraphResponse {
                     sequence: Some(sequence),
@@ -510,9 +436,16 @@ impl GraphService for CoreService {
                 if retired {
                     break;
                 }
-                receiver.changed().await.map_err(|_| {
-                    ConnectError::new(ErrorCode::Unavailable, "graph watch closed")
-                })?;
+                loop {
+                    match changes.recv().await {
+                        Ok(changed) if changed == graph_id => break,
+                        Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            Err(ConnectError::new(ErrorCode::Unavailable, "graph watch closed"))?;
+                        }
+                    }
+                }
+                status = service.current(graph_id).await?;
             }
         };
         let stream: ServiceStream<proto::WatchGraphResponse> = Box::pin(stream);
@@ -640,13 +573,7 @@ fn graph_phase(graph: &henosis_orchestrator::GraphState) -> proto::GraphPhase {
     {
         return proto::GraphPhase::Failed;
     }
-    let planned_resources = plan.resources().len();
-    if planned_resources == 0
-        || dispositions.len() >= planned_resources
-            && dispositions
-                .iter()
-                .all(|disposition| disposition.kind() == &ResourceDispositionKind::Ready)
-    {
+    if plan.resources().len() == 0 || graph.controllers_complete() {
         proto::GraphPhase::Ready
     } else {
         proto::GraphPhase::Reconciling
