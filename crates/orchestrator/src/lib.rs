@@ -114,7 +114,7 @@ impl Transition {
         &self.effects
     }
 
-    fn extend(&mut self, other: Self) {
+    pub fn extend(&mut self, other: Self) {
         self.events.extend(other.events);
         self.effects.extend(other.effects);
     }

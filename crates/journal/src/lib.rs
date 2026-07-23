@@ -128,6 +128,13 @@ impl Journal {
         .await
     }
 
+    pub async fn tail(
+        &self,
+        graph_id: GraphId,
+    ) -> Result<StreamPosition, Error<StorageDomainError, anyhow::Error, anyhow::Error>> {
+        self.storage.tail(&graph_stream(graph_id)).await
+    }
+
     pub async fn load(
         &self,
         graph_id: GraphId,

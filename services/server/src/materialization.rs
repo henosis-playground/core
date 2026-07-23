@@ -56,7 +56,7 @@ impl MaterializedGraphs {
                 continue;
             };
             effects.extend(resumed);
-            let state = actor.snapshot().await;
+            let state = actor.snapshot().await?;
             let retired_generation = state
                 .graph(registration.intent.id())
                 .filter(|graph| graph.is_retired())
@@ -130,7 +130,7 @@ impl MaterializedGraphs {
 
     pub(crate) async fn snapshot(&self, graph_id: GraphId) -> Option<MaterializedCore> {
         let actor = self.actors.read().await.get(&graph_id).cloned()?;
-        Some(actor.snapshot().await)
+        actor.snapshot().await.ok()
     }
 
     pub(crate) async fn snapshots(&self) -> Vec<MaterializedCore> {
@@ -143,7 +143,9 @@ impl MaterializedGraphs {
             .collect::<Vec<_>>();
         let mut states = Vec::with_capacity(actors.len());
         for actor in actors {
-            states.push(actor.snapshot().await);
+            if let Ok(state) = actor.snapshot().await {
+                states.push(state);
+            }
         }
         states
     }
@@ -307,6 +309,7 @@ struct ActorState {
     core: Core,
     tail: StreamPosition,
     needs_reload: bool,
+    needs_resume: bool,
 }
 
 struct PreparedTransition {
@@ -335,6 +338,7 @@ impl GraphActor {
                 core,
                 tail,
                 needs_reload: false,
+                needs_resume: false,
             }),
         }
     }
@@ -342,7 +346,7 @@ impl GraphActor {
     async fn apply(&self, command: Command) -> anyhow::Result<ApplyResult> {
         let mut state = self.state.lock().await;
         loop {
-            self.ensure_authoritative(&mut state).await?;
+            let mut prefix = self.synchronize_locked(&mut state).await?;
             let mut candidate = state.core.clone();
             let transition = candidate
                 .handle(command.clone())
@@ -358,7 +362,11 @@ impl GraphActor {
                 )
                 .await
             {
-                Ok(result) => return Ok(result),
+                Ok(mut result) => {
+                    prefix.extend(result.transition);
+                    result.transition = prefix;
+                    return Ok(result);
+                }
                 Err(CommitFailure::Occ) => {}
                 Err(CommitFailure::Other(error)) => return Err(error),
             }
@@ -465,8 +473,53 @@ impl GraphActor {
         }
     }
 
+    async fn synchronize_locked(&self, state: &mut ActorState) -> anyhow::Result<Transition> {
+        self.refresh_authoritative(state).await?;
+        if !state.needs_resume {
+            return Ok(Transition::default());
+        }
+        loop {
+            let mut candidate = state.core.clone();
+            let transition = candidate
+                .resume_graph(self.graph_id)
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            match self
+                .commit_locked(
+                    state,
+                    PreparedTransition {
+                        candidate,
+                        transition,
+                    },
+                )
+                .await
+            {
+                Ok(result) => {
+                    state.needs_resume = false;
+                    return Ok(result.transition);
+                }
+                Err(CommitFailure::Occ) => {
+                    self.refresh_authoritative(state).await?;
+                }
+                Err(CommitFailure::Other(error)) => return Err(error),
+            }
+        }
+    }
+
     async fn ensure_authoritative(&self, state: &mut ActorState) -> anyhow::Result<()> {
-        if !state.needs_reload {
+        if state.needs_reload {
+            self.refresh_authoritative(state).await?;
+        }
+        Ok(())
+    }
+
+    async fn refresh_authoritative(&self, state: &mut ActorState) -> anyhow::Result<()> {
+        let observed_tail = self
+            .journal
+            .tail(self.graph_id)
+            .await
+            .map_err(storage_error)?;
+        if !state.needs_reload && observed_tail == state.tail {
             return Ok(());
         }
         let (events, tail) = self
@@ -478,11 +531,14 @@ impl GraphActor {
         state.core = Core::from_materialized(Arc::clone(&self.evaluator), materialized);
         state.tail = tail;
         state.needs_reload = false;
+        state.needs_resume = true;
         Ok(())
     }
 
-    async fn snapshot(&self) -> MaterializedCore {
-        self.state.lock().await.core.state().clone()
+    async fn snapshot(&self) -> anyhow::Result<MaterializedCore> {
+        let mut state = self.state.lock().await;
+        self.refresh_authoritative(&mut state).await?;
+        Ok(state.core.state().clone())
     }
 }
 
@@ -609,7 +665,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stale_actor_discards_its_poisoned_session_before_reappend() {
+    async fn stale_actor_refreshes_before_deriving_or_opening_a_session() {
         let storage = MemS2::default();
         let evaluator = evaluator();
         let bundle = evaluator.register(ComponentProgram {
@@ -650,7 +706,11 @@ mod tests {
                 .is_err(),
             "the re-derived stale command is rejected after authoritative reload"
         );
-        assert_eq!(storage.opened_sessions(), sessions_before_conflict + 1);
+        assert_eq!(
+            storage.opened_sessions(),
+            sessions_before_conflict,
+            "tail observation rejects the stale command before opening an append session"
+        );
 
         let result = second
             .apply(Command::UpdateGraph {
@@ -661,7 +721,44 @@ mod tests {
             .await
             .expect("a fresh session accepts the re-derived update");
         assert_eq!(component_revision(&result.state, graph_id), revision(3));
-        assert_eq!(storage.opened_sessions(), sessions_before_conflict + 2);
+        assert_eq!(storage.opened_sessions(), sessions_before_conflict + 1);
+    }
+
+    #[tokio::test]
+    async fn snapshot_refreshes_after_a_peer_appends() {
+        let storage = MemS2::default();
+        let evaluator = evaluator();
+        let bundle = evaluator.register(ComponentProgram {
+            resources: Vec::new(),
+            static_outputs: BTreeMap::new(),
+        });
+        let (first, _) =
+            MaterializedGraphs::boot(evaluator.clone(), Journal::new(Arc::new(storage.clone())))
+                .await
+                .expect("first materializer boots");
+        let graph_id = GraphId::from_bytes([48; 16]);
+        first
+            .apply(Command::CreateGraph(graph(graph_id, bundle, 1)))
+            .await
+            .expect("graph is created");
+        let (second, _) = MaterializedGraphs::boot(evaluator, Journal::new(Arc::new(storage)))
+            .await
+            .expect("second materializer boots");
+
+        first
+            .apply(Command::UpdateGraph {
+                graph_id,
+                expected_generation: Generation::new(1).expect("one is non-zero"),
+                components: graph(graph_id, bundle, 2).components,
+            })
+            .await
+            .expect("peer advances the graph");
+
+        let snapshot = second
+            .snapshot(graph_id)
+            .await
+            .expect("graph remains known");
+        assert_eq!(component_revision(&snapshot, graph_id), revision(2));
     }
 
     #[tokio::test]
