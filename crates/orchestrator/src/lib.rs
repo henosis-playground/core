@@ -22,6 +22,7 @@ use henosis_types::ComponentName;
 use henosis_types::ComponentOutputs;
 use henosis_types::ControllerCommand;
 use henosis_types::ControllerName;
+use henosis_types::ControllerProgress;
 use henosis_types::ControllerReport;
 use henosis_types::ControllerSlice;
 use henosis_types::CoreEvent;
@@ -49,6 +50,7 @@ use henosis_types::Plan;
 use henosis_types::PublicationId;
 use henosis_types::Resource;
 use henosis_types::ResourceDisposition;
+use henosis_types::ResourceId;
 use henosis_types::Retirement;
 use henosis_types::Stall;
 use henosis_types::Supersession;
@@ -236,17 +238,6 @@ impl Core {
                 .map(|component| (component.name().clone(), component.bundle()))
                 .collect();
             transition.effects = dispatch_effects(graph_id, bundles, None, plan);
-            self.runtime
-                .get_mut(&graph_id)
-                .expect("runtime was rebuilt for the graph")
-                .pending = transition
-                .effects
-                .iter()
-                .filter_map(|effect| match effect.command() {
-                    ControllerCommand::Reconcile(_) => Some(effect.controller().clone()),
-                    ControllerCommand::Supersede(_) | ControllerCommand::Retire(_) => None,
-                })
-                .collect();
         }
         transition.effects.extend(cleanup_effects);
         Ok(transition)
@@ -425,14 +416,23 @@ impl Core {
                 graph.outputs.insert_overwrite(output);
             }
         }
-        self.runtime
-            .get_mut(&graph_id)
-            .expect("runtime exists for every graph")
-            .pending
-            .remove(report.controller());
+        let progress = ControllerProgress::new(
+            graph_id,
+            report.generation(),
+            report.plan_digest(),
+            report.controller().clone(),
+        );
+        self.graph_mut(graph_id)?.progress.insert((
+            progress.generation(),
+            progress.plan_digest(),
+            progress.controller().clone(),
+        ));
 
         let mut transition = Transition {
-            events: vec![CoreEvent::ControllerReported(report)],
+            events: vec![
+                CoreEvent::ControllerReported(report),
+                CoreEvent::ControllerProgressed(progress),
+            ],
             effects: Vec::new(),
         };
         if let Some(publication) = publication {
@@ -449,12 +449,7 @@ impl Core {
         graph_id: GraphId,
     ) -> Result<Transition, Error<CommandError, Never, anyhow::Error>> {
         let graph = self.graph(graph_id)?;
-        let pending = &self
-            .runtime
-            .get(&graph_id)
-            .expect("runtime exists for every graph")
-            .pending;
-        if pending.is_empty()
+        if graph.controllers_complete()
             && let Some(plan) = &graph.plan
             && !plan.is_complete()
             && let Some(cycle) = blocked_cycle(plan)
@@ -521,27 +516,14 @@ impl Core {
                 )
             })
             .collect();
-        let cleanup_commands = effects
-            .iter()
-            .map(|effect| effect.command().clone())
-            .collect::<Vec<_>>();
-        {
-            let mut graph = self.graph_mut(graph_id)?;
-            graph.retired = true;
-            graph
-                .pending_cleanup
-                .extend(cleanup_commands.iter().cloned());
-        }
-        let mut events = vec![CoreEvent::GraphRetired {
-            graph_id,
-            last_generation: expected_generation,
-        }];
-        events.extend(
-            cleanup_commands
-                .into_iter()
-                .map(CoreEvent::CleanupRequested),
-        );
-        Ok(Transition { events, effects })
+        self.graph_mut(graph_id)?.retired = true;
+        Ok(Transition {
+            events: vec![CoreEvent::GraphRetired {
+                graph_id,
+                last_generation: expected_generation,
+            }],
+            effects,
+        })
     }
 
     async fn evaluate_graph(
@@ -614,50 +596,8 @@ impl Core {
             .map(|component| (component.name().clone(), component.bundle()))
             .collect();
         let effects = dispatch_effects(graph_id, bundles, previous.as_ref(), &plan);
-        let pending = effects
-            .iter()
-            .filter_map(|effect| match effect.command() {
-                ControllerCommand::Reconcile(_) => Some(effect.controller().clone()),
-                ControllerCommand::Supersede(_) | ControllerCommand::Retire(_) => None,
-            })
-            .collect();
-        self.runtime
-            .get_mut(&graph_id)
-            .expect("runtime exists for every graph")
-            .pending = pending;
-        let cleanup_commands = effects
-            .iter()
-            .filter_map(|effect| match effect.command() {
-                ControllerCommand::Reconcile(slice) if slice.superseded().is_empty() => None,
-                ControllerCommand::Reconcile(slice) => {
-                    Some(ControllerCommand::Supersede(Supersession {
-                        graph_id: slice.graph_id(),
-                        generation: slice.generation(),
-                        controller: slice.controller().clone(),
-                        resources: slice.superseded().to_vec(),
-                    }))
-                }
-                ControllerCommand::Supersede(command) => {
-                    Some(ControllerCommand::Supersede(command.clone()))
-                }
-                ControllerCommand::Retire(command) => {
-                    Some(ControllerCommand::Retire(command.clone()))
-                }
-            })
-            .collect::<Vec<_>>();
-        {
-            let mut graph = self.graph_mut(graph_id)?;
-            graph.accept_plan(plan.clone());
-            graph
-                .pending_cleanup
-                .extend(cleanup_commands.iter().cloned());
-        }
+        self.graph_mut(graph_id)?.accept_plan(plan.clone());
         evaluation_events.push(CoreEvent::PlanAccepted { graph_id, plan });
-        evaluation_events.extend(
-            cleanup_commands
-                .into_iter()
-                .map(CoreEvent::CleanupRequested),
-        );
         let mut transition = Transition {
             events: evaluation_events,
             effects,
@@ -1001,7 +941,6 @@ impl Core {
 struct GraphRuntime {
     interpretations: BTreeMap<ComponentName, ComponentInterpretation>,
     bindings: BTreeMap<ObservedOutputKey, OutputRef>,
-    pending: BTreeSet<ControllerName>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1156,19 +1095,23 @@ impl MaterializedCore {
                 );
                 graph.accept_plan(plan.clone());
             }
-            CoreEvent::CleanupRequested(command) => {
-                self.graphs
-                    .get_mut(&command.graph_id())
-                    .expect("cleanup graph must already exist")
-                    .pending_cleanup
-                    .push(command.clone());
-            }
             CoreEvent::ControllerReported(report) => {
                 self.graphs
                     .get_mut(&report.graph_id())
                     .expect("reported graph must already exist")
                     .reports
                     .insert_overwrite(LatestControllerReport(report.clone()));
+            }
+            CoreEvent::ControllerProgressed(progress) => {
+                self.graphs
+                    .get_mut(&progress.graph_id())
+                    .expect("progress graph must already exist")
+                    .progress
+                    .insert((
+                        progress.generation(),
+                        progress.plan_digest(),
+                        progress.controller().clone(),
+                    ));
             }
             CoreEvent::ComponentOutputsReplaced(replacement) => {
                 let mut graph = self
@@ -1243,10 +1186,11 @@ impl MaterializedCore {
 pub struct GraphState {
     intent: GraphIntent,
     plan: Option<Plan>,
+    planned_resources: BTreeMap<ResourceId, Resource>,
     outputs: IdOrdMap<OutputRecord>,
     reports: IdOrdMap<LatestControllerReport>,
     publications: BTreeSet<(Generation, PublicationId)>,
-    pending_cleanup: Vec<ControllerCommand>,
+    progress: BTreeSet<(Generation, henosis_types::ContentDigest, ControllerName)>,
     stall: Option<Stall>,
     retired: bool,
 }
@@ -1256,10 +1200,11 @@ impl GraphState {
         Self {
             intent,
             plan: None,
+            planned_resources: BTreeMap::new(),
             outputs: IdOrdMap::new(),
             reports: IdOrdMap::new(),
             publications: BTreeSet::new(),
-            pending_cleanup: Vec::new(),
+            progress: BTreeSet::new(),
             stall: None,
             retired: false,
         }
@@ -1271,6 +1216,11 @@ impl GraphState {
     }
 
     fn accept_plan(&mut self, plan: Plan) {
+        self.planned_resources.extend(
+            plan.resources()
+                .cloned()
+                .map(|resource| (resource.id(), resource)),
+        );
         self.plan = Some(plan);
         self.stall = None;
     }
@@ -1286,60 +1236,92 @@ impl GraphState {
     }
 
     fn recovery_cleanup_effects(&self) -> Vec<ControllerEffect> {
-        let current = if self.retired {
-            BTreeSet::new()
-        } else {
-            self.plan
-                .as_ref()
-                .into_iter()
-                .flat_map(Plan::resources)
-                .map(Resource::id)
-                .collect()
-        };
-        let mut absent_by_controller = BTreeMap::<ControllerName, BTreeMap<_, Resource>>::new();
-        for command in &self.pending_cleanup {
-            let (controller, resources) = match command {
-                ControllerCommand::Supersede(cleanup) => {
-                    (&cleanup.controller, cleanup.resources.as_slice())
-                }
-                ControllerCommand::Retire(cleanup) => {
-                    (&cleanup.controller, cleanup.resources.as_slice())
-                }
-                ControllerCommand::Reconcile(_) => continue,
-            };
-            let absent = absent_by_controller.entry(controller.clone()).or_default();
-            for resource in resources {
-                if !current.contains(&resource.id()) {
-                    absent.insert(resource.id(), resource.clone());
-                }
+        self.controller_commands()
+            .into_iter()
+            .filter(|effect| !matches!(effect.command(), ControllerCommand::Reconcile(_)))
+            .collect()
+    }
+
+    #[must_use]
+    pub fn controller_commands(&self) -> Vec<ControllerEffect> {
+        let mut current = BTreeMap::<ControllerName, Vec<Resource>>::new();
+        if !self.retired && let Some(plan) = &self.plan {
+            for resource in plan.resources() {
+                current
+                    .entry(resource.controller().clone())
+                    .or_default()
+                    .push(resource.clone());
             }
         }
+        let current_ids = current
+            .values()
+            .flatten()
+            .map(Resource::id)
+            .collect::<BTreeSet<_>>();
+        let mut absent = BTreeMap::<ControllerName, Vec<Resource>>::new();
+        for resource in self.planned_resources.values() {
+            if !current_ids.contains(&resource.id()) {
+                absent
+                    .entry(resource.controller().clone())
+                    .or_default()
+                    .push(resource.clone());
+            }
+        }
+        let bundles: BTreeMap<ComponentName, BundleRef> = self
+            .intent
+            .components()
+            .map(|component| (component.name().clone(), component.bundle()))
+            .collect();
+        let mut effects = Vec::new();
+        for (controller, resources) in current {
+            let superseded = absent.remove(&controller).unwrap_or_default();
+            let plan = self.plan.as_ref().expect("current resources require a plan");
+            effects.push(ControllerEffect::new(
+                controller.clone(),
+                ControllerCommand::Reconcile(ControllerSlice::new(
+                    self.intent.id(),
+                    plan.generation(),
+                    plan.digest(),
+                    controller,
+                    bundles.clone(),
+                    resources,
+                    superseded,
+                )),
+            ));
+        }
+        for (controller, resources) in absent {
+            let command = if self.retired {
+                ControllerCommand::Retire(Retirement {
+                    graph_id: self.intent.id(),
+                    last_generation: self.intent.generation(),
+                    controller: controller.clone(),
+                    resources,
+                })
+            } else {
+                ControllerCommand::Supersede(Supersession {
+                    graph_id: self.intent.id(),
+                    generation: self.intent.generation(),
+                    controller: controller.clone(),
+                    resources,
+                })
+            };
+            effects.push(ControllerEffect::new(controller, command));
+        }
+        effects
+    }
 
-        absent_by_controller
+    fn controllers_complete(&self) -> bool {
+        let Some(plan) = &self.plan else {
+            return false;
+        };
+        plan.resources()
+            .map(|resource| resource.controller().clone())
+            .collect::<BTreeSet<_>>()
             .into_iter()
-            .filter_map(|(controller, resources)| {
-                let resources = resources.into_values().collect::<Vec<_>>();
-                if resources.is_empty() {
-                    return None;
-                }
-                let command = if self.retired {
-                    ControllerCommand::Retire(Retirement {
-                        graph_id: self.intent.id(),
-                        last_generation: self.intent.generation(),
-                        controller: controller.clone(),
-                        resources,
-                    })
-                } else {
-                    ControllerCommand::Supersede(Supersession {
-                        graph_id: self.intent.id(),
-                        generation: self.intent.generation(),
-                        controller: controller.clone(),
-                        resources,
-                    })
-                };
-                Some(ControllerEffect::new(controller, command))
+            .all(|controller| {
+                self.progress
+                    .contains(&(plan.generation(), plan.digest(), controller))
             })
-            .collect()
     }
 
     pub fn outputs(&self) -> impl ExactSizeIterator<Item = &OutputRecord> {

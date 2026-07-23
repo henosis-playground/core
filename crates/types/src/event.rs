@@ -5,7 +5,7 @@ use serde::Serialize;
 use thiserror::Error;
 
 use crate::ComponentName;
-use crate::ControllerCommand;
+use crate::ContentDigest;
 use crate::ControllerName;
 use crate::ControllerReport;
 use crate::Generation;
@@ -168,6 +168,51 @@ impl Stall {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ControllerProgress {
+    graph_id: GraphId,
+    generation: Generation,
+    plan_digest: ContentDigest,
+    controller: ControllerName,
+}
+
+impl ControllerProgress {
+    #[must_use]
+    pub const fn new(
+        graph_id: GraphId,
+        generation: Generation,
+        plan_digest: ContentDigest,
+        controller: ControllerName,
+    ) -> Self {
+        Self {
+            graph_id,
+            generation,
+            plan_digest,
+            controller,
+        }
+    }
+
+    #[must_use]
+    pub const fn graph_id(&self) -> GraphId {
+        self.graph_id
+    }
+
+    #[must_use]
+    pub const fn generation(&self) -> Generation {
+        self.generation
+    }
+
+    #[must_use]
+    pub const fn plan_digest(&self) -> ContentDigest {
+        self.plan_digest
+    }
+
+    #[must_use]
+    pub const fn controller(&self) -> &ControllerName {
+        &self.controller
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum CoreEvent {
     GraphCreated(GraphIntent),
     GraphUpdated(GraphIntent),
@@ -175,8 +220,8 @@ pub enum CoreEvent {
         graph_id: GraphId,
         plan: Plan,
     },
-    CleanupRequested(ControllerCommand),
     ControllerReported(ControllerReport),
+    ControllerProgressed(ControllerProgress),
     ComponentOutputsReplaced(ComponentOutputs),
     OutputsPublished(OutputPublication),
     StallDetected(Stall),
