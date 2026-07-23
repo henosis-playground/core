@@ -49,6 +49,7 @@ use s2_sdk::types::AppendRecordBatch;
 use s2_sdk::types::AppendRetryPolicy;
 use s2_sdk::types::BasinEndpoint;
 use s2_sdk::types::BasinName;
+use s2_sdk::types::EnsureStreamInput;
 use s2_sdk::types::ReadFrom;
 use s2_sdk::types::ReadInput;
 use s2_sdk::types::ReadLimits;
@@ -239,6 +240,15 @@ impl Journal {
         expected: StreamPosition,
         records: &[AppendRecord],
     ) -> Result<AppendAck, Error<StorageDomainError, anyhow::Error, anyhow::Error>> {
+        let attempted_end = expected.sequence().saturating_add(records.len() as u64);
+        let captured_tail = self.storage.tail(stream).await?;
+        if captured_tail.sequence() < attempted_end {
+            return Err(Error::Domain(StorageDomainError::CasConflict {
+                expected: expected.sequence(),
+                actual: captured_tail.sequence(),
+            }));
+        }
+
         let mut stored = Vec::with_capacity(records.len());
         let mut cursor = expected;
         while stored.len() < records.len() {
@@ -262,19 +272,14 @@ impl Journal {
                 .iter()
                 .zip(records)
                 .all(|(stored, expected)| stored.body() == expected.body());
+        let current_tail = self.storage.tail(stream).await?;
         if matches {
-            let tail =
-                StreamPosition::new(expected.sequence().saturating_add(records.len() as u64));
-            Ok(AppendAck::new(expected, tail))
+            Ok(AppendAck::new(expected, current_tail))
         } else {
-            Err(
-                Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Domain(
-                    StorageDomainError::CasConflict {
-                        expected: expected.sequence(),
-                        actual: cursor.sequence(),
-                    },
-                ),
-            )
+            Err(Error::Domain(StorageDomainError::CasConflict {
+                expected: expected.sequence(),
+                actual: current_tail.sequence(),
+            }))
         }
     }
 
@@ -438,8 +443,22 @@ impl S2Storage {
         })
     }
 
-    fn stream(&self, name: &StreamName) -> Result<s2_sdk::S2Stream, anyhow::Error> {
-        let name = name.as_str().parse::<s2_sdk::types::StreamName>()?;
+    async fn ensure_stream(
+        &self,
+        stream: &StreamName,
+    ) -> Result<s2_sdk::S2Stream, Error<StorageDomainError, anyhow::Error, anyhow::Error>> {
+        let name = stream
+            .as_str()
+            .parse::<s2_sdk::types::StreamName>()
+            .map_err(|error| {
+                Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Invariant(
+                    anyhow::Error::new(error),
+                )
+            })?;
+        self.basin
+            .ensure_stream(EnsureStreamInput::new(name.clone()))
+            .await
+            .map_err(classify_definite_failure)?;
         Ok(self.basin.stream(name))
     }
 }
@@ -481,9 +500,9 @@ impl StorageAppendSession for S2StorageAppendSession {
             .await
         {
             Ok(ticket) => ticket,
-            Err(_error) => {
+            Err(error) => {
                 self.poisoned = true;
-                return Ok(AppendOutcome::CommitUnknown);
+                return Err(classify_definite_failure(error));
             }
         };
         match ticket.await {
@@ -510,6 +529,43 @@ impl StorageAppendSession for S2StorageAppendSession {
     }
 }
 
+fn classify_definite_failure(
+    error: S2Error,
+) -> Error<StorageDomainError, anyhow::Error, anyhow::Error> {
+    match &error {
+        S2Error::Validation(_)
+        | S2Error::MalformedAccessToken(_)
+        | S2Error::AppendConditionFailed(_)
+        | S2Error::ReadUnwritten(_) => Error::Invariant(anyhow::Error::new(error)),
+        S2Error::Server(response)
+            if matches!(
+                response.code.as_str(),
+                "bad_header"
+                    | "bad_path"
+                    | "bad_query"
+                    | "bad_json"
+                    | "bad_proto"
+                    | "bad_frame"
+                    | "decryption_failed"
+                    | "authn"
+                    | "permission_denied"
+                    | "quota_exhausted"
+                    | "basin_not_found"
+                    | "stream_not_found"
+                    | "access_token_not_found"
+                    | "resource_already_exists"
+                    | "basin_deletion_pending"
+                    | "stream_deletion_pending"
+                    | "invalid"
+                    | "not_implemented"
+            ) =>
+        {
+            Error::Invariant(anyhow::Error::new(error))
+        }
+        S2Error::Server(_) | S2Error::Client(_) => Error::Transient(anyhow::Error::new(error)),
+    }
+}
+
 #[async_trait]
 impl StorageEngine for S2Storage {
     async fn open_append_session(
@@ -519,11 +575,11 @@ impl StorageEngine for S2Storage {
         Box<dyn StorageAppendSession>,
         Error<StorageDomainError, anyhow::Error, anyhow::Error>,
     > {
-        let stream = self.stream(stream).map_err(|error| {
-            Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Invariant(error)
-        })?;
         Ok(Box::new(S2StorageAppendSession {
-            session: stream.append_session(AppendSessionConfig::new()),
+            session: self
+                .ensure_stream(stream)
+                .await?
+                .append_session(AppendSessionConfig::new()),
             poisoned: false,
         }))
     }
@@ -534,25 +590,30 @@ impl StorageEngine for S2Storage {
         from: StreamPosition,
         limit: usize,
     ) -> Result<Vec<StoredRecord>, Error<StorageDomainError, anyhow::Error, anyhow::Error>> {
-        let s2_stream = self.stream(stream).map_err(|error| {
-            Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Invariant(error)
-        })?;
-        let batch =
-            s2_stream
-                .read(
-                    ReadInput::new()
-                        .with_start(ReadStart::new().with_from(ReadFrom::SeqNum(from.sequence())))
-                        .with_stop(ReadStop::new().with_limits(
-                            ReadLimits::new().with_count(limit).with_bytes(1024 * 1024),
-                        ))
-                        .with_ignore_command_records(true),
-                )
-                .await
-                .map_err(|error| {
-                    Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Transient(
-                        anyhow::Error::new(error),
+        let s2_stream = self.ensure_stream(stream).await?;
+        let batch = match s2_stream
+            .read(
+                ReadInput::new()
+                    .with_start(ReadStart::new().with_from(ReadFrom::SeqNum(from.sequence())))
+                    .with_stop(
+                        ReadStop::new().with_limits(
+                            ReadLimits::new()
+                                .with_count(limit.min(1_000))
+                                .with_bytes(1024 * 1024),
+                        ),
                     )
-                })?;
+                    .with_ignore_command_records(true),
+            )
+            .await
+        {
+            Ok(batch) => batch,
+            Err(S2Error::ReadUnwritten(tail)) if from.sequence() >= tail.seq_num => {
+                return Ok(Vec::new());
+            }
+            Err(error) => {
+                return Err(Error::Transient(anyhow::Error::new(error)));
+            }
+        };
         Ok(batch
             .records
             .into_iter()
@@ -571,10 +632,8 @@ impl StorageEngine for S2Storage {
         &self,
         stream: &StreamName,
     ) -> Result<StreamPosition, Error<StorageDomainError, anyhow::Error, anyhow::Error>> {
-        self.stream(stream)
-            .map_err(|error| {
-                Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Invariant(error)
-            })?
+        self.ensure_stream(stream)
+            .await?
             .check_tail()
             .await
             .map(|tail| StreamPosition::new(tail.seq_num))
@@ -597,10 +656,10 @@ impl StorageEngine for S2Storage {
         Box::pin(async_stream::stream! {
             let mut next = from;
             loop {
-                let s2_stream = match storage.stream(&stream) {
+                let s2_stream = match storage.ensure_stream(&stream).await {
                     Ok(value) => value,
                     Err(error) => {
-                        yield Err(Error::<StorageDomainError, anyhow::Error, anyhow::Error>::Invariant(error));
+                        yield Err(error);
                         return;
                     }
                 };

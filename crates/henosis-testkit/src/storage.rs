@@ -173,15 +173,19 @@ impl MemS2 {
         from: StreamPosition,
         limit: usize,
     ) -> Vec<StoredRecord> {
-        self.state
-            .lock()
-            .expect("MemS2 lock is not poisoned")
+        let state = self.state.lock().expect("MemS2 lock is not poisoned");
+        let mut metered_bytes = 0_usize;
+        state
             .streams
             .get(stream)
             .into_iter()
             .flat_map(|records| records.iter())
             .skip(from.sequence() as usize)
-            .take(limit)
+            .take(limit.min(1_000))
+            .take_while(|record| {
+                metered_bytes = metered_bytes.saturating_add(8 + record.body().len());
+                metered_bytes <= 1024 * 1024
+            })
             .cloned()
             .collect()
     }
@@ -205,10 +209,7 @@ impl MemS2AppendSession {
         let result = self
             .storage
             .append_in_session(&self.stream, expected, records);
-        if matches!(
-            result,
-            Err(MemS2Error::CasConflict { .. } | MemS2Error::TimeoutAfterCommit)
-        ) {
+        if result.is_err() {
             self.poisoned = true;
         }
         result
@@ -292,5 +293,63 @@ impl StorageEngine for MemS2 {
         Result<StoredRecord, Error<StorageDomainError, anyhow::Error, anyhow::Error>>,
     > {
         Box::pin(futures::stream::pending())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn any_failed_batch_poisons_the_append_session() {
+        let storage = MemS2::default();
+        let stream = StreamName::new("journal").expect("stream name is valid");
+        storage.script([AppendFault::RejectBeforeCommit]);
+        let mut session = storage.open_session(&stream);
+
+        assert_eq!(
+            session.append(StreamPosition::default(), vec![AppendRecord::new(vec![1])],),
+            Err(MemS2Error::Rejected)
+        );
+        assert_eq!(
+            session.append(StreamPosition::default(), vec![AppendRecord::new(vec![2])],),
+            Err(MemS2Error::SessionPoisoned)
+        );
+    }
+
+    #[test]
+    fn reads_apply_s2_single_batch_count_and_byte_caps() {
+        let storage = MemS2::default();
+        let stream = StreamName::new("journal").expect("stream name is valid");
+        for start in [0, 550] {
+            let records = (0..550)
+                .map(|_| AppendRecord::new(vec![0; 1_024]))
+                .collect();
+            storage
+                .append(&stream, StreamPosition::new(start), records)
+                .expect("fixture append succeeds");
+        }
+
+        let page = storage.read(&stream, StreamPosition::default(), usize::MAX);
+        assert_eq!(page.len(), 1_000);
+
+        let byte_stream = StreamName::new("byte-journal").expect("stream name is valid");
+        for start in [0, 300] {
+            let records = (0..300)
+                .map(|_| AppendRecord::new(vec![0; 2_048]))
+                .collect();
+            storage
+                .append(&byte_stream, StreamPosition::new(start), records)
+                .expect("fixture append succeeds");
+        }
+        let byte_page = storage.read(&byte_stream, StreamPosition::default(), usize::MAX);
+        assert_eq!(byte_page.len(), 510);
+        assert!(
+            byte_page
+                .iter()
+                .map(|record| 8 + record.body().len())
+                .sum::<usize>()
+                <= 1024 * 1024
+        );
     }
 }
