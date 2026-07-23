@@ -1506,37 +1506,39 @@ impl BundleStore for VerifiedBundleDirectory {
         let verified = verify_bundle_directory(source, &bundle_id)?;
         let destination = self.root.join(&bundle_id);
         if destination.exists() {
-            if let Ok(stored) = self.verify(bundle) {
-                return Ok(stored);
-            }
-            fs::remove_dir_all(&destination).map_err(|source| BundleError::WriteOutput {
-                path: destination.clone(),
+            return self.verify(bundle);
+        }
+        fs::create_dir_all(&self.root).map_err(|source| BundleError::WriteOutput {
+            path: self.root.clone(),
+            source,
+        })?;
+        let staging =
+            tempfile::tempdir_in(&self.root).map_err(|source| BundleError::WriteOutput {
+                path: self.root.clone(),
                 source,
             })?;
-        }
-        fs::create_dir_all(destination.join("files")).map_err(|source| {
-            BundleError::WriteOutput {
-                path: destination.clone(),
-                source,
-            }
+        let staged = staging.path().join("bundle");
+        fs::create_dir_all(staged.join("files")).map_err(|source| BundleError::WriteOutput {
+            path: staged.clone(),
+            source,
         })?;
         let manifest =
             serde_json::to_vec_pretty(&verified.manifest).map_err(BundleError::EncodeManifest)?;
-        fs::write(destination.join("manifest.json"), manifest).map_err(|source| {
+        fs::write(staged.join("manifest.json"), manifest).map_err(|source| {
             BundleError::WriteOutput {
-                path: destination.join("manifest.json"),
+                path: staged.join("manifest.json"),
                 source,
             }
         })?;
-        fs::write(destination.join("module.js"), &verified.module).map_err(|source| {
+        fs::write(staged.join("module.js"), &verified.module).map_err(|source| {
             BundleError::WriteOutput {
-                path: destination.join("module.js"),
+                path: staged.join("module.js"),
                 source,
             }
         })?;
         for entry in &verified.manifest.config_files {
             let from = source.join("files").join(&entry.path);
-            let to = destination.join("files").join(&entry.path);
+            let to = staged.join("files").join(&entry.path);
             if let Some(parent) = to.parent() {
                 fs::create_dir_all(parent).map_err(|source| BundleError::WriteOutput {
                     path: parent.to_path_buf(),
@@ -1563,7 +1565,21 @@ impl BundleStore for VerifiedBundleDirectory {
             fs::write(&to, bytes)
                 .map_err(|source| BundleError::WriteOutput { path: to, source })?;
         }
-        self.verify(bundle)
+        match fs::rename(&staged, &destination) {
+            Ok(()) => self.verify(bundle),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::AlreadyExists | std::io::ErrorKind::DirectoryNotEmpty
+                ) =>
+            {
+                self.verify(bundle)
+            }
+            Err(source) => Err(BundleError::WriteOutput {
+                path: destination,
+                source,
+            }),
+        }
     }
 }
 
@@ -1705,6 +1721,53 @@ fn sha256(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn concurrent_bundle_persistence_publishes_one_complete_directory() {
+        let source_root = tempfile::tempdir().unwrap();
+        let module = b"export const protocolVersion = 1;";
+        let manifest = BundleManifestV1 {
+            format_version: BUNDLE_FORMAT_VERSION,
+            component: "test".to_owned(),
+            component_revision: "d".repeat(64),
+            module_format: "esm".to_owned(),
+            entrypoint: "henosis:component".to_owned(),
+            executable_sha256: sha256(module),
+            runtime_api_version: RUNTIME_API_VERSION.to_owned(),
+            bundler: BundlerIdentity {
+                name: "esbuild".to_owned(),
+                version: ESBUILD_VERSION.to_owned(),
+                config_hash: "b".repeat(64),
+                executable_sha256: ESBUILD_SHA256.to_owned(),
+            },
+            dependency_lock_hash: None,
+            sdk_package_hashes: BTreeMap::new(),
+            declared_capabilities: Vec::new(),
+            compiled_dependencies: Vec::new(),
+            config_files: Vec::new(),
+            artifact_requirements: Vec::new(),
+        };
+        let bundle_id = bundle_id(&manifest).unwrap();
+        let source = source_root.path().join(&bundle_id);
+        fs::create_dir_all(source.join("files")).unwrap();
+        write_json(&source.join("manifest.json"), &manifest).unwrap();
+        fs::write(source.join("module.js"), module).unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        let store = VerifiedBundleDirectory::new(destination.path());
+        let bundle = henosis_types::BundleRef::new(henosis_types::ContentDigest::from_bytes(
+            hex::decode(&bundle_id).unwrap().try_into().unwrap(),
+        ));
+
+        let first_store = store.clone();
+        let first_source = source.clone();
+        let first = std::thread::spawn(move || first_store.persist_verified(&first_source, bundle));
+        let second_store = store.clone();
+        let second = std::thread::spawn(move || second_store.persist_verified(&source, bundle));
+
+        first.join().unwrap().unwrap();
+        second.join().unwrap().unwrap();
+        assert_eq!(store.verify(bundle).unwrap().module, module);
+    }
 
     #[test]
     fn discovery_finds_multiple_default_components() {
